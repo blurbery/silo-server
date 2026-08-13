@@ -189,6 +189,18 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		dvStripEligible = false
 		dvStripEligibleLocal = false
 	}
+	// Apple TV's AVPlayer does not consume Matroska directly. Silo Apple's
+	// original_http route therefore downloads the remote MKV into a client-side
+	// loopback remuxer before AVPlayer sees it. Long-lived origin reads on that
+	// path can end early and strand the local remuxer; server HLS instead uses
+	// short, independently authenticated segment requests and gives AVPlayer its
+	// native transport immediately. Prefer that route only when the complete
+	// copy recipe is executable, so a missing server toolchain never takes away
+	// a working client-side fallback.
+	preferTVOSServerHLS := prefersTVOSServerHLSForMKVV3(source, input.Request) &&
+		videoOK && !source.VideoCopyUnsafe && hlsRemuxSubtitleOK &&
+		((source.DVProfile == 7 && dvStripEligible) || (source.DVProfile != 7 && rangeOK)) &&
+		hlsAudioRouteExecutableV3(source, input)
 	clientDV81Eligible := canClientTransformDV7ToDV81V3(source, input.Request)
 	clientHDR10Eligible := canClientTransformDV7ToHDR10V3(source, input.Request)
 	// With the server strip gone, a client that cannot take the source range
@@ -293,7 +305,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	// source. A decoder profile/max-instance claim alone is not proof of native
 	// dual-layer output, so the default Android route mirrors Silo Apple: P8.1
 	// base-layer Dolby Vision first, then same-file HDR10.
-	if source.DVProfile == 7 && quality.PreservesSource && videoOK && containerOK && audioOK &&
+	if !preferTVOSServerHLS && source.DVProfile == 7 && quality.PreservesSource && videoOK && containerOK && audioOK &&
 		audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && !subtitle.RequiresBurn {
 		if clientDV81Eligible {
 			plan := base
@@ -337,7 +349,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		}
 	}
 
-	if source.DVProfile != 7 && deliveryAvailableV3(input.Request, DeliveryClassOriginalHTTPV3) && containerOK && videoOK && rangeOK && audioOK && quality.PreservesSource &&
+	if !preferTVOSServerHLS && source.DVProfile != 7 && deliveryAvailableV3(input.Request, DeliveryClassOriginalHTTPV3) && containerOK && videoOK && rangeOK && audioOK && quality.PreservesSource &&
 		audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && !subtitle.RequiresBurn {
 		plan := base
 		plan.Delivery = DeliveryOriginalHTTPV3
@@ -403,7 +415,8 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		// nodes carry them, the HLS remux below ships the same recipe on a
 		// node-offloadable delivery instead.
 		progressiveExecutable := (!transcodeAudio || localAudioConvertOK) && (!dvStrip || dvStripEligibleLocal)
-		if remuxSubtitleOK && progressiveExecutable {
+		progressivePlan := plan
+		if !preferTVOSServerHLS && remuxSubtitleOK && progressiveExecutable {
 			applySubtitleDecisionV3(&plan, remuxSubtitle.Decision)
 			plan.Claims.Subtitles = remuxSubtitle.Claims
 			finalizePlanIdentityV3(&plan, input.Request.PlaybackAttemptID, input.Request.ClientPlaybackContext.Output.OutputContextID)
@@ -412,6 +425,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 			}
 		}
 		if deliveryAvailableV3(input.Request, DeliveryClassHLSV3) && hlsRemuxSubtitleOK {
+			plan = progressivePlan
 			plan.AppliedQuirks = []AppliedQuirkV3{}
 			plan.RuntimeCorrections = []string{}
 			plan.Delivery = DeliveryRemuxHLSV3
@@ -473,6 +487,19 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 					targetAudio = "aac"
 				}
 				return PlannerResultV3{Plan: &plan, PlayMethod: PlayRemux, TranscodeAudio: hlsTranscodeAudio, TargetVideoCodec: "copy", TargetAudioCodec: targetAudio, TargetAudioChannels: hlsAudioChannels, TargetResolution: resolutionLabelV3(source.Height), TargetBitrateKbps: source.BitrateKbps, SubtitleTrackIndex: hlsSubtitle.SelectedIndex, SubtitleTransportTrackIndex: hlsSubtitle.TransportIndex, SubtitleCodec: hlsSubtitle.Codec, DownloadedSubtitleID: hlsSubtitle.DownloadedSubtitleID}
+			}
+		}
+		// HLS is a preference, not a dead end. If this exact HLS recipe was
+		// already attempted (or the delivery's narrower claims reject it), retain
+		// the progressive remux as a recovery route rather than jumping directly
+		// to a full video transcode.
+		if preferTVOSServerHLS && remuxSubtitleOK && progressiveExecutable {
+			plan = progressivePlan
+			applySubtitleDecisionV3(&plan, remuxSubtitle.Decision)
+			plan.Claims.Subtitles = remuxSubtitle.Claims
+			finalizePlanIdentityV3(&plan, input.Request.PlaybackAttemptID, input.Request.ClientPlaybackContext.Output.OutputContextID)
+			if deliverySupportsPlanV3(input.Request, DeliveryClassProgressiveV3, plan) && !planAttemptedV3(plan, input.Request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
+				return PlannerResultV3{Plan: &plan, PlayMethod: PlayRemux, TranscodeAudio: transcodeAudio, TargetAudioCodec: plan.EffectiveRecipe.AudioCodec, TargetAudioChannels: progressiveAudioChannels, SubtitleTrackIndex: remuxSubtitle.SelectedIndex, SubtitleTransportTrackIndex: remuxSubtitle.TransportIndex, SubtitleCodec: remuxSubtitle.Codec, DownloadedSubtitleID: remuxSubtitle.DownloadedSubtitleID}
 			}
 		}
 	}
@@ -776,6 +803,20 @@ func applySubtitleDecisionV3(plan *PlanV3, decision SubtitleDecisionV3) {
 	inventory := plan.Subtitle.Inventory
 	plan.Subtitle = decision
 	plan.Subtitle.Inventory = inventory
+}
+
+func prefersTVOSServerHLSForMKVV3(source SourceDescriptorV3, request StartRequestV3) bool {
+	return strings.EqualFold(request.ClientPlaybackContext.Device.Platform, "tvos") &&
+		(strings.EqualFold(source.Container, "mkv") || strings.EqualFold(source.Container, "matroska")) &&
+		deliveryAvailableV3(request, DeliveryClassHLSV3)
+}
+
+func hlsAudioRouteExecutableV3(source SourceDescriptorV3, input PlannerInputV3) bool {
+	if source.AudioCodec == "" || hlsNativeAudioCodecV3(source.AudioCodec) {
+		return true
+	}
+	registry := input.hlsRegistry()
+	return registry != nil && registry.Available(TransformationAudioToAACV3)
 }
 
 func canStripDolbyVisionToHDR10V3(source SourceDescriptorV3, request StartRequestV3, registry *TransformationRegistryV3) bool {

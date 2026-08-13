@@ -12,6 +12,15 @@ import (
 	"time"
 )
 
+func TestStartupSegmentRequirementUsesOneAtomicSegmentForVideoCopy(t *testing.T) {
+	if got := startupSegmentRequirement(TranscodeOpts{TargetCodecVideo: "copy"}); got != 1 {
+		t.Fatalf("copy startup segments = %d, want 1", got)
+	}
+	if got := startupSegmentRequirement(TranscodeOpts{TargetCodecVideo: "h264"}); got != 3 {
+		t.Fatalf("encoded startup segments = %d, want 3", got)
+	}
+}
+
 func TestBuildPlaybackManifest_CopyVideoUsesRealManifest(t *testing.T) {
 	tempDir := t.TempDir()
 	manifest := strings.Join([]string{
