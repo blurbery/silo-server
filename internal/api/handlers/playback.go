@@ -1334,6 +1334,7 @@ func (h *PlaybackHandler) HandleGetTranscodeManifest(w http.ResponseWriter, r *h
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	w.Header().Set("Pragma", "no-cache")
+	playback.DisableProxyBuffering(w)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(manifest)
 }
@@ -1518,6 +1519,7 @@ func (h *PlaybackHandler) HandleGetTranscodeSegment(w http.ResponseWriter, r *ht
 
 	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	w.Header().Set("Pragma", "no-cache")
+	playback.DisableProxyBuffering(w)
 	http.ServeFile(w, r, segmentPath)
 }
 
