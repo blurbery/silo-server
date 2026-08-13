@@ -3577,6 +3577,36 @@ func (r *FileRepository) GetByEpisodeID(ctx context.Context, episodeID string) (
 	return scanMediaFiles(rows)
 }
 
+// GetByOwnerIDs returns all present files in a media folder that are linked to
+// any of the supplied episode or content IDs. Variant finalization uses this
+// bulk lookup so a large library scan does not issue one query per media file.
+func (r *FileRepository) GetByOwnerIDs(
+	ctx context.Context,
+	folderID int,
+	episodeIDs []string,
+	contentIDs []string,
+) ([]*models.MediaFile, error) {
+	if len(episodeIDs) == 0 && len(contentIDs) == 0 {
+		return nil, nil
+	}
+
+	query := `SELECT ` + fileColumns + ` FROM media_files
+		WHERE media_folder_id = $1
+		  AND missing_since IS NULL
+		  AND (
+			episode_id = ANY($2::text[])
+			OR content_id = ANY($3::text[])
+		  )
+		ORDER BY id ASC`
+	rows, err := r.pool.Query(ctx, query, folderID, episodeIDs, contentIDs)
+	if err != nil {
+		return nil, fmt.Errorf("querying files by owner ids: %w", err)
+	}
+	defer rows.Close()
+
+	return scanMediaFiles(rows)
+}
+
 // FirstDurationsByEpisodeIDs returns the probed duration (seconds) of the
 // first live file backing each episode id, using the same "first file with
 // duration > 0, ordered by id" rule as the v1 API's contentDurationSeconds.
