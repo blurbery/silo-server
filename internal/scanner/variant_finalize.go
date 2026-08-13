@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/Silo-Server/silo-server/internal/models"
 	"github.com/Silo-Server/silo-server/internal/naming"
@@ -148,34 +149,32 @@ func (s *Scanner) variantFinalizationFilesForScope(
 	}
 
 	filesByID := make(map[int]*models.MediaFile, len(scopedFiles))
+	episodeIDSet := make(map[string]struct{})
+	contentIDSet := make(map[string]struct{})
 	for _, file := range scopedFiles {
-		if file == nil || file.MissingSince != nil {
+		if file == nil || file.MissingSince != nil || file.MediaFolderID != folderID {
 			continue
 		}
-		if file.EpisodeID == "" && file.ContentID == "" {
-			if file.MediaFolderID == folderID {
-				filesByID[file.ID] = file
-			}
-			continue
-		}
-
-		var related []*models.MediaFile
-		var err error
+		filesByID[file.ID] = file
 		switch {
 		case file.EpisodeID != "":
-			related, err = s.fileRepo.GetByEpisodeID(ctx, file.EpisodeID)
+			episodeIDSet[file.EpisodeID] = struct{}{}
 		case file.ContentID != "":
-			related, err = s.fileRepo.GetByContentID(ctx, file.ContentID)
+			contentIDSet[file.ContentID] = struct{}{}
 		}
-		if err != nil {
-			return nil, fmt.Errorf("loading related files for variant finalization: %w", err)
+	}
+
+	episodeIDs := sortedVariantOwnerIDs(episodeIDSet)
+	contentIDs := sortedVariantOwnerIDs(contentIDSet)
+	related, err := s.fileRepo.GetByOwnerIDs(ctx, folderID, episodeIDs, contentIDs)
+	if err != nil {
+		return nil, fmt.Errorf("loading related files for variant finalization: %w", err)
+	}
+	for _, relatedFile := range related {
+		if relatedFile == nil || relatedFile.MissingSince != nil || relatedFile.MediaFolderID != folderID {
+			continue
 		}
-		for _, relatedFile := range related {
-			if relatedFile == nil || relatedFile.MissingSince != nil || relatedFile.MediaFolderID != folderID {
-				continue
-			}
-			filesByID[relatedFile.ID] = relatedFile
-		}
+		filesByID[relatedFile.ID] = relatedFile
 	}
 
 	files := make([]*models.MediaFile, 0, len(filesByID))
@@ -183,6 +182,15 @@ func (s *Scanner) variantFinalizationFilesForScope(
 		files = append(files, file)
 	}
 	return files, nil
+}
+
+func sortedVariantOwnerIDs(ids map[string]struct{}) []string {
+	result := make([]string, 0, len(ids))
+	for id := range ids {
+		result = append(result, id)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func stableOwnerKey(file *models.MediaFile) string {

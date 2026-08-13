@@ -351,6 +351,13 @@ func (e *Executor) ingest(ctx context.Context, folder *models.MediaFolder, mode 
 				return result, fmt.Errorf("retry scope %q: %w", scopePath, err)
 			}
 		}
+		reportProgress(scanCtx, ProgressUpdate{
+			Phase:        "finalizing",
+			Message:      "Finalizing media variants",
+			CurrentScope: scopePath,
+			MatchedFiles: result.MatchedFiles,
+			RetriedItems: result.RetriedItems,
+		})
 		if err := e.scanner.FinalizeVariantsByPathPrefix(scanCtx, folder, scopePath); err != nil {
 			return result, fmt.Errorf("finalize variants for scope %q: %w", scopePath, err)
 		}
