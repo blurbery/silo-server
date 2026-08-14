@@ -23,6 +23,7 @@ const subtitleTimeline = vi.hoisted(() => ({
   assOffsetSeconds: null as number | null,
 }));
 const toastError = vi.hoisted(() => vi.fn());
+const hlsRuntime = vi.hoisted(() => ({ isSupported: vi.fn(() => false) }));
 
 vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn(), message: vi.fn() } }));
 
@@ -61,7 +62,7 @@ vi.mock("../hooks/useSubtitleAppearance", () => ({
 vi.mock("../hooks/useSubtitleLayout", () => ({
   useSubtitleLayout: () => ({ positionStyle: {}, fontScale: 1 }),
 }));
-vi.mock("hls.js", () => ({ default: { isSupported: () => false } }));
+vi.mock("hls.js", () => ({ default: hlsRuntime }));
 vi.mock("./PlayerControls", () => ({
   PlayerControls: vi.fn(
     (props: { activeSubtitleIndex: number | null; subtitleTracks: PlayerSubtitleInfo[] }) => {
@@ -349,6 +350,7 @@ describe("VideoPlayer native HLS timeline", () => {
     controls.current = null;
     subtitleTimeline.textOffsetSeconds = null;
     subtitleTimeline.assOffsetSeconds = null;
+    hlsRuntime.isSupported.mockReset().mockReturnValue(false);
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
@@ -390,6 +392,40 @@ describe("VideoPlayer native HLS timeline", () => {
     expect(video.currentTime).toBe(7);
     expect(subtitleTimeline.textOffsetSeconds).toBe(0);
     expect(subtitleTimeline.assOffsetSeconds).toBe(0);
+  });
+
+  it("prefers native HLS when Safari also exposes Media Source Extensions", async () => {
+    hlsRuntime.isSupported.mockReturnValue(true);
+    const plan = fixturePlanV3({
+      delivery: "server_remux_hls",
+      stream: {
+        url: "/playback/transcode/session-1/master.m3u8",
+        protocol: "hls",
+        headers: {},
+        header_refresh: "none",
+      },
+      timeline: {
+        source_start_seconds: 975.2,
+        player_start_seconds: 0.6,
+        stream_origin_seconds: 974.6,
+        timeline_offset_seconds: 974.6,
+        can_seek_anywhere: false,
+        seek_restoration: "source_position",
+      },
+    });
+    const { container } = renderPlayer({
+      plan,
+      streamUrl: "/api/v1/playback/transcode/session-1/master.m3u8?token=token",
+      initialPosition: 975.2,
+    });
+    const video = container.querySelector("video");
+    if (!video) throw new Error("expected video element");
+
+    await waitFor(() => expect(video.src).toContain("/playback/transcode/session-1/master.m3u8"));
+    fireEvent.loadedMetadata(video);
+
+    expect(video.currentTime).toBe(0.6);
+    expect(hlsRuntime.isSupported).not.toHaveBeenCalled();
   });
 });
 
