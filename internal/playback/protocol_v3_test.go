@@ -659,6 +659,23 @@ func TestPlanPlaybackV3DirectRequiresDetailedEvidence(t *testing.T) {
 	}
 }
 
+func TestPlanPlaybackV3TVOSKeepsCompatibleMP4OnDirectPlay(t *testing.T) {
+	file := detailedFixtureFileV3()
+	file.FilePath = "/media/movie.mp4"
+	file.Container = "mp4"
+	req := validStartRequestV3()
+	req.ClientPlaybackContext.Device.Platform = "tvos"
+	req.Capabilities.Containers = []string{"mp4"}
+	req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
+	req.Capabilities.HDRDetails = &HDRCapabilitiesV3{HDR10: true}
+	req.ClientPlaybackContext.Output.HDRDetails = &HDRCapabilitiesV3{HDR10: true}
+
+	result := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: testTransformationRegistryV3()})
+	if result.Plan == nil || result.Plan.Delivery != DeliveryOriginalHTTPV3 || result.PlayMethod != PlayDirect {
+		t.Fatalf("compatible tvOS source did not retain direct play: %s", ExplainPlannerResultV3(result))
+	}
+}
+
 func TestSourceDescriptorV3NormalizesLegacyHEVCMetadata(t *testing.T) {
 	file := detailedFixtureFileV3()
 	file.VideoTracks[0].BitDepth = 0

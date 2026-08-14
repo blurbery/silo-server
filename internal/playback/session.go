@@ -24,6 +24,7 @@ type Session struct {
 	TranscodeAudio       bool // when true, remux should transcode audio to AAC
 	RemuxDVMode          RemuxDVMode
 	ClientIP             string // resolved client IP for the playback session
+	ClientDeviceID       string // normalized device identity reported by first-party clients
 	ClientName           string // reported playback client name, when available
 	ClientVersion        string // reported playback client version, when available
 	ClientUserAgent      string // trimmed request user agent for the playback session
@@ -147,6 +148,7 @@ type clientInfoContextKey struct{}
 // ClientInfo carries best-effort client metadata from request handling into
 // the playback session manager.
 type ClientInfo struct {
+	DeviceID  string
 	Name      string
 	Version   string
 	UserAgent string
@@ -451,6 +453,7 @@ func newSession(
 		TranscodeAudio:       transcodeAudio,
 		Position:             0,
 		IsPaused:             false,
+		ClientDeviceID:       normalizeClientMetadataValue(clientInfo.DeviceID, 128),
 		ClientName:           normalizeClientMetadataValue(clientInfo.Name, 128),
 		ClientVersion:        normalizeClientMetadataValue(clientInfo.Version, 64),
 		ClientUserAgent:      normalizeClientMetadataValue(clientInfo.UserAgent, 512),

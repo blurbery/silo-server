@@ -67,6 +67,10 @@ type sessionStarterWithFilesContext interface {
 	StartSessionWithFilesContext(ctx context.Context, userID int, profileID string, effectiveFileID int, requestedFileID int, method playback.PlayMethod, transcodeAudio bool) (*playback.Session, error)
 }
 
+type sessionSnapshotLister interface {
+	AllSessions() []*playback.Session
+}
+
 type transcodePermissionChecker interface {
 	CheckTranscodingAllowed(ctx context.Context, userID int, requiresVideoTranscode bool) error
 }
@@ -1077,6 +1081,7 @@ func playbackClientInfoFromRequest(r *http.Request) playback.ClientInfo {
 		return playback.ClientInfo{}
 	}
 	return playback.ClientInfo{
+		DeviceID:  deviceMetadataFromRequest(r).DeviceID,
 		Name:      strings.TrimSpace(r.Header.Get("X-Silo-Client")),
 		Version:   strings.TrimSpace(r.Header.Get("X-Silo-Client-Version")),
 		UserAgent: r.UserAgent(),
@@ -1287,8 +1292,8 @@ func alignedSeekSeconds(seekSeconds float64, segmentDuration int, targetVideoCod
 }
 
 // HandleGetTranscodeManifest handles GET /playback/transcode/{session_id}/master.m3u8.
-// Auth is optional — the session UUID serves as an access token (same pattern
-// as /stream/{session_id}). When auth context is present, ownership is verified.
+// The router accepts either live account auth or the session-bound signed
+// stream token. When either supplies an auth context, ownership is verified.
 //
 // Known-duration encoded sessions expose a synthetic full VOD manifest so the
 // player can seek immediately. Copy-video sessions expose FFmpeg's real
@@ -1349,7 +1354,7 @@ func (h *PlaybackHandler) HandleGetTranscodeManifest(w http.ResponseWriter, r *h
 }
 
 // HandleGetTranscodeSegment handles GET /playback/transcode/{session_id}/segment/{name}.
-// Auth is optional — the session UUID serves as an access token.
+// The router accepts either live account auth or the session-bound stream token.
 func (h *PlaybackHandler) HandleGetTranscodeSegment(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "session_id")
 	session, status, card := h.loadTranscodeServeSession(r, sessionID)
