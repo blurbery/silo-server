@@ -148,6 +148,14 @@ func TestStartRemuxRejectsUnknownModeForAllProfiles(t *testing.T) {
 	}
 }
 
+func TestStartRemuxCompatibleBaseModeRejectsProfilesWithoutCompatibleRecipe(t *testing.T) {
+	for _, profile := range []int{0, 5, 9} {
+		if _, err := StartRemuxWithDVMode(t.Context(), "/nonexistent.mkv", "mp4", 0, false, -1, profile, RemuxDVStripToBaseV3, ""); err == nil {
+			t.Fatalf("compatible-base mode accepted profile %d", profile)
+		}
+	}
+}
+
 func TestBuildRemuxArgsDelaysMoovForCopiedAtmosConfiguration(t *testing.T) {
 	args := buildRemuxArgs("/x.mkv", "mp4", 0, false, -1, 8, false, false)
 	if !argsContainPair(args, "-movflags", "frag_keyframe+delay_moov+default_base_moof") {

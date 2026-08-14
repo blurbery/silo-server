@@ -44,6 +44,7 @@ func SourceDescriptorFromFileV3(file *models.MediaFile, audioIndex int) SourceDe
 		source.VideoLevel = track.Level
 		source.BitDepth = models.NormalizeVideoBitDepth(track.BitDepth, track.PixelFormat, track.Profile)
 		source.ColorRange = normalizeColorRangeV3(track.ColorRange)
+		source.ColorTransfer = strings.ToLower(strings.TrimSpace(track.ColorTransfer))
 		source.Width = track.Width
 		source.Height = track.Height
 		source.FrameRate = parseFrameRateV3(track.FrameRate)

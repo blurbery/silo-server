@@ -71,18 +71,22 @@ func TestProbeTransformationRegistryV3RequiresBothDV7BaseLayerFilters(t *testing
 			if got := registry.Available(TransformationServerDV7HDR10V3); got != tt.want {
 				t.Fatalf("server_dv7_to_hdr10 available = %v, want %v", got, tt.want)
 			}
+			if got := registry.Available(TransformationServerDV8BaseV3); got != tt.want {
+				t.Fatalf("server_dv8_to_compatible_base available = %v, want %v", got, tt.want)
+			}
 			if !tt.want {
 				return
 			}
+			versions := map[string]string{}
 			for _, transformation := range registry.Advertised() {
-				if transformation.Name == TransformationServerDV7HDR10V3 {
-					if transformation.RecipeVersion != TransformationServerDV7HDR10RecipeVersionV3 {
-						t.Fatalf("server_dv7_to_hdr10 recipe version = %q, want %q", transformation.RecipeVersion, TransformationServerDV7HDR10RecipeVersionV3)
-					}
-					return
-				}
+				versions[transformation.Name] = transformation.RecipeVersion
 			}
-			t.Fatal("server_dv7_to_hdr10 was not advertised")
+			if versions[TransformationServerDV7HDR10V3] != TransformationServerDV7HDR10RecipeVersionV3 {
+				t.Fatalf("server_dv7_to_hdr10 recipe version = %q, want %q", versions[TransformationServerDV7HDR10V3], TransformationServerDV7HDR10RecipeVersionV3)
+			}
+			if versions[TransformationServerDV8BaseV3] != TransformationServerDV8BaseRecipeVersionV3 {
+				t.Fatalf("server_dv8_to_compatible_base recipe version = %q, want %q", versions[TransformationServerDV8BaseV3], TransformationServerDV8BaseRecipeVersionV3)
+			}
 		})
 	}
 }

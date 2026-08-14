@@ -720,6 +720,7 @@ func TestPlanPlaybackV3DirectPlaysLegacyDolbyVisionProfile8(t *testing.T) {
 	file.VideoTracks[0].PixelFormat = "yuv420p10le"
 	file.VideoTracks[0].DVProfile = 8
 	file.VideoTracks[0].DVBLCompatID = 1
+	file.VideoTracks[0].ColorTransfer = "smpte2084"
 	file.VideoTracks[0].VideoRange = "DolbyVision"
 	file.VideoTracks[0].VideoRangeType = "DOVIWithHDR10"
 	req := validStartRequestV3()
@@ -1207,15 +1208,104 @@ func TestPlanPlaybackV3Profile8CompatibleBaseLayerStripsToHDR10(t *testing.T) {
 	file := detailedFixtureFileV3()
 	file.VideoTracks[0].DVProfile = 8
 	file.VideoTracks[0].DVBLCompatID = 1
+	file.VideoTracks[0].ColorTransfer = "smpte2084"
 	file.VideoTracks[0].VideoRange = "DolbyVision"
 	file.VideoTracks[0].VideoRangeType = "DOVI"
 	req := validStartRequestV3()
 	req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
 	req.Capabilities.HDRDetails = &HDRCapabilitiesV3{HDR10: true}
-	registry := NewTransformationRegistryV3([]TransformationSpecV3{{Name: "server_dv7_to_hdr10", Available: true}})
+	registry := NewTransformationRegistryV3([]TransformationSpecV3{{Name: TransformationServerDV8BaseV3, Available: true}})
 	result := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: registry})
-	if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxProgressiveV3 || result.Plan.EffectiveRecipe.DynamicRange != "hdr10" || len(result.Plan.Transformations) != 1 || result.Plan.Transformations[0].Name != "server_dv7_to_hdr10" {
+	if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxProgressiveV3 || result.Plan.EffectiveRecipe.DynamicRange != "hdr10" || len(result.Plan.Transformations) != 1 || result.Plan.Transformations[0].Name != TransformationServerDV8BaseV3 {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestPlanPlaybackV3DolbyVisionSafariCompatibilityMatrix(t *testing.T) {
+	tests := []struct {
+		name               string
+		profile            int
+		compatID           int
+		nativeProfiles     []int
+		nativeCompatIDs    []int
+		hdr10              bool
+		hlg                bool
+		colorTransfer      string
+		wantRange          string
+		wantTransformation string
+		wantNativeDV       bool
+		wantTerminal       bool
+	}{
+		{name: "profile 5 exact stays native Dolby Vision", profile: 5, nativeProfiles: []int{5}, wantRange: DynamicRangeDolbyVisionV3, wantNativeDV: true},
+		{name: "profile 5 never masquerades as HDR10", profile: 5, hdr10: true, wantTerminal: true},
+		{name: "profile 7 isolates clean HDR10 base layer", profile: 7, compatID: 6, hdr10: true, wantRange: DynamicRangeHDR10V3, wantTransformation: TransformationServerDV7HDR10V3},
+		{name: "profile 8.1 exact stays native Dolby Vision", profile: 8, compatID: 1, nativeProfiles: []int{8}, nativeCompatIDs: []int{1}, wantRange: DynamicRangeDolbyVisionV3, wantNativeDV: true},
+		{name: "profile 8.1 unsupported falls back to HDR10", profile: 8, compatID: 1, hdr10: true, wantRange: DynamicRangeHDR10V3, wantTransformation: TransformationServerDV8BaseV3},
+		{name: "profile 8.6 unsupported falls back to HDR10", profile: 8, compatID: 6, nativeProfiles: []int{8}, nativeCompatIDs: []int{1}, hdr10: true, wantRange: DynamicRangeHDR10V3, wantTransformation: TransformationServerDV8BaseV3},
+		{name: "profile 8.4 falls back to HLG", profile: 8, compatID: 4, hlg: true, wantRange: DynamicRangeHLGV3, wantTransformation: TransformationServerDV8BaseV3},
+		{name: "profile 8.2 falls back to SDR", profile: 8, compatID: 2, wantRange: DynamicRangeSDRV3, wantTransformation: TransformationServerDV8BaseV3},
+		{name: "profile 8.4 is not mislabeled HDR10", profile: 8, compatID: 4, hdr10: true, wantTerminal: true},
+		{name: "profile 8.4 with conflicting transfer is not called HLG", profile: 8, compatID: 4, colorTransfer: "bt2020-10", hlg: true, wantTerminal: true},
+		{name: "unknown profile 8 base layer is not guessed", profile: 8, compatID: 0, hdr10: true, hlg: true, wantTerminal: true},
+		{name: "unknown Dolby Vision profile is not guessed", profile: 9, compatID: 2, hdr10: true, hlg: true, wantTerminal: true},
+	}
+	registry := NewTransformationRegistryV3([]TransformationSpecV3{
+		{Name: TransformationServerDV7HDR10V3, RecipeVersion: TransformationServerDV7HDR10RecipeVersionV3, Available: true},
+		{Name: TransformationServerDV8BaseV3, RecipeVersion: TransformationServerDV8BaseRecipeVersionV3, Available: true},
+	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file := detailedFixtureFileV3()
+			file.VideoTracks[0].DVProfile = tt.profile
+			file.VideoTracks[0].DVBLCompatID = tt.compatID
+			file.VideoTracks[0].VideoRange = "DolbyVision"
+			file.VideoTracks[0].VideoRangeType = "DOVI"
+			file.VideoTracks[0].ColorTransfer = tt.colorTransfer
+			if file.VideoTracks[0].ColorTransfer == "" {
+				switch tt.compatID {
+				case 1, 6:
+					file.VideoTracks[0].ColorTransfer = "smpte2084"
+				case 2:
+					file.VideoTracks[0].ColorTransfer = "bt709"
+				case 4:
+					file.VideoTracks[0].ColorTransfer = "arib-std-b67"
+				}
+			}
+			if tt.profile == 7 {
+				file.VideoTracks[0].VideoRangeType = "DOVIWithEL"
+				file.VideoTracks[0].DVELPresent = true
+				file.VideoTracks[0].DVEnhancementLayer = "mel"
+			}
+
+			req := validStartRequestV3()
+			req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
+			hdr := &HDRCapabilitiesV3{HDR10: tt.hdr10, HLG: tt.hlg, DolbyVisionProfiles: tt.nativeProfiles}
+			if len(tt.nativeProfiles) > 0 {
+				hdr.DolbyVisionProfileLevels = []DolbyVisionProfileCapabilityV3{{Profile: tt.profile, MaxLevel: 9, BLCompatibilityIDs: tt.nativeCompatIDs}}
+			}
+			req.Capabilities.HDRDetails = hdr
+			req.ClientPlaybackContext.Output.HDRDetails = hdr
+
+			result := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: registry})
+			if tt.wantTerminal {
+				if result.Terminal == nil || result.Plan != nil {
+					t.Fatalf("result = %s", ExplainPlannerResultV3(result))
+				}
+				return
+			}
+			if result.Plan == nil || result.Plan.EffectiveRecipe.DynamicRange != tt.wantRange || result.Plan.Claims.Video.DolbyVision != tt.wantNativeDV {
+				t.Fatalf("result = %s", ExplainPlannerResultV3(result))
+			}
+			if tt.wantTransformation == "" {
+				if len(result.Plan.Transformations) != 0 {
+					t.Fatalf("native route transformations = %#v", result.Plan.Transformations)
+				}
+				return
+			}
+			if len(result.Plan.Transformations) != 1 || result.Plan.Transformations[0].Name != tt.wantTransformation {
+				t.Fatalf("transformations = %#v", result.Plan.Transformations)
+			}
+		})
 	}
 }
 
@@ -1884,6 +1974,7 @@ func testTransformationRegistryV3() *TransformationRegistryV3 {
 		{Name: "audio_to_aac", Available: true},
 		{Name: "video_to_h264", Available: true},
 		{Name: "server_dv7_to_hdr10", Available: true},
+		{Name: TransformationServerDV8BaseV3, Available: true},
 	})
 }
 

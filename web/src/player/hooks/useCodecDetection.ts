@@ -19,16 +19,20 @@ const VIDEO_CODEC_MAP: Record<string, string> = {
 // shape: a browser that recognizes only dvhe could accept a claim here and
 // then reject the dvh1 file the remux delivers, so a dvhe-only answer earns no
 // claim and that browser keeps the validated HDR10 fallback instead.
-// Level 6 covers the 2160p24 source class involved in the web regression.
+// Each profile is tested from its highest supported level down so the planner
+// can enforce the browser's real bound without excluding compatible sources.
 const DOLBY_VISION_PROFILE_PROBES: Record<
   number,
-  { mime: string; maxLevel: number; blCompatibilityIds?: number[] }
+  { levels: number[]; blCompatibilityIds?: number[] }
 > = {
-  5: { mime: 'video/mp4; codecs="dvh1.05.06"', maxLevel: 6 },
+  // Apple's HLS authoring specification supports Profile 5 through level 7.
+  // Probe the highest level first and publish only the best exact answer.
+  5: { levels: [7, 6] },
   // The MIME codec string identifies Profile 8 but not its base-layer
   // compatibility ID. Conservatively claim only the Profile 8.1 shape that
-  // this regression and Safari's progressive remux path exercise.
-  8: { mime: 'video/mp4; codecs="dvh1.08.06"', maxLevel: 6, blCompatibilityIds: [1] },
+  // Safari's progressive remux path exercises. Exact level probes avoid
+  // forcing a compatible high-level source down to its HDR10 fallback.
+  8: { levels: [9, 8, 7, 6], blCompatibilityIds: [1] },
 };
 
 // Silo's Profile 7 fallback strips Dolby Vision metadata into a progressive
@@ -50,6 +54,22 @@ const HDR10_PROGRESSIVE_CONFIGURATION = {
     colorGamut: "rec2020",
     transferFunction: "pq",
     hdrMetadataType: "smpteSt2086",
+  },
+} satisfies MediaDecodingConfiguration;
+
+// Profile 8.4 has an HLG-compatible base layer. Silo removes its Dolby Vision
+// metadata before fallback delivery and emits hvc1, so probe that exact 4K HLG
+// shape independently from Dolby Vision and HDR10.
+const HLG_PROGRESSIVE_CONFIGURATION = {
+  type: "file",
+  video: {
+    contentType: 'video/mp4; codecs="hvc1.2.4.L153.B0"',
+    width: 3840,
+    height: 2160,
+    bitrate: 80_000_000,
+    framerate: 24,
+    colorGamut: "rec2020",
+    transferFunction: "hlg",
   },
 } satisfies MediaDecodingConfiguration;
 
@@ -114,6 +134,18 @@ export async function probeHDR10PlaybackSupport(): Promise<boolean> {
 
   try {
     const result = await navigator.mediaCapabilities.decodingInfo(HDR10_PROGRESSIVE_CONFIGURATION);
+    return result.supported && result.smooth;
+  } catch {
+    return false;
+  }
+}
+
+/** Probes the exact clean HLG base-layer shape emitted for Profile 8.4. */
+export async function probeHLGPlaybackSupport(): Promise<boolean> {
+  if (typeof navigator === "undefined" || !navigator.mediaCapabilities) return false;
+
+  try {
+    const result = await navigator.mediaCapabilities.decodingInfo(HLG_PROGRESSIVE_CONFIGURATION);
     return result.supported && result.smooth;
   } catch {
     return false;
@@ -212,9 +244,26 @@ export function probeWebCapabilities(): WebCapabilityProbe {
   // evidence must not be discarded because the coarse output query says no, so
   // the sample-entry probes run unconditionally and `hdr` stays a best-effort
   // output signal only.
-  const dolbyVisionProfiles = Object.entries(DOLBY_VISION_PROFILE_PROBES)
-    .filter(([, probe]) => testMediaElementType(probe.mime))
-    .map(([profile]) => Number(profile));
+  const dolbyVisionProfileLevels: Array<{
+    profile: number;
+    max_level: number;
+    bl_compatibility_ids?: number[];
+  }> = [];
+  for (const [profileValue, probe] of Object.entries(DOLBY_VISION_PROFILE_PROBES)) {
+    const profile = Number(profileValue);
+    const maxLevel = probe.levels.find((level) =>
+      testMediaElementType(
+        `video/mp4; codecs="dvh1.${String(profile).padStart(2, "0")}.${String(level).padStart(2, "0")}"`,
+      ),
+    );
+    if (maxLevel === undefined) continue;
+    dolbyVisionProfileLevels.push({
+      profile,
+      max_level: maxLevel,
+      ...(probe.blCompatibilityIds ? { bl_compatibility_ids: probe.blCompatibilityIds } : {}),
+    });
+  }
+  const dolbyVisionProfiles = dolbyVisionProfileLevels.map(({ profile }) => profile);
   const progressiveCodecsVideo = [...codecsVideo];
   if (dolbyVisionProfiles.length > 0 && !progressiveCodecsVideo.includes("hevc")) {
     // Every Dolby Vision profile probed above uses an HEVC base layer. The
@@ -229,16 +278,7 @@ export function probeWebCapabilities(): WebCapabilityProbe {
     hdr10_plus: false,
     hlg: false,
     dolby_vision_profiles: dolbyVisionProfiles,
-    dolby_vision_profile_levels: dolbyVisionProfiles.map((profile) => {
-      const profileProbe = DOLBY_VISION_PROFILE_PROBES[profile]!;
-      return {
-        profile,
-        max_level: profileProbe.maxLevel,
-        ...(profileProbe.blCompatibilityIds
-          ? { bl_compatibility_ids: profileProbe.blCompatibilityIds }
-          : {}),
-      };
-    }),
+    dolby_vision_profile_levels: dolbyVisionProfileLevels,
   };
 
   return {
@@ -275,26 +315,33 @@ export function useCodecDetection(): WebCapabilityProbe {
       const next = probeWebCapabilities();
       setCapabilities(next);
 
-      void probeHDR10PlaybackSupport().then((hdr10) => {
-        if (disposed || generation !== probeGeneration || !hdr10) return;
-        setCapabilities((current) => ({
-          ...current,
-          // The exact HDR10 query proves the HEVC Main10 base codec for the
-          // progressive MP4 route even when the separate generic HEVC probe was
-          // rejected. Keep that evidence scoped away from original and HLS.
-          progressiveCodecsVideo: current.progressiveCodecsVideo.includes("hevc")
-            ? current.progressiveCodecsVideo
-            : [...current.progressiveCodecsVideo, "hevc"],
-          hdrDetails: {
-            ...current.hdrDetails,
-            hdr10: true,
-            hdr10_max_width: 3840,
-            hdr10_max_height: 2160,
-            hdr10_max_frame_rate: 24,
-            hdr10_max_bitrate_kbps: 80_000,
-          },
-        }));
-      });
+      void Promise.all([probeHDR10PlaybackSupport(), probeHLGPlaybackSupport()]).then(
+        ([hdr10, hlg]) => {
+          if (disposed || generation !== probeGeneration || (!hdr10 && !hlg)) return;
+          setCapabilities((current) => ({
+            ...current,
+            // The exact HDR10 query proves the HEVC Main10 base codec for the
+            // progressive MP4 route even when the separate generic HEVC probe was
+            // rejected. Keep that evidence scoped away from original and HLS.
+            progressiveCodecsVideo: current.progressiveCodecsVideo.includes("hevc")
+              ? current.progressiveCodecsVideo
+              : [...current.progressiveCodecsVideo, "hevc"],
+            hdrDetails: {
+              ...current.hdrDetails,
+              ...(hdr10
+                ? {
+                    hdr10: true,
+                    hdr10_max_width: 3840,
+                    hdr10_max_height: 2160,
+                    hdr10_max_frame_rate: 24,
+                    hdr10_max_bitrate_kbps: 80_000,
+                  }
+                : {}),
+              ...(hlg ? { hlg: true } : {}),
+            },
+          }));
+        },
+      );
     };
     refresh();
     for (const query of queries) {

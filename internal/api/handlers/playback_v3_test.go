@@ -2766,9 +2766,21 @@ func TestTransportGenerationV3IsUniqueAndSessionScoped(t *testing.T) {
 }
 
 func TestRemuxDVModeForPlanV3ExecutesProfile8Strip(t *testing.T) {
-	plan := &playback.PlanV3{Source: playback.SourceDescriptorV3{DVProfile: 8}, Transformations: []playback.TransformationV3{{Name: "server_dv7_to_hdr10"}}}
-	if got := remuxDVModeForPlanV3(plan); got != playback.RemuxDVStripToHDR10V3 {
+	plan := &playback.PlanV3{Source: playback.SourceDescriptorV3{DVProfile: 8}, Transformations: []playback.TransformationV3{{Name: playback.TransformationServerDV8BaseV3}}}
+	if got := remuxDVModeForPlanV3(plan); got != playback.RemuxDVStripToBaseV3 {
 		t.Fatalf("mode = %q", got)
+	}
+}
+
+func TestVideoBitstreamFilterForPlanV3ExecutesEveryDolbyBaseLayerRecipe(t *testing.T) {
+	for _, transformation := range []playback.TransformationV3{
+		{Name: playback.TransformationServerDV7HDR10V3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3},
+		{Name: playback.TransformationServerDV8BaseV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationServerDV8BaseRecipeVersionV3},
+	} {
+		plan := &playback.PlanV3{Transformations: []playback.TransformationV3{transformation}}
+		if got := videoBitstreamFilterForPlanV3(plan); got != playback.DV7ToHDR10BitstreamFilter {
+			t.Fatalf("transformation %q filter = %q", transformation.Name, got)
+		}
 	}
 }
 

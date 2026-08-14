@@ -3211,6 +3211,9 @@ func remuxDVModeForPlanV3(plan *playback.PlanV3) playback.RemuxDVMode {
 		if transformation.Name == playback.TransformationServerDV7HDR10V3 {
 			return playback.RemuxDVStripToHDR10V3
 		}
+		if transformation.Name == playback.TransformationServerDV8BaseV3 {
+			return playback.RemuxDVStripToBaseV3
+		}
 	}
 	if plan.Source.DVProfile == 0 {
 		return ""
@@ -3233,7 +3236,11 @@ func videoBitstreamFilterForPlanV3(plan *playback.PlanV3) string {
 		return ""
 	}
 	for _, transformation := range plan.Transformations {
-		if transformation.Executor == playback.ExecutorServerV3 && transformation.Name == playback.TransformationServerDV7HDR10V3 && transformation.RecipeVersion == playback.TransformationServerDV7HDR10RecipeVersionV3 {
+		if transformation.Executor != playback.ExecutorServerV3 {
+			continue
+		}
+		if transformation.Name == playback.TransformationServerDV7HDR10V3 && transformation.RecipeVersion == playback.TransformationServerDV7HDR10RecipeVersionV3 ||
+			transformation.Name == playback.TransformationServerDV8BaseV3 && transformation.RecipeVersion == playback.TransformationServerDV8BaseRecipeVersionV3 {
 			return playback.DV7ToHDR10BitstreamFilter
 		}
 	}

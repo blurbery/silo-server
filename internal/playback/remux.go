@@ -104,6 +104,7 @@ const (
 	RemuxDVLegacyAutoV3   RemuxDVMode = "legacy_auto"
 	RemuxDVPreserveV3     RemuxDVMode = "preserve"
 	RemuxDVStripToHDR10V3 RemuxDVMode = "strip_to_hdr10"
+	RemuxDVStripToBaseV3  RemuxDVMode = "strip_to_compatible_base"
 	RemuxDVRejectP7V3     RemuxDVMode = "reject_profile_7"
 )
 
@@ -257,14 +258,14 @@ func startRemuxWithOptions(ctx context.Context, filePath, outputFormat string, s
 	case "", RemuxDVLegacyAutoV3:
 		effectiveProfile = remuxDVProfile(dvProfile, supportsDoviRPUFilter(bin) &&
 			(dvProfile != 7 || sharedDVRPUProbe.CanStrip(ctx, bin, filePath)))
-	case RemuxDVStripToHDR10V3:
+	case RemuxDVStripToHDR10V3, RemuxDVStripToBaseV3:
 		if dvProfile != 7 && dvProfile != 8 {
 			cancel()
-			return nil, fmt.Errorf("Dolby Vision HDR10 strip requires profile 7 or 8")
+			return nil, fmt.Errorf("Dolby Vision base-layer strip requires profile 7 or 8")
 		}
 		if !supportsDoviRPUFilter(bin) {
 			cancel()
-			return nil, fmt.Errorf("Dolby Vision HDR10 remux requires the dovi_rpu bitstream filter")
+			return nil, fmt.Errorf("Dolby Vision base-layer remux requires the dovi_rpu/filter_units bitstream filters")
 		}
 		// The planner refuses this recipe for a source that fails the probe,
 		// so reaching here means a session or stream token minted before the
@@ -275,7 +276,7 @@ func startRemuxWithOptions(ctx context.Context, filePath, outputFormat string, s
 		// next start re-plans against the now-cached verdict.
 		if !sharedDVRPUProbe.CanStrip(ctx, bin, filePath) {
 			cancel()
-			return nil, fmt.Errorf("this source's Dolby Vision RPU cannot be stripped to HDR10")
+			return nil, fmt.Errorf("this source's Dolby Vision RPU cannot be stripped to its compatible base layer")
 		}
 		// buildRemuxArgs uses profile 7 as the explicit strip sentinel; the
 		// filter is equally required for a compatible profile 8 base layer.

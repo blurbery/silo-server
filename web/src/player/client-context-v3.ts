@@ -144,10 +144,11 @@ export function buildDeliveriesV3(
 ): Partial<Record<DeliveryClassV3, DeliveryCapabilityV3>> {
   const nonProgressiveHDRDetails: HDRCapabilitiesV3 = {
     ...probe.hdrDetails,
-    // The Dolby Vision and HDR10 probes cover direct progressive playback
+    // The Dolby Vision, HDR10, and HLG probes cover direct progressive playback
     // through the media element after Silo normalizes the sample entry. They
     // say nothing about an untouched original or hls.js' MediaSource path.
     hdr10: false,
+    hlg: false,
     dolby_vision_profiles: [],
     dolby_vision_profile_levels: [],
   };
