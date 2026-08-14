@@ -34,6 +34,65 @@ type mutablePlaybackSettingsV3 struct {
 	values map[string]string
 }
 
+func TestSessionStartErrorV3DistinguishesPolicyFailureFromDenial(t *testing.T) {
+	unavailable := sessionStartErrorV3(playback.ErrPlaybackAdmissionUnavailable)
+	if unavailable == nil || unavailable.reason != "policy_unavailable" || !unavailable.retryable {
+		t.Fatalf("unavailable mapping = %#v, want retryable policy_unavailable", unavailable)
+	}
+
+	denied := sessionStartErrorV3(playback.ErrPlaybackNotAllowed)
+	if denied == nil || denied.reason != "policy_denied" || denied.retryable {
+		t.Fatalf("denied mapping = %#v, want non-retryable policy_denied", denied)
+	}
+}
+
+func TestSetStreamCapabilityQueryV3PreservesSubtitleIdentity(t *testing.T) {
+	const capability = "signed-stream-capability"
+	raw := "/stream/session-1/subtitles/3.vtt?file_id=42&downloaded_subtitle_id=71"
+	parsed, err := url.Parse(setStreamCapabilityQueryV3(raw, capability))
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	if query.Get("file_id") != "42" || query.Get(playback.DownloadedSubtitleIDParamV3) != "71" {
+		t.Fatalf("subtitle identity query was not preserved: %q", parsed.RawQuery)
+	}
+	if query.Get(streamTokenParam) != capability {
+		t.Fatalf("stream capability = %q, want %q", query.Get(streamTokenParam), capability)
+	}
+}
+
+func TestAttachStreamCapabilityToSubtitleURLsV3SupportsEveryTopology(t *testing.T) {
+	const capability = "signed.stream.capability"
+	streamURLs := []string{
+		"/stream/session-1?st=" + capability,
+		"https://proxy.example/stream/direct/" + capability,
+		"https://proxy.example/stream/remux/" + capability + "?seek=39.5",
+		"https://proxy.example/stream/transcode/" + capability + "/master.m3u8",
+	}
+	for _, streamURL := range streamURLs {
+		t.Run(streamURL, func(t *testing.T) {
+			plan := &playback.PlanV3{
+				Stream: playback.StreamV3{URL: streamURL},
+				Subtitle: playback.SubtitleDecisionV3{Inventory: []playback.SubtitleInventoryItemV3{{
+					URL: "/stream/session-1/subtitles/3.vtt?file_id=42",
+				}}},
+			}
+			attachStreamCapabilityToSubtitleURLsV3(plan)
+			parsed, err := url.Parse(plan.Subtitle.Inventory[0].URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := parsed.Query().Get(streamTokenParam); got != capability {
+				t.Fatalf("capability = %q, want %q in %q", got, capability, plan.Subtitle.Inventory[0].URL)
+			}
+			if got := parsed.Query().Get("file_id"); got != "42" {
+				t.Fatalf("file_id = %q, want 42 in %q", got, plan.Subtitle.Inventory[0].URL)
+			}
+		})
+	}
+}
+
 type failingAudioPreferenceStoreV3 struct {
 	userstore.UserStore
 	err error
@@ -527,6 +586,7 @@ func TestHandleStartPlaybackV3PublishesSubtitleURLsWithSubtitlesOff(t *testing.T
 	handler := NewPlaybackHandler(manager, testPlaybackFileResolver{file: file})
 	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{"allow_4k_transcode": "true"}}
 	handler.ItemAccess = allowAllPlaybackItemAccess{}
+	handler.JWTSecret = "subtitle-stream-capability-secret"
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/playback/start", strings.NewReader(marshalV3StartRequest(t, v3HandlerStartRequest())))
 	req = req.WithContext(newAuthorizedPlaybackContext())
@@ -550,11 +610,26 @@ func TestHandleStartPlaybackV3PublishesSubtitleURLsWithSubtitlesOff(t *testing.T
 	if len(inventory) != 3 {
 		t.Fatalf("inventory = %#v, want all three tracks", inventory)
 	}
+	streamURL, err := url.Parse(response.PlaybackPlan.Stream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamCapability := streamURL.Query().Get(streamTokenParam)
+	if streamCapability == "" {
+		t.Fatalf("stream URL omitted %s: %q", streamTokenParam, response.PlaybackPlan.Stream.URL)
+	}
 	for _, item := range inventory {
 		switch item.Delivery {
 		case playback.SubtitleDeliverySidecarV3:
 			if !strings.HasPrefix(item.URL, "/stream/"+response.SessionID+"/subtitles/") {
 				t.Errorf("track %d (%s) url = %q, want a session-scoped sidecar URL", item.CombinedIndex, item.Codec, item.URL)
+			}
+			subtitleURL, err := url.Parse(item.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := subtitleURL.Query().Get(streamTokenParam); got != streamCapability {
+				t.Errorf("track %d capability = %q, want stream capability", item.CombinedIndex, got)
 			}
 		case playback.SubtitleDeliveryBurnInOnlyV3:
 			if item.URL != "" {
@@ -566,6 +641,10 @@ func TestHandleStartPlaybackV3PublishesSubtitleURLsWithSubtitlesOff(t *testing.T
 	}
 	if inventory[1].FontBundleURL == "" {
 		t.Errorf("embedded ASS track published no font bundle: %#v", inventory[1])
+	} else if fontURL, err := url.Parse(inventory[1].FontBundleURL); err != nil {
+		t.Fatal(err)
+	} else if got := fontURL.Query().Get(streamTokenParam); got != streamCapability {
+		t.Errorf("font bundle capability = %q, want stream capability", got)
 	}
 }
 

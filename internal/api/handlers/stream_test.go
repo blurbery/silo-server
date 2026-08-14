@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,15 +15,57 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	apimw "github.com/Silo-Server/silo-server/internal/api/middleware"
 	"github.com/Silo-Server/silo-server/internal/config"
 	"github.com/Silo-Server/silo-server/internal/models"
 	"github.com/Silo-Server/silo-server/internal/playback"
+	"github.com/Silo-Server/silo-server/internal/streamtoken"
 	"github.com/Silo-Server/silo-server/internal/subtitles"
 )
 
 type hookedSessionManager struct {
 	*playback.SessionManager
 	beginTransportHook func()
+}
+
+func TestHandleStreamAcceptsSignedTransportCapabilityAndFencesLiveRecipe(t *testing.T) {
+	const secret = "stream-handler-transport-secret"
+	filePath := writePlaybackTestMediaFile(t, "movie.mp4")
+	file := &models.MediaFile{ID: 42, ContentID: "movie-1", FilePath: filePath, Duration: 3600}
+	sessionMgr := playback.NewSessionManager(0, 0)
+	session, err := sessionMgr.StartSession(7, "profile-1", file.ID, playback.PlayDirect, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewStreamHandler(sessionMgr, testPlaybackFileResolver{file: file})
+	handler.JWTSecret = secret
+	authMiddleware := apimw.NewAuthMiddleware(nil, nil, nil, nil)
+
+	router := chi.NewRouter()
+	router.With(authMiddleware.RequireTransportAuth(secret)).Get("/stream/{session_id}", handler.HandleStream)
+
+	request := func(mediaFileID int) *httptest.ResponseRecorder {
+		t.Helper()
+		card := playback.NewDirectRecipeCard(session.ID, session.UserID, session.ProfileID, mediaFileID)
+		token, err := streamtoken.Sign(card.ToClaims(), secret, time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/stream/"+session.ID+"?"+streamtoken.QueryParameter+"="+url.QueryEscape(token), nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	valid := request(file.ID)
+	if valid.Code != http.StatusOK || valid.Body.String() != "video" {
+		t.Fatalf("valid capability status=%d body=%q", valid.Code, valid.Body.String())
+	}
+
+	stale := request(file.ID + 1)
+	if stale.Code != http.StatusForbidden {
+		t.Fatalf("stale capability status=%d body=%q, want 403", stale.Code, stale.Body.String())
+	}
 }
 
 type errStreamFileResolver struct {

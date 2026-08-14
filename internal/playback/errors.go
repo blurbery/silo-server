@@ -9,9 +9,13 @@ var (
 	ErrTooManyTranscodes        = errors.New("too many concurrent transcodes")
 	ErrTranscodingDisabled      = errors.New("transcoding is disabled for this user")
 	ErrAudioTranscodingDisabled = errors.New("audio transcoding is disabled for this user")
+	// ErrPlaybackAdmissionUnavailable means the admission decision could not be
+	// evaluated. It remains fail-closed, but callers must distinguish this
+	// transient infrastructure failure from an intentional policy denial.
+	ErrPlaybackAdmissionUnavailable = errors.New("playback admission is temporarily unavailable")
 	// ErrPlaybackNotAllowed is the generic policy admission denial: a denial
 	// without a recognized concurrency-limit code (e.g. an admin custom
-	// override, or a failed policy evaluation) must not masquerade as one.
+	// override) must not masquerade as one.
 	ErrPlaybackNotAllowed = errors.New("playback not allowed by policy")
 	ErrFileNotFound       = errors.New("media file not found")
 	ErrTranscodeFailed    = errors.New("transcode process failed")

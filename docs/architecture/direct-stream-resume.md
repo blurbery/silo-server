@@ -3,7 +3,16 @@
 Protocol v3 advertises `direct_stream_resume_v1` for playback plans whose
 delivery is `original_http`. The capability formalizes resumption of the
 original file by issuing sequential authorized HTTP requests. It does not
-change authentication, authorization, or playback-session ownership.
+weaken authorization or playback-session ownership.
+
+Integrated playback URLs carry a signed `st` transport capability bound to the
+playback session, user, profile, media file, and delivery method. Byte-delivery
+routes accept that capability or fall back to ordinary account authentication.
+The handler compares capability claims with the live session before serving, so
+an older URL cannot cross an in-place replan boundary. Viewer-scope policy is
+evaluated when the plan or replacement is admitted; it is not re-evaluated for
+every media range. This keeps native media loaders working across access-token
+refreshes without turning the stream capability into general API access.
 
 Original-file responses follow the HTTP byte-range contract:
 
@@ -16,13 +25,18 @@ Original-file responses follow the HTTP byte-range contract:
 - `HEAD` returns the same representation headers as `GET` without a body.
 
 On Linux, macOS, and Windows, each response carries a strong, opaque `ETag`
-derived from the open file's filesystem identity, change time, modification
-time, and size. The validator is stable while the playback plan's original-file
-entity is unchanged, but changes for same-size replacements even when their
-modification time is preserved. Platforms that cannot expose a durable
-filesystem revision omit the validator instead of hashing an entire media file
-before each request. On those platforms an ETag-based `If-Range` request cannot
-match and safely falls back to a full `200 OK` response.
+derived from durable filesystem identity plus content-relevant timestamps and
+size. On Linux, permission, ownership, ACL, and xattr updates do not invalidate
+the validator because they do not change the served bytes. A normal atomic
+replacement at the same path changes the device/inode identity even when its
+size and modification time are preserved; ordinary in-place writes change
+modification time or size. A same-inode, same-size rewrite that deliberately
+restores the exact modification time cannot be distinguished without hashing
+the media file and is outside this stat-based contract. Platforms that cannot
+expose a durable filesystem revision omit the validator instead of hashing an
+entire media file before each request. On those platforms an ETag-based
+`If-Range` request cannot match and safely falls back to a full `200 OK`
+response.
 
 A client resuming a transfer sends both `Range` and `If-Range` with the
 validator. When it still matches, the server returns the requested `206`

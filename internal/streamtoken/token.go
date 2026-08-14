@@ -8,6 +8,10 @@ import (
 )
 
 const (
+	// QueryParameter carries an integrated-server playback capability. Keeping
+	// the name here lets the API auth middleware and serve handlers agree without
+	// either package depending on the other.
+	QueryParameter = "st"
 	// PlayMethodDownload identifies a token minted only after the API has
 	// authorized a file download. Proxy download routes reject playback tokens.
 	PlayMethodDownload = "download"
@@ -93,6 +97,9 @@ type Claims struct {
 
 // Sign creates a signed JWT string from the given claims.
 func Sign(c Claims, secret string, ttl time.Duration) (string, error) {
+	if secret == "" {
+		return "", fmt.Errorf("stream token secret is empty")
+	}
 	now := time.Now()
 	c.RegisteredClaims = jwt.RegisteredClaims{
 		ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
@@ -104,8 +111,11 @@ func Sign(c Claims, secret string, ttl time.Duration) (string, error) {
 
 // Verify parses and validates a stream token JWT string.
 func Verify(tokenString, secret string) (*Claims, error) {
+	if secret == "" {
+		return nil, fmt.Errorf("stream token secret is empty")
+	}
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (any, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+		if token.Method != jwt.SigningMethodHS256 {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return []byte(secret), nil

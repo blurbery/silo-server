@@ -637,7 +637,9 @@ HDR, 4K, or transcode-policy reason — deselecting the subtitle restores playba
 `invalid_seek_position`, `invalid_replan`, `seek_reanchor_route_changed`,
 `seek_reanchor_recipe_unavailable`,
 `seek_reanchor_intent_mismatch`, `seek_failure_recovery_intent_mismatch`,
-`policy_denied`.
+`policy_unavailable`, `policy_denied`. A policy evaluation infrastructure
+failure is retryable `policy_unavailable`; only an evaluated policy decision
+whose result is deny uses non-retryable `policy_denied`.
 
 ### 7.4 Route event names
 

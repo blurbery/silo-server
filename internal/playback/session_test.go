@@ -437,15 +437,37 @@ func TestSessionManager_PolicyAdmissionDeciderMatchesLegacy(t *testing.T) {
 	}
 }
 
-func TestSessionManager_AdmissionDeciderErrorDenies(t *testing.T) {
+func TestSessionManager_AdmissionDeciderErrorIsUnavailable(t *testing.T) {
 	sm := playback.NewSessionManager(0, 0)
 	sm.SetAdmissionDecider(func(context.Context, playback.AdmissionRequest) (playback.AdmissionDecision, error) {
 		return playback.AdmissionDecision{}, errors.New("policy unavailable")
 	})
 
 	_, err := sm.StartSession(1, "profile-1", 100, playback.PlayDirect, false)
-	if !errors.Is(err, playback.ErrPlaybackNotAllowed) {
-		t.Fatalf("StartSession with failing decider = %v, want ErrPlaybackNotAllowed", err)
+	if !errors.Is(err, playback.ErrPlaybackAdmissionUnavailable) {
+		t.Fatalf("StartSession with failing decider = %v, want ErrPlaybackAdmissionUnavailable", err)
+	}
+	if errors.Is(err, playback.ErrPlaybackNotAllowed) {
+		t.Fatalf("StartSession with failing decider = %v, must not look like a policy denial", err)
+	}
+}
+
+func TestSessionManager_ReplacementAdmissionDeciderErrorIsUnavailable(t *testing.T) {
+	sm := playback.NewSessionManager(0, 0)
+	session, err := sm.StartSession(1, "profile-1", 100, playback.PlayDirect, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm.SetAdmissionDecider(func(context.Context, playback.AdmissionRequest) (playback.AdmissionDecision, error) {
+		return playback.AdmissionDecision{}, errors.New("policy unavailable")
+	})
+
+	err = sm.CheckReplacementAllowed(context.Background(), session.ID, playback.PlayDirect, false)
+	if !errors.Is(err, playback.ErrPlaybackAdmissionUnavailable) {
+		t.Fatalf("CheckReplacementAllowed with failing decider = %v, want ErrPlaybackAdmissionUnavailable", err)
+	}
+	if errors.Is(err, playback.ErrPlaybackNotAllowed) {
+		t.Fatalf("CheckReplacementAllowed with failing decider = %v, must not look like a policy denial", err)
 	}
 }
 

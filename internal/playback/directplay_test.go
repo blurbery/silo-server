@@ -473,31 +473,23 @@ func TestServeDirectPlayChangedEntityRejectsOldValidators(t *testing.T) {
 		t.Fatal("test fixture must preserve file size")
 	}
 
-	// Size and mtime are pinned identical on purpose, so the inode change time
-	// is the only thing left that can distinguish the two entities. Linux
-	// stamps ctime from a coarse clock — the whole rewrite finishes inside one
-	// tick — so writing once and reading immediately usually produces the same
-	// ctime and the test fails for a reason that has nothing to do with the
-	// validator. Rewrite until the stamp actually moves.
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if err := os.WriteFile(filePath, []byte(replacement), 0o600); err != nil {
+	// Replace the path with a different filesystem entity while deliberately
+	// preserving size and mtime. The inode/file ID must still invalidate the old
+	// validator without relying on metadata-only change time.
+	replacementPath := filepath.Join(dir, "replacement.mp4")
+	if err := os.WriteFile(replacementPath, []byte(replacement), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(replacementPath, originalTime, originalTime); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		if err := os.Remove(filePath); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chtimes(filePath, originalTime, originalTime); err != nil {
-			t.Fatal(err)
-		}
-		probe := httptest.NewRecorder()
-		if err := ServeDirectPlay(probe, httptest.NewRequest(http.MethodGet, "/stream", nil), filePath); err != nil {
-			t.Fatal(err)
-		}
-		if probe.Header().Get("ETag") != oldETag {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("file revision never changed across a replacement; the platform exposes no usable validator")
-		}
-		time.Sleep(time.Millisecond)
+	}
+	if err := os.Rename(replacementPath, filePath); err != nil {
+		t.Fatal(err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/stream", nil)
@@ -532,6 +524,85 @@ func TestServeDirectPlayChangedEntityRejectsOldValidators(t *testing.T) {
 	}
 	if newETag := ifMatchResponse.Header().Get("ETag"); newETag == oldETag {
 		t.Fatalf("If-Match response did not expose the replacement ETag: %q", newETag)
+	}
+}
+
+func TestServeDirectPlayPermissionChangePreservesEntityTag(t *testing.T) {
+	if runtime.GOOS != directPlayLinuxGOOS {
+		t.Skip("Linux direct-play validators ignore permission-only ctime changes")
+	}
+	if !platformRequiresDirectPlayValidator() {
+		t.Skip("platform does not expose a durable file revision")
+	}
+
+	filePath := filepath.Join(t.TempDir(), "fixture.mp4")
+	if err := os.WriteFile(filePath, []byte("abcdef"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	beforeInfo, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := httptest.NewRecorder()
+	if err := ServeDirectPlay(first, httptest.NewRequest(http.MethodGet, "/stream", nil), filePath); err != nil {
+		t.Fatal(err)
+	}
+	oldETag := first.Header().Get("ETag")
+	if oldETag == "" {
+		t.Fatalf("ETag omitted on supported platform %s", runtime.GOOS)
+	}
+
+	if err := os.Chmod(filePath, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	afterInfo, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(beforeInfo, afterInfo) {
+		t.Fatal("chmod replaced the test entity")
+	}
+	if beforeInfo.Size() != afterInfo.Size() || !beforeInfo.ModTime().Equal(afterInfo.ModTime()) {
+		t.Fatalf("chmod changed content metadata: before size=%d mtime=%s, after size=%d mtime=%s",
+			beforeInfo.Size(), beforeInfo.ModTime(), afterInfo.Size(), afterInfo.ModTime())
+	}
+	if beforeInfo.Mode().Perm() == afterInfo.Mode().Perm() {
+		t.Fatalf("chmod did not change permissions: mode remained %s", afterInfo.Mode().Perm())
+	}
+
+	ifRangeRequest := httptest.NewRequest(http.MethodGet, "/stream", nil)
+	ifRangeRequest.Header.Set("Range", "bytes=2-4")
+	ifRangeRequest.Header.Set("If-Range", oldETag)
+	ifRangeResponse := httptest.NewRecorder()
+	if err := ServeDirectPlay(ifRangeResponse, ifRangeRequest, filePath); err != nil {
+		t.Fatal(err)
+	}
+	if ifRangeResponse.Code != http.StatusPartialContent {
+		t.Fatalf("If-Range status = %d, want 206", ifRangeResponse.Code)
+	}
+	if got := ifRangeResponse.Header().Get("ETag"); got != oldETag {
+		t.Fatalf("If-Range ETag changed after permission-only metadata update: got %q, want %q", got, oldETag)
+	}
+	if body := ifRangeResponse.Body.String(); body != "cde" {
+		t.Fatalf("If-Range body = %q, want %q", body, "cde")
+	}
+
+	ifMatchRequest := httptest.NewRequest(http.MethodGet, "/stream", nil)
+	ifMatchRequest.Header.Set("Range", "bytes=2-4")
+	ifMatchRequest.Header.Set("If-Match", oldETag)
+	ifMatchResponse := httptest.NewRecorder()
+	if err := ServeDirectPlay(ifMatchResponse, ifMatchRequest, filePath); err != nil {
+		t.Fatal(err)
+	}
+	if ifMatchResponse.Code != http.StatusPartialContent {
+		t.Fatalf("If-Match status = %d, want 206", ifMatchResponse.Code)
+	}
+	if got := ifMatchResponse.Header().Get("ETag"); got != oldETag {
+		t.Fatalf("If-Match ETag changed after permission-only metadata update: got %q, want %q", got, oldETag)
+	}
+	if body := ifMatchResponse.Body.String(); body != "cde" {
+		t.Fatalf("If-Match body = %q, want %q", body, "cde")
 	}
 }
 
