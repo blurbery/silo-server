@@ -113,6 +113,7 @@ var adminSettingDefaults = map[string]string{
 	"policy.decision_log_verbosity":         "digest",
 	"policy.decision_log_scope_sample_rate": "50",
 	"policy.decision_log_retention_days":    "14",
+	policyEvalTimeoutSettingKey:             strconv.Itoa(defaultPolicyEvalTimeoutMS),
 
 	"email.enabled":       "false",
 	"email.smtp_port":     "587",
@@ -318,6 +319,8 @@ func NormalizeAdminSetting(key, raw string) (string, error) {
 		return normalizeAdminInt64(key, value, 0, math.MaxInt64)
 	case "policy.decision_log_scope_sample_rate", "policy.decision_log_retention_days":
 		return normalizeAdminInt(key, value, 1, math.MaxInt32)
+	case policyEvalTimeoutSettingKey:
+		return normalizeAdminInt(key, value, minPolicyEvalTimeoutMS, maxPolicyEvalTimeoutMS)
 	case "email.smtp_port":
 		return normalizeAdminInt(key, value, 1, 65535)
 	case "notifications.fanout.settle_seconds":

@@ -396,7 +396,7 @@ func (m *SessionManager) StartSessionWithFilesContext(
 			// genuine concurrency-limit denial in the logs.
 			slog.WarnContext(ctx, "playback admission decider error; denying session", "component", "playback",
 				"user_id", userID, "method", method, "error", err)
-			return nil, admissionDenyError("")
+			return nil, fmt.Errorf("%w: %v", ErrPlaybackAdmissionUnavailable, err)
 		}
 		if !decision.Allowed {
 			return nil, admissionDenyError(decision.ReasonCode)
@@ -657,7 +657,7 @@ func (m *SessionManager) CheckReplacementAllowed(ctx context.Context, sessionID 
 			// genuine concurrency-limit denial in the logs.
 			slog.WarnContext(ctx, "playback replacement admission decider error; denying replacement", "component", "playback",
 				"user_id", userID, "session", sessionID, "method", method, "error", err)
-			return ErrPlaybackNotAllowed
+			return fmt.Errorf("%w: %v", ErrPlaybackAdmissionUnavailable, err)
 		}
 		if !decision.Allowed {
 			return admissionDenyError(decision.ReasonCode)
@@ -672,7 +672,7 @@ func (m *SessionManager) CheckReplacementAllowed(ctx context.Context, sessionID 
 		}
 		m.mu.Unlock()
 	}
-	return ErrPlaybackNotAllowed
+	return ErrPlaybackAdmissionUnavailable
 }
 
 // CancelReplacementReservation releases a protocol-v3 capacity reservation

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -605,6 +606,7 @@ func (h *PlaybackHandler) startPlannedPlaybackV3(r *http.Request, userID int, pr
 		abort()
 		return playback.DecisionResponseV3{}, subtitleArtifactErrorV3("Failed to prepare the selected subtitle artifact.", err)
 	}
+	attachStreamCapabilityToSubtitleURLsV3(result.Plan)
 	response := playback.DecisionResponseV3{ProtocolVersion: playback.ProtocolV3, ServerFeatures: playback.ServerFeaturesV3(), Outcome: playback.OutcomePlayableV3, SessionID: session.ID, PlaybackPlan: result.Plan}
 	record := playback.AttemptRecordV3{PlaybackAttemptID: req.PlaybackAttemptID, SessionID: session.ID, UserID: userID, ProfileID: profileID, RequestedMediaFileID: requestedFile.ID, EffectiveMediaFileID: effectiveFile.ID, CurrentPlanID: result.Plan.PlanID, CurrentPlan: *result.Plan, FrozenRecipe: frozenRecipe, NormalizedRequest: req, StartResponse: response, RequestDigest: requestDigests.current, ExpiresAt: time.Now().Add(playback.MaxTokenTTL)}
 	if err := h.updateV3SessionState(r.Context(), session, effectiveFile, result, transport); err != nil {
@@ -2027,6 +2029,7 @@ func (h *PlaybackHandler) executeReplanV3(r *http.Request, record *playback.Atte
 		transport.rollback()
 		return playback.DecisionResponseV3{}, *record, nil, subtitleArtifactErrorV3("Failed to prepare the selected subtitle artifact.", err)
 	}
+	attachStreamCapabilityToSubtitleURLsV3(result.Plan)
 	if seekReanchor {
 		if err := validateSeekReanchorPlanV3(record, result.Plan); err != nil {
 			changedFields := seekReanchorIdentityChangesV3(record, result.Plan)
@@ -2104,6 +2107,65 @@ func (h *PlaybackHandler) executeReplanV3(r *http.Request, record *playback.Atte
 	}
 	reservationHandedOff = true
 	return response, updated, &transport, nil
+}
+
+func attachStreamCapabilityToSubtitleURLsV3(plan *playback.PlanV3) {
+	if plan == nil || plan.Stream.URL == "" {
+		return
+	}
+	streamURL, err := url.Parse(plan.Stream.URL)
+	if err != nil {
+		return
+	}
+	token := streamCapabilityFromPlanURLV3(streamURL)
+	if token == "" {
+		return
+	}
+	for index := range plan.Subtitle.Inventory {
+		plan.Subtitle.Inventory[index].URL = setStreamCapabilityQueryV3(plan.Subtitle.Inventory[index].URL, token)
+		plan.Subtitle.Inventory[index].FontBundleURL = setStreamCapabilityQueryV3(plan.Subtitle.Inventory[index].FontBundleURL, token)
+	}
+	if plan.Subtitle.Artifact != nil {
+		plan.Subtitle.Artifact.URL = setStreamCapabilityQueryV3(plan.Subtitle.Artifact.URL, token)
+	}
+}
+
+// streamCapabilityFromPlanURLV3 returns the session capability regardless of
+// transport topology. Integrated delivery carries it in ?st=; proxy delivery
+// carries the same signed token in a route segment so the proxy can validate
+// the request without API-server state.
+func streamCapabilityFromPlanURLV3(streamURL *url.URL) string {
+	if streamURL == nil {
+		return ""
+	}
+	if token := streamURL.Query().Get(streamTokenParam); token != "" {
+		return token
+	}
+	segments := strings.Split(strings.Trim(streamURL.Path, "/"), "/")
+	for index := 0; index+2 < len(segments); index++ {
+		if segments[index] != "stream" {
+			continue
+		}
+		switch segments[index+1] {
+		case "direct", "remux", "transcode":
+			return segments[index+2]
+		}
+	}
+	return ""
+}
+
+func setStreamCapabilityQueryV3(rawURL, token string) string {
+	if rawURL == "" || token == "" {
+		return rawURL
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	query := parsed.Query()
+	query.Set(streamTokenParam, token)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 func frozenSeekReanchorResultV3(record *playback.AttemptRecordV3, position float64, now time.Time) (playback.PlannerResultV3, error) {
@@ -2937,6 +2999,8 @@ func sessionStartErrorV3(err error) *transportErrorV3 {
 		return &transportErrorV3{reason: "capacity_unavailable", message: "Playback capacity is currently unavailable.", retryable: true}
 	case errors.Is(err, playback.ErrTranscodingDisabled), errors.Is(err, playback.ErrAudioTranscodingDisabled):
 		return &transportErrorV3{reason: "transcoding_disabled", message: "The selected server adaptation is disabled."}
+	case errors.Is(err, playback.ErrPlaybackAdmissionUnavailable):
+		return &transportErrorV3{reason: "policy_unavailable", message: "Playback policy is temporarily unavailable.", retryable: true, cause: err}
 	case errors.Is(err, playback.ErrPlaybackNotAllowed):
 		return &transportErrorV3{reason: "policy_denied", message: "Playback is denied by server policy."}
 	default:

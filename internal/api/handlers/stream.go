@@ -105,7 +105,7 @@ func (h *StreamHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 	// ?seek= query for remux), so no runtime beyond the Session needs rebuilding.
 	// Without a token (or signing secret) reconstruct is off, collapsing to a
 	// plain GetSession + ownership check.
-	card := streamCardFromToken(r.URL.Query().Get(streamTokenParam), sessionID, h.JWTSecret)
+	card := streamCardFromRequest(r, sessionID, h.JWTSecret)
 	session, status := h.TM.LoadOrReconstructSession(r.Context(), h.sessionMgr.GetSession, sessionID, userID, card)
 	switch status {
 	case playback.SessionMissing:
@@ -116,6 +116,10 @@ func (h *StreamHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	case playback.SessionForbidden:
 		writeError(w, http.StatusForbidden, "forbidden", "Session belongs to another user")
+		return
+	}
+	if !transportStreamClaimsMatchSession(r.Context(), session) {
+		writeError(w, http.StatusForbidden, "forbidden", "Stream token no longer matches the playback session")
 		return
 	}
 
@@ -222,6 +226,10 @@ func (h *StreamHandler) HandleSubtitle(w http.ResponseWriter, r *http.Request) {
 
 	if session.UserID != userID {
 		writeError(w, http.StatusForbidden, "forbidden", "Session belongs to another user")
+		return
+	}
+	if !transportStreamClaimsMatchSession(r.Context(), session) {
+		writeError(w, http.StatusForbidden, "forbidden", "Stream token no longer matches the playback session")
 		return
 	}
 
@@ -488,6 +496,10 @@ func (h *StreamHandler) HandleSubtitleFonts(w http.ResponseWriter, r *http.Reque
 	}
 	if session.UserID != userID {
 		writeError(w, http.StatusForbidden, "forbidden", "Session belongs to another user")
+		return
+	}
+	if !transportStreamClaimsMatchSession(r.Context(), session) {
+		writeError(w, http.StatusForbidden, "forbidden", "Stream token no longer matches the playback session")
 		return
 	}
 
