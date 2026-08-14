@@ -117,6 +117,27 @@ func TestShouldTryAlternateFileV3PinsOriginalQuality(t *testing.T) {
 	}
 }
 
+func TestPlaybackSegmentDurationV3UsesShortFragmentsOnlyForCopyRemux(t *testing.T) {
+	tests := []struct {
+		name string
+		plan *playback.PlanV3
+		want int
+	}{
+		{name: "missing plan", want: playback.DefaultSegmentDuration},
+		{name: "video transcode", plan: &playback.PlanV3{Delivery: playback.DeliveryTranscodeHLSV3}, want: playback.DefaultSegmentDuration},
+		{name: "video copy remux", plan: &playback.PlanV3{Delivery: playback.DeliveryRemuxHLSV3}, want: 1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := playbackSegmentDurationV3(playback.PlannerResultV3{Plan: test.plan})
+			if got != test.want {
+				t.Fatalf("playbackSegmentDurationV3() = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
 func TestTerminalAllowsAlternateFileV3IncludesHDRIncompatibility(t *testing.T) {
 	for _, reason := range []string{"no_alternate_version", "hdr_transcode_unsupported"} {
 		if !terminalAllowsAlternateFileV3(&playback.TerminalV3{Reason: reason}) {
