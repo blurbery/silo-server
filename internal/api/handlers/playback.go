@@ -472,7 +472,10 @@ func (h *PlaybackHandler) loadTranscodeServeSession(r *http.Request, sessionID s
 // the playback session id stays stable, but an older URL must not authorize a
 // different media file or delivery method that later occupied that session.
 func transportStreamClaimsMatchSession(ctx context.Context, session *playback.Session) bool {
-	claims := apimw.GetTransportStreamClaims(ctx)
+	return transportStreamClaimsMatchLiveSession(apimw.GetTransportStreamClaims(ctx), session)
+}
+
+func transportStreamClaimsMatchLiveSession(claims *streamtoken.Claims, session *playback.Session) bool {
 	if claims == nil {
 		return true
 	}
@@ -483,7 +486,17 @@ func transportStreamClaimsMatchSession(ctx context.Context, session *playback.Se
 	if method == "" {
 		method = playback.PlayTranscode
 	}
-	return method == session.PlayMethod
+	// HLS remuxes are classified as remux sessions for admission and activity,
+	// but their segmented transport is reconstructed from the same full recipe
+	// card as an encoded HLS transcode. Its signed capability therefore carries
+	// PlayTranscode. SegmentDuration identifies that HLS serve path and keeps a
+	// progressive remux capability from being accepted after an in-place HLS
+	// replan.
+	expectedMethod := session.PlayMethod
+	if session.SegmentDuration > 0 {
+		expectedMethod = playback.PlayTranscode
+	}
+	return method == expectedMethod
 }
 
 // streamCardFromToken verifies a stream token and decodes its reconstruction

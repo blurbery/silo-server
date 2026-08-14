@@ -46,6 +46,45 @@ func TestSessionStartErrorV3DistinguishesPolicyFailureFromDenial(t *testing.T) {
 	}
 }
 
+func TestTransportStreamClaimsMatchLiveSessionUsesHLSServeMethod(t *testing.T) {
+	baseClaims := streamtoken.Claims{
+		SessionID:   "session-1",
+		UserID:      7,
+		ProfileID:   "profile-1",
+		MediaFileID: 42,
+	}
+	baseSession := playback.Session{
+		ID:          "session-1",
+		UserID:      7,
+		ProfileID:   "profile-1",
+		MediaFileID: 42,
+		PlayMethod:  playback.PlayRemux,
+	}
+
+	tests := []struct {
+		name    string
+		method  playback.PlayMethod
+		segment int
+		want    bool
+	}{
+		{name: "progressive remux accepts remux capability", method: playback.PlayRemux, want: true},
+		{name: "progressive remux rejects transcode capability", method: playback.PlayTranscode, want: false},
+		{name: "HLS remux accepts transcode recipe capability", method: playback.PlayTranscode, segment: 2, want: true},
+		{name: "HLS remux rejects stale progressive capability", method: playback.PlayRemux, segment: 2, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			claims := baseClaims
+			claims.PlayMethod = string(test.method)
+			session := baseSession
+			session.SegmentDuration = test.segment
+			if got := transportStreamClaimsMatchLiveSession(&claims, &session); got != test.want {
+				t.Fatalf("claims method %q with segment duration %d matched = %t, want %t", test.method, test.segment, got, test.want)
+			}
+		})
+	}
+}
+
 func TestSetStreamCapabilityQueryV3PreservesSubtitleIdentity(t *testing.T) {
 	const capability = "signed-stream-capability"
 	raw := "/stream/session-1/subtitles/3.vtt?file_id=42&downloaded_subtitle_id=71"
