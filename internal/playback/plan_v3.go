@@ -194,10 +194,12 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	// loopback remuxer before AVPlayer sees it. Long-lived origin reads on that
 	// path can end early and strand the local remuxer; server HLS instead uses
 	// short, independently authenticated segment requests and gives AVPlayer its
-	// native transport immediately. Prefer that route only when the complete
-	// copy recipe is executable, so a missing server toolchain never takes away
-	// a working client-side fallback.
-	preferTVOSServerHLS := prefersTVOSServerHLSForMKVV3(source, input.Request) &&
+	// native transport immediately. Safari's native HLS path also avoids the
+	// decoder failure its progressive media-element route can report for a
+	// server-normalized Profile 7 HDR10 fallback. Prefer either route only when
+	// the complete copy recipe is executable, so a missing server toolchain never
+	// takes away a working client-side fallback.
+	preferServerHLS := prefersServerHLSForMKVV3(source, input.Request) &&
 		videoOK && !source.VideoCopyUnsafe && hlsRemuxSubtitleOK &&
 		((source.DVProfile == 7 && dvStripEligible) || (source.DVProfile != 7 && rangeOK)) &&
 		hlsAudioRouteExecutableV3(source, input)
@@ -305,7 +307,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	// source. A decoder profile/max-instance claim alone is not proof of native
 	// dual-layer output, so the default Android route mirrors Silo Apple: P8.1
 	// base-layer Dolby Vision first, then same-file HDR10.
-	if !preferTVOSServerHLS && source.DVProfile == 7 && quality.PreservesSource && videoOK && containerOK && audioOK &&
+	if !preferServerHLS && source.DVProfile == 7 && quality.PreservesSource && videoOK && containerOK && audioOK &&
 		audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && !subtitle.RequiresBurn {
 		if clientDV81Eligible {
 			plan := base
@@ -349,7 +351,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		}
 	}
 
-	if !preferTVOSServerHLS && source.DVProfile != 7 && deliveryAvailableV3(input.Request, DeliveryClassOriginalHTTPV3) && containerOK && videoOK && rangeOK && audioOK && quality.PreservesSource &&
+	if !preferServerHLS && source.DVProfile != 7 && deliveryAvailableV3(input.Request, DeliveryClassOriginalHTTPV3) && containerOK && videoOK && rangeOK && audioOK && quality.PreservesSource &&
 		audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && !subtitle.RequiresBurn {
 		plan := base
 		plan.Delivery = DeliveryOriginalHTTPV3
@@ -416,7 +418,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		// node-offloadable delivery instead.
 		progressiveExecutable := (!transcodeAudio || localAudioConvertOK) && (!dvStrip || dvStripEligibleLocal)
 		progressivePlan := plan
-		if !preferTVOSServerHLS && remuxSubtitleOK && progressiveExecutable {
+		if !preferServerHLS && remuxSubtitleOK && progressiveExecutable {
 			applySubtitleDecisionV3(&plan, remuxSubtitle.Decision)
 			plan.Claims.Subtitles = remuxSubtitle.Claims
 			finalizePlanIdentityV3(&plan, input.Request.PlaybackAttemptID, input.Request.ClientPlaybackContext.Output.OutputContextID)
@@ -493,7 +495,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		// already attempted (or the delivery's narrower claims reject it), retain
 		// the progressive remux as a recovery route rather than jumping directly
 		// to a full video transcode.
-		if preferTVOSServerHLS && remuxSubtitleOK && progressiveExecutable {
+		if preferServerHLS && remuxSubtitleOK && progressiveExecutable {
 			plan = progressivePlan
 			applySubtitleDecisionV3(&plan, remuxSubtitle.Decision)
 			plan.Claims.Subtitles = remuxSubtitle.Claims
@@ -805,10 +807,22 @@ func applySubtitleDecisionV3(plan *PlanV3, decision SubtitleDecisionV3) {
 	plan.Subtitle.Inventory = inventory
 }
 
-func prefersTVOSServerHLSForMKVV3(source SourceDescriptorV3, request StartRequestV3) bool {
-	return strings.EqualFold(request.ClientPlaybackContext.Device.Platform, "tvos") &&
-		(strings.EqualFold(source.Container, "mkv") || strings.EqualFold(source.Container, "matroska")) &&
-		deliveryAvailableV3(request, DeliveryClassHLSV3)
+func prefersServerHLSForMKVV3(source SourceDescriptorV3, request StartRequestV3) bool {
+	if !strings.EqualFold(source.Container, "mkv") && !strings.EqualFold(source.Container, "matroska") {
+		return false
+	}
+	if !deliveryAvailableV3(request, DeliveryClassHLSV3) {
+		return false
+	}
+	if strings.EqualFold(request.ClientPlaybackContext.Device.Platform, "tvos") {
+		return true
+	}
+	// A browser's native HLS route uses the same media element that supplied
+	// its exact HDR10/HEVC evidence. Prefer that route only for Profile 7,
+	// where Safari has demonstrated that it rejects the equivalent progressive
+	// HDR10 fallback even though its capability probe accepts the sample shape.
+	return source.DVProfile == 7 &&
+		deliverySupportsFeatureV3(request, DeliveryClassHLSV3, ClientNativeHLSPlaybackV3)
 }
 
 func hlsAudioRouteExecutableV3(source SourceDescriptorV3, input PlannerInputV3) bool {

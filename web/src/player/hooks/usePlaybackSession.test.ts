@@ -546,10 +546,87 @@ describe("usePlaybackSession output capability changes", () => {
     await waitFor(() => expect(result.current.sessionId).toBe("session-hdr"));
 
     act(() => result.current.updatePlaybackState(0, false));
+    // Safari can fire `play` before its first timeline-bearing timeupdate.
+    // That second zero is still the uninitialized media element, not a user
+    // position, and must not erase the server-resolved resume anchor.
+    act(() => result.current.updatePlaybackState(0, true));
     act(() => setHDR(false));
 
     await waitFor(() => expect(replanBodies).toHaveLength(1));
     expect(replanBodies[0]?.position_seconds).toBe(275);
+    unmount();
+  });
+
+  it("queues a capability refresh behind the initial resume start", async () => {
+    const setHDR = outputProbe(true);
+    const resumedPlan = fixturePlanV3({ session_id: "session-hdr" });
+    resumedPlan.timeline = {
+      ...resumedPlan.timeline,
+      source_start_seconds: 275,
+      player_start_seconds: 5,
+      timeline_offset_seconds: 270,
+    };
+    let resolveStart: ((response: Response) => void) | undefined;
+    const startResponse = new Promise<Response>((resolve) => {
+      resolveStart = resolve;
+    });
+    let startCount = 0;
+    const replanBodies: Array<{ operation: string; position_seconds: number }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/playback/start")) {
+        startCount += 1;
+        return startResponse;
+      }
+      if (url.endsWith("/playback/session-hdr/replan")) {
+        replanBodies.push(
+          JSON.parse(String(init?.body)) as { operation: string; position_seconds: number },
+        );
+        return jsonResponse({
+          protocol_version: 3,
+          server_features: ["playback_plan_v3", "output_change_v1"],
+          outcome: "playable",
+          session_id: "session-hdr",
+          playback_plan: fixturePlanV3({
+            session_id: "session-hdr",
+            plan_id: "plan:queuedoutput001",
+            plan_attempt_key: "v3:queuedoutput001",
+          }),
+        });
+      }
+      if (url.endsWith("/playback/route-events")) return new Response(null, { status: 202 });
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result, unmount } = renderHook(
+      () => usePlaybackSession("request-1", [], [], 7, 0, false, "auto"),
+      { wrapper },
+    );
+    await waitFor(() => expect(startCount).toBe(1));
+
+    act(() => setHDR(false));
+    await act(async () => Promise.resolve());
+    expect(startCount).toBe(1);
+
+    await act(async () => {
+      resolveStart?.(
+        jsonResponse({
+          protocol_version: 3,
+          server_features: ["playback_plan_v3", "output_change_v1"],
+          outcome: "playable",
+          session_id: "session-hdr",
+          playback_plan: resumedPlan,
+        }),
+      );
+      await startResponse;
+    });
+
+    await waitFor(() => expect(replanBodies).toHaveLength(1));
+    expect(replanBodies[0]).toMatchObject({ operation: "output_change", position_seconds: 275 });
+    expect(startCount).toBe(1);
+    expect(result.current.sessionId).toBe("session-hdr");
     unmount();
   });
 
