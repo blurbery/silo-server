@@ -1420,7 +1420,18 @@ export function VideoPlayer({
           const Hls = await hlsPromise;
           if (destroyed || hlsStartupGuardRef.current?.hasFailed()) return;
 
-          if (Hls.isSupported()) {
+          // Honor the delivery capability this client advertised to the
+          // planner. Safari's exact HEVC/HDR evidence comes from its native
+          // media element, so routing the resulting plan through hls.js/MSE
+          // can accept the plan and then stall on a resumed fMP4 window.
+          if (video.canPlayType("application/vnd.apple.mpegurl")) {
+            video.src = effectiveStreamUrl;
+            nativeHLSMetadataHandler = () => {
+              video.currentTime = effectiveInitialPosition;
+              attemptAutoplayWhenReady();
+            };
+            video.addEventListener("loadedmetadata", nativeHLSMetadataHandler, { once: true });
+          } else if (Hls.isSupported()) {
             const maxBufferLength = plannedBitrateKbps >= 25000 ? 60 : 120;
             const retryingLoadPolicy = {
               maxTimeToFirstByteMs: 45000,
@@ -1518,13 +1529,6 @@ export function VideoPlayer({
             hls.loadSource(effectiveStreamUrl);
             hls.attachMedia(video);
             hlsRef.current = hls;
-          } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-            video.src = effectiveStreamUrl;
-            nativeHLSMetadataHandler = () => {
-              video.currentTime = effectiveInitialPosition;
-              attemptAutoplayWhenReady();
-            };
-            video.addEventListener("loadedmetadata", nativeHLSMetadataHandler, { once: true });
           } else {
             if (
               !reportCurrentPlanFailure({
