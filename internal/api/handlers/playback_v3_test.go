@@ -1452,7 +1452,7 @@ func TestHandleReplanPlaybackV3SeekReanchorPreservesFallbackRecipe(t *testing.T)
 	presetLocalRegistryV3(handler, playback.NewTransformationRegistryV3([]playback.TransformationSpecV3{
 		{Name: "audio_to_aac", RecipeVersion: "1", Available: true},
 		{Name: "video_to_h264", RecipeVersion: "2", Available: true},
-		{Name: "server_dv7_to_hdr10", RecipeVersion: "1", Available: true},
+		{Name: "server_dv7_to_hdr10", RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3, Available: true},
 	}))
 	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{}}
 	handler.ItemAccess = allowAllPlaybackItemAccess{}
@@ -2116,7 +2116,7 @@ func TestFrozenSeekReanchorResultV3PreservesRouteMatrix(t *testing.T) {
 		}},
 		{name: "Dolby Vision transformation", mutate: func(plan *playback.PlanV3, _ *playback.PlannerResultV3) {
 			plan.EffectiveRecipe.DynamicRange = "hdr10"
-			plan.Transformations = []playback.TransformationV3{{Name: "server_dv7_to_hdr10", Executor: "server", RecipeVersion: "1"}}
+			plan.Transformations = []playback.TransformationV3{{Name: "server_dv7_to_hdr10", Executor: "server", RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3}}
 		}},
 		{name: "pooled node only transformation", mutate: func(plan *playback.PlanV3, result *playback.PlannerResultV3) {
 			plan.Delivery = playback.DeliveryTranscodeHLSV3
@@ -3998,7 +3998,7 @@ func capableProxyStubV3(t *testing.T) *httptest.Server {
 		}
 		writeJSON(w, http.StatusOK, playback.HWAccelInfo{Transformations: []playback.TransformationV3{
 			{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"},
-			{Name: playback.TransformationServerDV7HDR10V3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"},
+			{Name: playback.TransformationServerDV7HDR10V3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3},
 		}})
 	}))
 	t.Cleanup(server.Close)

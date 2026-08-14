@@ -16,7 +16,7 @@ func TestRecipeCardRoundTripOpts(t *testing.T) {
 		SourceVideoProfile:     "Main 10",
 		SourceVideoBitDepth:    10,
 		SoftwareVideoDecode:    true,
-		VideoBitstreamFilter:   "dovi_rpu=strip=1",
+		VideoBitstreamFilter:   DV7ToHDR10BitstreamFilter,
 		SeekSeconds:            900,
 		StreamOriginSeconds:    896,
 		CopySeekAnchorResolved: true,
@@ -69,7 +69,7 @@ func TestRecipeCardRoundTripOpts(t *testing.T) {
 	if got.TargetAudioChannels != 1 || got.TargetAudioBitrateKbps != 96 {
 		t.Errorf("audio encode params wrong: %+v", got)
 	}
-	if got.VideoBitstreamFilter != "dovi_rpu=strip=1" {
+	if got.VideoBitstreamFilter != DV7ToHDR10BitstreamFilter {
 		t.Errorf("VideoBitstreamFilter = %q", got.VideoBitstreamFilter)
 	}
 	if !got.SoftwareVideoDecode {
@@ -221,7 +221,7 @@ func TestRecipeCardClaimsRoundTrip(t *testing.T) {
 		SourceVideoProfile:     "Main 10",
 		SourceVideoBitDepth:    10,
 		SoftwareVideoDecode:    true,
-		VideoBitstreamFilter:   "dovi_rpu=strip=1",
+		VideoBitstreamFilter:   DV7ToHDR10BitstreamFilter,
 		SeekSeconds:            900,
 		StreamOriginSeconds:    896,
 		CopySeekAnchorResolved: true,
