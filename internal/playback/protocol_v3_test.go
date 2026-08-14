@@ -736,6 +736,89 @@ func TestPlanPlaybackV3DirectPlaysLegacyDolbyVisionProfile8(t *testing.T) {
 	}
 }
 
+func TestPlanPlaybackV3TVOSMKVPrefersServerHDR10HLSForProfile7(t *testing.T) {
+	file := detailedFixtureFileV3()
+	file.CodecAudio = "truehd"
+	file.AudioChannels = 8
+	file.AudioTracks[0] = models.AudioTrack{Codec: "truehd", Channels: 8, Layout: "7.1", Default: true}
+	file.VideoTracks[0].DVProfile = 7
+	file.VideoTracks[0].DVBLCompatID = 6
+	file.VideoTracks[0].VideoRange = "DolbyVision"
+	file.VideoTracks[0].VideoRangeType = "DOVIWithEL"
+
+	req := validStartRequestV3()
+	req.ClientPlaybackContext.Device.Platform = "tvos"
+	req.ClientFeatures = append(req.ClientFeatures, FeatureClientVideoTransforms)
+	req.Capabilities.CodecsAudio = append(req.Capabilities.CodecsAudio, "truehd")
+	req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
+	req.Capabilities.HDRDetails = &HDRCapabilitiesV3{HDR10: true, DolbyVisionProfiles: []int{8}}
+	req.ClientPlaybackContext.Output.HDRDetails = req.Capabilities.HDRDetails
+	direct := req.ClientPlaybackContext.Deliveries[DeliveryClassOriginalHTTPV3]
+	direct.Transformations = []TransformationV3{
+		{Name: ClientDV7ToDV81V3, Executor: ExecutorClientV3, RecipeVersion: ClientDVTransformVersionV3},
+		{Name: ClientDV7ToHDR10V3, Executor: ExecutorClientV3, RecipeVersion: ClientDVTransformVersionV3},
+	}
+	req.ClientPlaybackContext.Deliveries[DeliveryClassOriginalHTTPV3] = direct
+
+	result := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: testTransformationRegistryV3()})
+	if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxHLSV3 || result.Plan.EffectiveRecipe.DynamicRange != DynamicRangeHDR10V3 {
+		t.Fatalf("result = %s", ExplainPlannerResultV3(result))
+	}
+	if result.TargetVideoCodec != "copy" || result.TargetAudioCodec != "aac" || !result.TranscodeAudio {
+		t.Fatalf("execution = video %q audio %q transcodeAudio=%v", result.TargetVideoCodec, result.TargetAudioCodec, result.TranscodeAudio)
+	}
+	serverStrip, audioConvert := false, false
+	for _, transformation := range result.Plan.Transformations {
+		switch transformation.Name {
+		case TransformationServerDV7HDR10V3:
+			serverStrip = transformation.Executor == ExecutorServerV3
+		case TransformationAudioToAACV3:
+			audioConvert = transformation.Executor == ExecutorServerV3
+		case ClientDV7ToDV81V3, ClientDV7ToHDR10V3:
+			t.Fatalf("tvOS server HLS retained a client transformation: %#v", result.Plan.Transformations)
+		}
+	}
+	if !serverStrip || !audioConvert || !result.Plan.Claims.Video.HDR10 || result.Plan.Claims.Video.DolbyVision {
+		t.Fatalf("server HDR10 HLS recipe = %#v", result.Plan)
+	}
+}
+
+func TestPlanPlaybackV3TVOSMKVPreservesProfile8OverServerHLS(t *testing.T) {
+	file := detailedFixtureFileV3()
+	file.CodecAudio = "eac3"
+	file.AudioChannels = 6
+	file.AudioTracks[0] = models.AudioTrack{Codec: "eac3", Channels: 6, Layout: "5.1", Default: true}
+	file.VideoTracks[0].DVProfile = 8
+	file.VideoTracks[0].DVBLCompatID = 1
+	file.VideoTracks[0].VideoRange = "DolbyVision"
+	file.VideoTracks[0].VideoRangeType = "DOVIWithHDR10"
+
+	req := validStartRequestV3()
+	req.ClientPlaybackContext.Device.Platform = "tvos"
+	req.Capabilities.CodecsAudio = append(req.Capabilities.CodecsAudio, "eac3")
+	req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
+	req.Capabilities.HDRDetails = &HDRCapabilitiesV3{HDR10: true, DolbyVisionProfiles: []int{8}}
+	req.ClientPlaybackContext.Output.HDRDetails = req.Capabilities.HDRDetails
+
+	first := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: testTransformationRegistryV3()})
+	if first.Plan == nil || first.Plan.Delivery != DeliveryRemuxHLSV3 || !first.Plan.Claims.Video.DolbyVision || first.TranscodeAudio || first.TargetAudioCodec != "copy" {
+		t.Fatalf("first = %s", ExplainPlannerResultV3(first))
+	}
+	for _, transformation := range first.Plan.Transformations {
+		if transformation.Name == TransformationServerDV7HDR10V3 {
+			t.Fatalf("Profile 8.1 was unnecessarily stripped: %#v", first.Plan.Transformations)
+		}
+	}
+
+	// The preferred route remains recoverable: an attempted HLS recipe falls
+	// back to the progressive remux rather than looping or forcing video encode.
+	failedKey := PlanAttemptKeyV3(*first.Plan, req.ClientPlaybackContext.Output.OutputContextID, nil)
+	second := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: testTransformationRegistryV3(), AttemptedKeys: []string{failedKey}})
+	if second.Plan == nil || second.Plan.Delivery != DeliveryRemuxProgressiveV3 || second.PlayMethod != PlayRemux {
+		t.Fatalf("fallback = %s", ExplainPlannerResultV3(second))
+	}
+}
+
 func TestPlanPlaybackV3RejectsTrulyIncompleteVideoMetadata(t *testing.T) {
 	file := detailedFixtureFileV3()
 	file.VideoTracks[0].BitDepth = 0

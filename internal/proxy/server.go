@@ -103,6 +103,17 @@ func (s *Server) Handler() http.Handler {
 			"Accept", "Authorization", "Content-Type", "Range",
 			"If-Match", "If-Modified-Since", "If-None-Match", "If-Range", "If-Unmodified-Since",
 		},
+		// direct_stream_resume_v1 has the client re-request a byte range with
+		// If-Range against the entity tag it stored. Cross-origin JavaScript
+		// can only read a response header that is explicitly exposed, so
+		// without these the client can send the conditional request headers
+		// above but never learn the values to put in them — the resume
+		// contract silently degrades to a full restart on a proxy that is on a
+		// different origin than the web app, which is the normal deployment.
+		ExposedHeaders: []string{
+			"Accept-Ranges", "Content-Encoding", "Content-Length", "Content-Range",
+			"ETag", "Last-Modified",
+		},
 		MaxAge: 86400,
 	}))
 	r.Get("/api/v1/health", s.handleHealth)
@@ -125,10 +136,32 @@ func (s *Server) Handler() http.Handler {
 	// Admin routes — bearer-auth protected.
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireBearer)
+		r.Get("/hw-capabilities", s.handleHWCapabilities)
 		r.Post("/admin/force-reload", s.handleForceReload)
 		r.Get("/status", s.handleStatus)
 	})
 	return r
+}
+
+// handleHWCapabilities advertises what this proxy's ffmpeg can actually do, in
+// the same shape and at the same path as a transcode node.
+//
+// A proxy executes recipes too: /stream/remux runs ffmpeg to convert audio or
+// strip a Dolby Vision RPU. Without this endpoint the API has no way to tell
+// whether the proxy it just picked can run the transformations a plan froze, so
+// a pool whose proxies carry a different ffmpeg build (a rolling upgrade, a
+// custom image) would fail at stream time rather than at selection time.
+func (s *Server) handleHWCapabilities(w http.ResponseWriter, r *http.Request) {
+	ffmpegPath := ""
+	if cfg := s.watcher.Config(); cfg != nil {
+		ffmpegPath = cfg.Playback.FFmpegPath
+	}
+	info := playback.DetectHWAccelWithFFmpeg(ffmpegPath)
+	info.Transformations = playback.ProbeTransformationRegistryV3(r.Context(), ffmpegPath).Advertised()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(info); err != nil {
+		slog.WarnContext(r.Context(), "encode proxy capabilities", "component", "proxy", "error", err)
+	}
 }
 
 type healthResponse struct {
@@ -185,7 +218,12 @@ func (s *Server) handleDirectPlay(w http.ResponseWriter, r *http.Request) {
 	s.tracker.Track(r.Context(), info)
 	defer s.tracker.Remove(r.Context(), claims.SessionID)
 
-	http.ServeFile(w, r, claims.MediaPath)
+	// Serve through the same path the integrated server uses rather than a bare
+	// http.ServeFile: direct_stream_resume_v1 requires the strong ETag that
+	// ServeDirectPlay sets before ServeContent (ServeFile sets none, so
+	// If-Range never validates and a resumed range silently restarts at 200),
+	// and it carries the rolling write deadline and stream metrics with it.
+	_ = playback.ServeDirectPlay(w, r, claims.MediaPath)
 }
 
 func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {

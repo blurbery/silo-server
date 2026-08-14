@@ -1151,10 +1151,12 @@ func prepareSubtitleFilterInput(opts *TranscodeOpts) error {
 const minManifestSegments = 3
 
 // minCopyManifestSegments is the startup lead for codec-copy sessions.
-// Copying video while transcoding only audio can produce startup files far
-// faster than real-time encoding, so waiting for 3 full segments adds
-// unnecessary latency at playback start.
-const minCopyManifestSegments = 2
+// A completed segment is atomically published by FFmpeg's temp_file mode, so
+// AVPlayer can begin from one safe segment while the copy pipeline continues
+// producing the next one. Requiring a second complete segment adds avoidable
+// startup latency to the tvOS server-HLS route without protecting against a
+// partially written fetch.
+const minCopyManifestSegments = 1
 
 func startupSegmentRequirement(opts TranscodeOpts) int {
 	if strings.EqualFold(opts.TargetCodecVideo, "copy") {
