@@ -16,6 +16,7 @@ const controls = vi.hoisted(() => ({
   current: null as null | {
     activeSubtitleIndex: number | null;
     subtitleTracks: PlayerSubtitleInfo[];
+    onSubtitleSelect: (index: number | null) => void;
   },
 }));
 const subtitleTimeline = vi.hoisted(() => ({
@@ -64,7 +65,11 @@ vi.mock("../hooks/useSubtitleLayout", () => ({
 vi.mock("hls.js", () => ({ default: { isSupported: () => false } }));
 vi.mock("./PlayerControls", () => ({
   PlayerControls: vi.fn(
-    (props: { activeSubtitleIndex: number | null; subtitleTracks: PlayerSubtitleInfo[] }) => {
+    (props: {
+      activeSubtitleIndex: number | null;
+      subtitleTracks: PlayerSubtitleInfo[];
+      onSubtitleSelect: (index: number | null) => void;
+    }) => {
       controls.current = props;
       return null;
     },
@@ -260,6 +265,7 @@ describe("VideoPlayer plan failure recovery", () => {
 
     await waitFor(() => expect(controls.current?.activeSubtitleIndex).toBeNull());
     expect(onSubtitleTrackChange).toHaveBeenCalledOnce();
+    expect(toastError).not.toHaveBeenCalled();
 
     const nextPlan = fixturePlanV3({
       ...directPlan,
@@ -274,9 +280,7 @@ describe("VideoPlayer plan failure recovery", () => {
     expect(onSubtitleTrackChange).toHaveBeenLastCalledWith(2, 0);
   });
 
-  // The rollback is otherwise silent: the refusal only renders inside the
-  // quality menu, which a user who just picked a subtitle never opens.
-  it("toasts the server's refusal when a subtitle change is rolled back", async () => {
+  it("toasts the server's refusal when an explicit subtitle change is rolled back", async () => {
     const onSubtitleTrackChange = vi.fn();
     const sidecarTrack: PlayerSubtitleInfo = {
       index: 2,
@@ -290,11 +294,12 @@ describe("VideoPlayer plan failure recovery", () => {
     };
     const { rerenderPlayer } = renderPlayer({
       subtitleUrls: [sidecarTrack],
-      subtitleMode: "always",
-      preferredSubtitleLanguage: "en",
+      subtitleMode: "off",
       onSubtitleTrackChange,
     });
 
+    await waitFor(() => expect(controls.current).not.toBeNull());
+    act(() => controls.current?.onSubtitleSelect(2));
     await waitFor(() => expect(onSubtitleTrackChange).toHaveBeenCalledOnce());
     expect(toastError).not.toHaveBeenCalled();
 
@@ -323,11 +328,12 @@ describe("VideoPlayer plan failure recovery", () => {
     };
     const { rerenderPlayer } = renderPlayer({
       subtitleUrls: [sidecarTrack],
-      subtitleMode: "always",
-      preferredSubtitleLanguage: "en",
+      subtitleMode: "off",
       onSubtitleTrackChange,
     });
 
+    await waitFor(() => expect(controls.current).not.toBeNull());
+    act(() => controls.current?.onSubtitleSelect(2));
     await waitFor(() => expect(onSubtitleTrackChange).toHaveBeenCalledOnce());
     rerenderPlayer({ replanError: "Silo could not apply the subtitle selection." });
     await waitFor(() => expect(toastError).toHaveBeenCalledOnce());

@@ -146,16 +146,18 @@ func (s *TranscodeSession) SetRestartHook(fn func(context.Context)) {
 
 // SegmentProgress describes the media ffmpeg has actually produced on disk.
 type SegmentProgress struct {
-	ProducedHead         int
-	ProducedCount        int
-	LastProducedAt       time.Time
-	ManifestModTime      time.Time
-	HasManifest          bool
-	Running              bool
-	Restarting           bool
-	StartSegmentNumber   int
-	SegmentDuration      int
-	LastRequestedSegment int
+	ProducedHead            int
+	ProducedCount           int
+	BufferedDurationSeconds float64
+	HasBufferedDuration     bool
+	LastProducedAt          time.Time
+	ManifestModTime         time.Time
+	HasManifest             bool
+	Running                 bool
+	Restarting              bool
+	StartSegmentNumber      int
+	SegmentDuration         int
+	LastRequestedSegment    int
 }
 
 // SegmentRecoveryDecision tells the segment handler whether to briefly wait
@@ -1734,11 +1736,18 @@ func (s *TranscodeSession) SegmentProgress(time.Time) SegmentProgress {
 	if err != nil {
 		return progress
 	}
+	progress.HasBufferedDuration = true
+	nextBufferedSegment := progress.LastRequestedSegment + 1
+	bufferIsContiguous := true
 
 	for _, entry := range timeline.entries {
 		segmentPath := filepath.Join(s.outputDir, segmentFilename(entry.number, opts))
 		info, err := os.Stat(segmentPath)
-		if err != nil || info.Size() <= 0 {
+		available := err == nil && info.Size() > 0
+		if !available {
+			if entry.number == nextBufferedSegment {
+				bufferIsContiguous = false
+			}
 			continue
 		}
 		progress.ProducedCount++
@@ -1748,6 +1757,19 @@ func (s *TranscodeSession) SegmentProgress(time.Time) SegmentProgress {
 		if info.ModTime().After(progress.LastProducedAt) {
 			progress.LastProducedAt = info.ModTime()
 		}
+		if !bufferIsContiguous || entry.number < nextBufferedSegment {
+			continue
+		}
+		if entry.number != nextBufferedSegment {
+			bufferIsContiguous = false
+			continue
+		}
+		duration := entry.duration
+		if duration <= 0 {
+			duration = float64(progress.SegmentDuration)
+		}
+		progress.BufferedDurationSeconds += duration
+		nextBufferedSegment++
 	}
 
 	return progress

@@ -8,9 +8,12 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/Silo-Server/silo-server/internal/activitylog"
 	"github.com/Silo-Server/silo-server/internal/auth"
 	"github.com/Silo-Server/silo-server/internal/models"
+	"github.com/Silo-Server/silo-server/internal/streamtoken"
 )
 
 // contextKey is an unexported type for context keys in this package.
@@ -142,6 +145,42 @@ func (am *AuthMiddleware) RequireAuth(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), claimsKey, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// RequireAuthOrStreamToken authenticates media-byte requests with either the
+// ordinary account credential or the signed reconstruction token embedded in
+// the playback URL. Native players can keep an HLS or range stream open beyond
+// the shorter account-token lifetime; binding the stream token to the route's
+// session ID prevents it from authorizing any other playback session.
+func (am *AuthMiddleware) RequireAuthOrStreamToken(secret string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		requireAccountAuth := am.RequireAuth(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			raw := strings.TrimSpace(r.URL.Query().Get("st"))
+			if raw != "" && secret != "" {
+				claims, err := streamtoken.Verify(raw, secret)
+				sessionID := strings.TrimSpace(chi.URLParam(r, "session_id"))
+				if err == nil && claims.UserID > 0 && sessionID != "" && claims.SessionID == sessionID {
+					authClaims := &auth.Claims{
+						UserID:    claims.UserID,
+						ProfileID: claims.ProfileID,
+						TokenType: auth.TokenTypeAccess,
+					}
+					ctx := SetClaims(r.Context(), authClaims)
+					if claims.ProfileID != "" {
+						ctx = SetProfileID(ctx, claims.ProfileID)
+					}
+					if lc := activitylog.GetLogContext(ctx); lc != nil {
+						uid := claims.UserID
+						lc.UserID = &uid
+					}
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+			requireAccountAuth.ServeHTTP(w, r)
+		})
+	}
 }
 
 // RequireAdmin is a standalone HTTP middleware that checks if the authenticated

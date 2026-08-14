@@ -633,6 +633,7 @@ func (h *PlaybackHandler) startPlannedPlaybackV3(r *http.Request, userID int, pr
 		return playback.DecisionResponseV3{}, &transportErrorV3{reason: "internal_error", message: "Failed to persist the playback plan.", cause: err}
 	}
 	transport.commit()
+	h.stopSupersededPausedSessionsV3(context.WithoutCancel(r.Context()), session)
 	// Start-side effects belong after both the attempt and transport commits:
 	// retries that lose the idempotency race must not emit duplicate provider
 	// scrobbles or analysis work for the short-lived session they roll back.
@@ -660,6 +661,38 @@ func (h *PlaybackHandler) startPlannedPlaybackV3(r *http.Request, userID int, pr
 	h.syncSessionsNow(r.Context(), "v3_start")
 	h.enqueueRouteEventV3(playback.RouteEventRecordV3{RouteEventV3: playback.RouteEventV3{ProtocolVersion: playback.ProtocolV3, PlaybackAttemptID: req.PlaybackAttemptID, SessionID: session.ID, PlanID: result.Plan.PlanID, Event: playback.RouteEventPlanSelectedV3, AppliedQuirkIDs: appliedQuirkIDsV3(result.Plan), QuirkRegistryRevision: appliedQuirkRevisionV3(result.Plan), OutputContextID: req.ClientPlaybackContext.Output.OutputContextID}, UserID: userID, ProfileID: profileID, ClientName: clientInfo.Name, ClientVersion: clientInfo.Version, ClientModel: req.ClientPlaybackContext.Device.Model})
 	return response, nil
+}
+
+// stopSupersededPausedSessionsV3 removes an abandoned attempt once the same
+// first-party device has successfully committed a replacement for the same
+// requested file. Paused sessions deliberately have a long liveness grace so a
+// real pause survives sleep/backgrounding; without this narrower supersession
+// rule, pressing Play again leaves the old worker and dashboard row alive for
+// that entire grace window.
+func (h *PlaybackHandler) stopSupersededPausedSessionsV3(ctx context.Context, current *playback.Session) {
+	if h == nil || current == nil || current.ClientDeviceID == "" {
+		return
+	}
+	lister, ok := h.sessionMgr.(sessionSnapshotLister)
+	if !ok {
+		return
+	}
+	for _, candidate := range lister.AllSessions() {
+		if candidate == nil || candidate.ID == current.ID || !candidate.IsPaused ||
+			candidate.UserID != current.UserID || candidate.ProfileID != current.ProfileID ||
+			candidate.ClientDeviceID != current.ClientDeviceID ||
+			candidate.RequestedMediaFileID != current.RequestedMediaFileID {
+			continue
+		}
+		if err := h.stopPlaybackSessionByID(ctx, candidate.ID, true); err != nil && !errors.Is(err, playback.ErrSessionNotFound) {
+			slog.WarnContext(ctx, "failed to stop superseded paused playback session",
+				"component", "api",
+				"playback_session_id", candidate.ID,
+				"replacement_session_id", current.ID,
+				"error", err,
+			)
+		}
+	}
 }
 
 // persistSeriesSelectionsV3 records the version and audio-track choices this

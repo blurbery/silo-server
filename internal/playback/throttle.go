@@ -14,6 +14,12 @@ const (
 
 	// minThresholdSeconds is the minimum allowed throttle threshold.
 	minThresholdSeconds = 60
+
+	// throttleResumePercent keeps a meaningful buffer below the pause point
+	// before restarting FFmpeg. Without this hysteresis, a fast codec-copy
+	// producer can cross the same boundary again on the next five-second check
+	// and repeatedly stop the playlist writer while a client is consuming it.
+	throttleResumePercent = 75
 )
 
 // TranscodeThrottler pauses and resumes an FFmpeg process by sending
@@ -92,22 +98,26 @@ func (t *TranscodeThrottler) CheckOnce() {
 		return
 	}
 
-	gapSegments := progress.ProducedHead - progress.LastRequestedSegment
-	segmentDuration := progress.SegmentDuration
-	if segmentDuration <= 0 {
-		segmentDuration = t.segmentDuration
+	bufferedSeconds := progress.BufferedDurationSeconds
+	if !progress.HasBufferedDuration {
+		gapSegments := progress.ProducedHead - progress.LastRequestedSegment
+		segmentDuration := progress.SegmentDuration
+		if segmentDuration <= 0 {
+			segmentDuration = t.segmentDuration
+		}
+		bufferedSeconds = float64(gapSegments * segmentDuration)
 	}
-	gap := gapSegments * segmentDuration
+	resumeThreshold := float64(t.thresholdSeconds*throttleResumePercent) / 100
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if gap >= t.thresholdSeconds && !t.paused {
-		log.Printf("playback: throttler pausing ffmpeg (gap=%ds, threshold=%ds)", gap, t.thresholdSeconds)
+	if bufferedSeconds >= float64(t.thresholdSeconds) && !t.paused {
+		log.Printf("playback: throttler pausing ffmpeg (buffered=%.1fs, pause_threshold=%ds, resume_threshold=%.1fs)", bufferedSeconds, t.thresholdSeconds, resumeThreshold)
 		t.sendPause()
 		t.paused = true
-	} else if gap < t.thresholdSeconds && t.paused {
-		log.Printf("playback: throttler resuming ffmpeg (gap=%ds, threshold=%ds)", gap, t.thresholdSeconds)
+	} else if bufferedSeconds < resumeThreshold && t.paused {
+		log.Printf("playback: throttler resuming ffmpeg (buffered=%.1fs, pause_threshold=%ds, resume_threshold=%.1fs)", bufferedSeconds, t.thresholdSeconds, resumeThreshold)
 		t.sendResume()
 		t.paused = false
 	}
