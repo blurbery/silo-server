@@ -2004,32 +2004,6 @@ func NewRouter(deps Dependencies) chi.Router {
 			})
 		}
 
-		// Media-byte routes accept either normal account auth or the signed
-		// playback token carried by the stream URL. AVPlayer keeps the original
-		// Authorization header for an HLS asset, so a shorter-lived account token
-		// can expire mid-episode; the session-bound stream token remains valid for
-		// the playback recipe's lifetime and cannot authorize another session.
-		if authMiddleware != nil && (playbackHandler != nil || streamHandler != nil) {
-			streamSecret := ""
-			if deps.Config != nil {
-				streamSecret = deps.Config.Auth.JWTSecret
-			}
-			r.Group(func(r chi.Router) {
-				r.Use(authMiddleware.RequireAuthOrStreamToken(streamSecret))
-				if deps.RateLimitMW != nil {
-					r.Use(deps.RateLimitMW.Handler)
-				}
-				if playbackHandler != nil {
-					r.Get("/playback/transcode/{session_id}/master.m3u8", playbackHandler.HandleGetTranscodeManifest)
-					r.Get("/playback/transcode/{session_id}/segment/{name}", playbackHandler.HandleGetTranscodeSegment)
-				}
-				if streamHandler != nil {
-					r.Get("/stream/{session_id}", streamHandler.HandleStream)
-					r.Head("/stream/{session_id}", streamHandler.HandleStream)
-				}
-			})
-		}
-
 		// All remaining routes require auth.
 		if authMiddleware != nil {
 			r.Group(func(r chi.Router) {
@@ -2649,6 +2623,11 @@ func NewRouter(deps Dependencies) chi.Router {
 
 					r.Route("/playback", func(r chi.Router) {
 						r.Get("/capability", playbackHandler.HandlePlaybackCapabilityV3)
+						// HLS transcode delivery — no profile auth needed;
+						// session ID (UUID) serves as the access token, same
+						// pattern as /stream/{session_id}.
+						r.Get("/transcode/{session_id}/master.m3u8", playbackHandler.HandleGetTranscodeManifest)
+						r.Get("/transcode/{session_id}/segment/{name}", playbackHandler.HandleGetTranscodeSegment)
 
 						// Playback realtime control socket — needs auth but not profile.
 						r.Get("/sessions/{session_id}/control/ws", playbackHandler.HandleSessionWebSocket)
@@ -2688,6 +2667,8 @@ func NewRouter(deps Dependencies) chi.Router {
 
 				// Stream routes.
 				if streamHandler != nil {
+					r.Get("/stream/{session_id}", streamHandler.HandleStream)
+					r.Head("/stream/{session_id}", streamHandler.HandleStream)
 					r.Get("/stream/{session_id}/subtitles/{track}", streamHandler.HandleSubtitle)
 					r.Head("/stream/{session_id}/subtitles/{track}", streamHandler.HandleSubtitle)
 					r.Get("/stream/{session_id}/subtitles/{track}/fonts", streamHandler.HandleSubtitleFonts)

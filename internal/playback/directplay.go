@@ -58,12 +58,6 @@ func MimeFromExtension(name string) string {
 // Range requests, conditional requests (including If-Match, If-Range, and
 // If-None-Match), and Content-Type detection.
 func ServeDirectPlay(w http.ResponseWriter, r *http.Request, filePath string) error {
-	// Media responses are already buffered by the client. Tell nginx/openresty
-	// reverse proxies to forward bytes as they arrive instead of adding another
-	// response buffer in front of high-bitrate range and open-ended requests.
-	DisableProxyBuffering(w)
-	w.Header().Set("Cache-Control", "private, no-store")
-
 	// Media bodies routinely take longer than the server's absolute
 	// WriteTimeout; roll the write deadline with progress instead.
 	streamWriter := httpstream.NewRollingDeadlineWriter(w)
@@ -131,12 +125,6 @@ func ServeDirectPlay(w http.ResponseWriter, r *http.Request, filePath string) er
 	}
 	slog.InfoContext(r.Context(), "direct stream ended", logAttrs...)
 	return nil
-}
-
-// DisableProxyBuffering asks nginx-compatible reverse proxies to stream a
-// response immediately. Proxies which do not understand the header ignore it.
-func DisableProxyBuffering(w http.ResponseWriter) {
-	w.Header().Set("X-Accel-Buffering", "no")
 }
 
 type directPlayResponseWriter struct {

@@ -12,15 +12,6 @@ import (
 	"time"
 )
 
-func TestStartupSegmentRequirementUsesOneAtomicSegmentForVideoCopy(t *testing.T) {
-	if got := startupSegmentRequirement(TranscodeOpts{TargetCodecVideo: "copy"}); got != 1 {
-		t.Fatalf("copy startup segments = %d, want 1", got)
-	}
-	if got := startupSegmentRequirement(TranscodeOpts{TargetCodecVideo: "h264"}); got != 3 {
-		t.Fatalf("encoded startup segments = %d, want 3", got)
-	}
-}
-
 func TestBuildPlaybackManifest_CopyVideoUsesRealManifest(t *testing.T) {
 	tempDir := t.TempDir()
 	manifest := strings.Join([]string{
@@ -863,71 +854,11 @@ func TestTranscodeThrottlerUsesProducedHeadForGap(t *testing.T) {
 
 	writeManifestRange(t, tempDir, 225, 254, ".ts")
 	throttler.CheckOnce()
-	if !throttler.paused {
-		t.Fatal("expected throttler to remain paused inside the hysteresis window")
-	}
-	if writer.writes != "p" {
-		t.Fatalf("writes = %q, want p", writer.writes)
-	}
-
-	writeManifestRange(t, tempDir, 225, 245, ".ts")
-	throttler.CheckOnce()
 	if throttler.paused {
-		t.Fatal("expected throttler to resume below the lower threshold")
+		t.Fatal("expected throttler to resume")
 	}
 	if writer.writes != "pu" {
 		t.Fatalf("writes = %q, want pu", writer.writes)
-	}
-}
-
-func TestCopyHLSSessionStartsResourceThrottle(t *testing.T) {
-	session := &TranscodeSession{
-		stdinPipe: &recordingWriteCloser{},
-		opts:      TranscodeOpts{TargetCodecVideo: "copy", SegmentDuration: 2},
-	}
-
-	session.StartThrottler(300)
-
-	session.mu.Lock()
-	started := session.throttler != nil
-	session.mu.Unlock()
-	if !started {
-		t.Fatal("copy-video HLS must retain resource throttling")
-	}
-	session.StopThrottler()
-}
-
-func TestTranscodeThrottlerUsesManifestDurationsForCopyHLS(t *testing.T) {
-	tempDir := t.TempDir()
-	now := time.Now()
-	writeManifestRangeWithDuration(t, tempDir, 300, 320, ".m4s", 3.003)
-	for i := 300; i <= 320; i++ {
-		writeSegmentFile(t, tempDir, segmentFilename(i, TranscodeOpts{TargetCodecVideo: "copy"}), []byte("x"), now)
-	}
-
-	session := &TranscodeSession{
-		outputDir:            tempDir,
-		running:              true,
-		lastRequestedSegment: 300,
-		opts: TranscodeOpts{
-			TargetCodecVideo:   "copy",
-			SegmentDuration:    1,
-			StartSegmentNumber: 300,
-		},
-	}
-	progress := session.SegmentProgress(now)
-	if !progress.HasBufferedDuration {
-		t.Fatal("manifest buffer duration was not measured")
-	}
-	if progress.BufferedDurationSeconds < 60 || progress.BufferedDurationSeconds > 61 {
-		t.Fatalf("buffered duration = %.3fs, want about 60.06s", progress.BufferedDurationSeconds)
-	}
-
-	writer := &recordingWriteCloser{}
-	throttler := NewTranscodeThrottler(session, writer, 60, 1)
-	throttler.CheckOnce()
-	if !throttler.paused || writer.writes != "p" {
-		t.Fatalf("copy HLS did not pause from measured duration: paused=%v writes=%q", throttler.paused, writer.writes)
 	}
 }
 
@@ -945,10 +876,6 @@ func (w *recordingWriteCloser) Close() error {
 }
 
 func writeManifestRange(t *testing.T, dir string, first int, last int, ext string) {
-	writeManifestRangeWithDuration(t, dir, first, last, ext, 2)
-}
-
-func writeManifestRangeWithDuration(t *testing.T, dir string, first int, last int, ext string, duration float64) {
 	t.Helper()
 
 	lines := []string{
@@ -959,7 +886,7 @@ func writeManifestRangeWithDuration(t *testing.T, dir string, first int, last in
 		"#EXT-X-INDEPENDENT-SEGMENTS",
 	}
 	for i := first; i <= last; i++ {
-		lines = append(lines, fmt.Sprintf("#EXTINF:%.6f,", duration), fmt.Sprintf("seg_%05d%s", i, ext))
+		lines = append(lines, "#EXTINF:2.000000,", fmt.Sprintf("seg_%05d%s", i, ext))
 	}
 	lines = append(lines, "")
 

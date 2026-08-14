@@ -399,8 +399,6 @@ func ServeRemuxWithDVMode(w http.ResponseWriter, r *http.Request, filePath, outp
 // serving concerns as a struct.
 func ServeRemuxWithOptions(w http.ResponseWriter, r *http.Request, filePath, outputFormat string, seekSeconds float64, transcodeAudio bool, audioTrackIndex int, dvProfile int, opts RemuxServeOptions) error {
 	mode, ffmpegPath := opts.DVMode, opts.FFmpegPath
-	DisableProxyBuffering(w)
-	w.Header().Set("Cache-Control", "private, no-store")
 	// Remux output streams for the length of the title; roll the write
 	// deadline with progress instead of the server's absolute WriteTimeout.
 	w = httpstream.NewRollingDeadlineWriter(w)

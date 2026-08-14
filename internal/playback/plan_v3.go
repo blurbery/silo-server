@@ -189,17 +189,15 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		dvStripEligible = false
 		dvStripEligibleLocal = false
 	}
-	// Apple TV's AVPlayer does not consume Matroska directly. Silo Apple's
-	// original_http route therefore downloads the remote MKV into a client-side
-	// loopback remuxer before AVPlayer sees it. Long-lived origin reads on that
-	// path can end early and strand the local remuxer; server HLS instead uses
-	// short, independently authenticated segment requests and gives AVPlayer its
-	// native transport immediately. Safari's native HLS path also avoids the
-	// decoder failure its progressive media-element route can report for a
-	// server-normalized Profile 7 HDR10 fallback. Prefer either route only when
-	// the complete copy recipe is executable, so a missing server toolchain never
-	// takes away a working client-side fallback.
-	preferServerHLS := prefersServerHLSForMKVV3(source, input.Request) &&
+	// Keep native-HLS preference browser-only. Silo Apple uses original_http for
+	// Matroska as the signal to launch its client-side loopback remuxer; that path
+	// also installs AVDisplayCriteria so tvOS Match Frame Rate and Match Dynamic
+	// Range can follow the source. Forcing server HLS bypasses that client policy.
+	// Safari's native HLS path still avoids the decoder failure its progressive
+	// media-element route can report for a server-normalized Profile 7 HDR10
+	// fallback. Prefer it only when the complete copy recipe is executable, so a
+	// missing server toolchain never takes away a working progressive fallback.
+	preferServerHLS := prefersWebNativeHLSForMKVV3(source, input.Request) &&
 		videoOK && !source.VideoCopyUnsafe && hlsRemuxSubtitleOK &&
 		((source.DVProfile == 7 && dvStripEligible) || (source.DVProfile != 7 && rangeOK)) &&
 		hlsAudioRouteExecutableV3(source, input)
@@ -807,15 +805,12 @@ func applySubtitleDecisionV3(plan *PlanV3, decision SubtitleDecisionV3) {
 	plan.Subtitle.Inventory = inventory
 }
 
-func prefersServerHLSForMKVV3(source SourceDescriptorV3, request StartRequestV3) bool {
+func prefersWebNativeHLSForMKVV3(source SourceDescriptorV3, request StartRequestV3) bool {
 	if !strings.EqualFold(source.Container, "mkv") && !strings.EqualFold(source.Container, "matroska") {
 		return false
 	}
 	if !deliveryAvailableV3(request, DeliveryClassHLSV3) {
 		return false
-	}
-	if strings.EqualFold(request.ClientPlaybackContext.Device.Platform, "tvos") {
-		return true
 	}
 	// A browser's native HLS route uses the same media element that supplied
 	// its exact HDR10/HEVC evidence. Prefer that route only for Profile 7,
