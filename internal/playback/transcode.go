@@ -146,18 +146,16 @@ func (s *TranscodeSession) SetRestartHook(fn func(context.Context)) {
 
 // SegmentProgress describes the media ffmpeg has actually produced on disk.
 type SegmentProgress struct {
-	ProducedHead            int
-	ProducedCount           int
-	BufferedDurationSeconds float64
-	HasBufferedDuration     bool
-	LastProducedAt          time.Time
-	ManifestModTime         time.Time
-	HasManifest             bool
-	Running                 bool
-	Restarting              bool
-	StartSegmentNumber      int
-	SegmentDuration         int
-	LastRequestedSegment    int
+	ProducedHead         int
+	ProducedCount        int
+	LastProducedAt       time.Time
+	ManifestModTime      time.Time
+	HasManifest          bool
+	Running              bool
+	Restarting           bool
+	StartSegmentNumber   int
+	SegmentDuration      int
+	LastRequestedSegment int
 }
 
 // SegmentRecoveryDecision tells the segment handler whether to briefly wait
@@ -1153,12 +1151,10 @@ func prepareSubtitleFilterInput(opts *TranscodeOpts) error {
 const minManifestSegments = 3
 
 // minCopyManifestSegments is the startup lead for codec-copy sessions.
-// A completed segment is atomically published by FFmpeg's temp_file mode, so
-// AVPlayer can begin from one safe segment while the copy pipeline continues
-// producing the next one. Requiring a second complete segment adds avoidable
-// startup latency to the tvOS server-HLS route without protecting against a
-// partially written fetch.
-const minCopyManifestSegments = 1
+// Copying video while transcoding only audio can produce startup files far
+// faster than real-time encoding, so waiting for 3 full segments adds
+// unnecessary latency at playback start.
+const minCopyManifestSegments = 2
 
 func startupSegmentRequirement(opts TranscodeOpts) int {
 	if strings.EqualFold(opts.TargetCodecVideo, "copy") {
@@ -1736,18 +1732,11 @@ func (s *TranscodeSession) SegmentProgress(time.Time) SegmentProgress {
 	if err != nil {
 		return progress
 	}
-	progress.HasBufferedDuration = true
-	nextBufferedSegment := progress.LastRequestedSegment + 1
-	bufferIsContiguous := true
 
 	for _, entry := range timeline.entries {
 		segmentPath := filepath.Join(s.outputDir, segmentFilename(entry.number, opts))
 		info, err := os.Stat(segmentPath)
-		available := err == nil && info.Size() > 0
-		if !available {
-			if entry.number == nextBufferedSegment {
-				bufferIsContiguous = false
-			}
+		if err != nil || info.Size() <= 0 {
 			continue
 		}
 		progress.ProducedCount++
@@ -1757,19 +1746,6 @@ func (s *TranscodeSession) SegmentProgress(time.Time) SegmentProgress {
 		if info.ModTime().After(progress.LastProducedAt) {
 			progress.LastProducedAt = info.ModTime()
 		}
-		if !bufferIsContiguous || entry.number < nextBufferedSegment {
-			continue
-		}
-		if entry.number != nextBufferedSegment {
-			bufferIsContiguous = false
-			continue
-		}
-		duration := entry.duration
-		if duration <= 0 {
-			duration = float64(progress.SegmentDuration)
-		}
-		progress.BufferedDurationSeconds += duration
-		nextBufferedSegment++
 	}
 
 	return progress

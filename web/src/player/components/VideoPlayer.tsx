@@ -1909,10 +1909,7 @@ export function VideoPlayer({
     activeSubtitleIndex !== null
       ? (effectiveSubtitleTracks.find((track) => track.index === activeSubtitleIndex) ?? null)
       : null;
-  const requestedSubtitleTrackChangeRef = useRef<{
-    key: string;
-    initiatedManually: boolean;
-  } | null>(null);
+  const requestedSubtitleTrackChangeRef = useRef<string | null>(null);
   useEffect(() => {
     const desiredServerIndex = pendingServerSubtitleSelection(
       plan.subtitle.mode,
@@ -1926,11 +1923,8 @@ export function VideoPlayer({
     }
 
     const requestKey = `${plan.plan_id}:${desiredServerIndex ?? "none"}`;
-    if (requestedSubtitleTrackChangeRef.current?.key === requestKey) return;
-    requestedSubtitleTrackChangeRef.current = {
-      key: requestKey,
-      initiatedManually: subtitleSelectionWasManualRef.current,
-    };
+    if (requestedSubtitleTrackChangeRef.current === requestKey) return;
+    requestedSubtitleTrackChangeRef.current = requestKey;
 
     // Until the element has media loaded (an auto-selected bitmap preference at
     // session start, or a stream reload), currentTime still reads 0 rather than
@@ -1957,23 +1951,17 @@ export function VideoPlayer({
   // unchanged selection instead of retrying. Pin the accepted selection just
   // like a manual choice so auto-selection does not immediately request the
   // rejected track again; a later user choice can still retry it explicitly.
-  // Automatic/persisted restoration is best effort. A saved subtitle can
-  // legitimately exist only on the alternate version that was visible during
-  // the initial Safari capability probe; when the final 4K plan has no
-  // equivalent, roll back without showing an error during resume. Explicit
-  // viewer selections still surface the refusal. Clearing the request ref
-  // keeps this to one toast per refusal.
+  // The rollback is silent otherwise: the refusal is only rendered inside the
+  // quality menu, which the user has no reason to open after picking a
+  // subtitle. Clearing the request ref keeps this to one toast per refusal.
   useEffect(() => {
-    const requestedChange = requestedSubtitleTrackChangeRef.current;
-    if (requestedChange && replanError && !replanning) {
+    if (requestedSubtitleTrackChangeRef.current && replanError && !replanning) {
       subtitleSelectionWasManualRef.current = true;
       setActiveSubtitleIndex(plan.selected_tracks.subtitle?.index ?? null);
       requestedSubtitleTrackChangeRef.current = null;
-      if (requestedChange.initiatedManually) {
-        toast.error(replanErrorTitle ?? "That subtitle track can't be used", {
-          description: replanError,
-        });
-      }
+      toast.error(replanErrorTitle ?? "That subtitle track can't be used", {
+        description: replanError,
+      });
     }
   }, [plan.selected_tracks.subtitle?.index, replanError, replanErrorTitle, replanning]);
 

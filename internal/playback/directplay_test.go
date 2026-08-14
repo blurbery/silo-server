@@ -65,12 +65,6 @@ func TestServeDirectPlayHTTPContract(t *testing.T) {
 	if got := full.Header().Get("Accept-Ranges"); got != "bytes" {
 		t.Fatalf("Accept-Ranges = %q, want bytes", got)
 	}
-	if got := full.Header().Get("X-Accel-Buffering"); got != "no" {
-		t.Fatalf("X-Accel-Buffering = %q, want no", got)
-	}
-	if got := full.Header().Get("Cache-Control"); got != "private, no-store" {
-		t.Fatalf("Cache-Control = %q, want private, no-store", got)
-	}
 	etag := full.Header().Get("ETag")
 	validatorRequired := platformRequiresDirectPlayValidator()
 	if validatorRequired && etag == "" {

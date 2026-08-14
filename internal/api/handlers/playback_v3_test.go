@@ -117,27 +117,6 @@ func TestShouldTryAlternateFileV3PinsOriginalQuality(t *testing.T) {
 	}
 }
 
-func TestPlaybackSegmentDurationV3UsesShortFragmentsOnlyForCopyRemux(t *testing.T) {
-	tests := []struct {
-		name string
-		plan *playback.PlanV3
-		want int
-	}{
-		{name: "missing plan", want: playback.DefaultSegmentDuration},
-		{name: "video transcode", plan: &playback.PlanV3{Delivery: playback.DeliveryTranscodeHLSV3}, want: playback.DefaultSegmentDuration},
-		{name: "video copy remux", plan: &playback.PlanV3{Delivery: playback.DeliveryRemuxHLSV3}, want: 1},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := playbackSegmentDurationV3(playback.PlannerResultV3{Plan: test.plan})
-			if got != test.want {
-				t.Fatalf("playbackSegmentDurationV3() = %d, want %d", got, test.want)
-			}
-		})
-	}
-}
-
 func TestTerminalAllowsAlternateFileV3IncludesHDRIncompatibility(t *testing.T) {
 	for _, reason := range []string{"no_alternate_version", "hdr_transcode_unsupported"} {
 		if !terminalAllowsAlternateFileV3(&playback.TerminalV3{Reason: reason}) {
@@ -392,75 +371,6 @@ func TestHandleStartPlaybackV3CommitsStartSideEffectsOnce(t *testing.T) {
 	}
 	if analyzer.callCount() != 1 {
 		t.Fatalf("lazy marker calls = %d, want 1", analyzer.callCount())
-	}
-}
-
-func TestHandleStartPlaybackV3SupersedesPausedSessionFromSameDevice(t *testing.T) {
-	manager := playback.NewSessionManager(0, 0)
-	handler := NewPlaybackHandler(manager, testPlaybackFileResolver{file: v3HandlerFixtureFile(t)})
-	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{}}
-	handler.ItemAccess = allowAllPlaybackItemAccess{}
-
-	start := func(attemptID, deviceID string) playback.DecisionResponseV3 {
-		t.Helper()
-		request := v3HandlerStartRequest()
-		request.PlaybackAttemptID = attemptID
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/playback/start", strings.NewReader(marshalV3StartRequest(t, request))).WithContext(newAuthorizedPlaybackContext())
-		req.Header.Set(deviceIDHeader, deviceID)
-		rr := httptest.NewRecorder()
-		handler.HandleStartPlayback(rr, req)
-		var response playback.DecisionResponseV3
-		if rr.Code != http.StatusCreated || json.Unmarshal(rr.Body.Bytes(), &response) != nil {
-			t.Fatalf("start status=%d body=%s", rr.Code, rr.Body.String())
-		}
-		return response
-	}
-
-	first := start("attempt-superseded-0001", "living-room")
-	if err := manager.UpdateProgress(first.SessionID, 75, true); err != nil {
-		t.Fatal(err)
-	}
-	second := start("attempt-superseded-0002", "living-room")
-	if second.SessionID == first.SessionID {
-		t.Fatal("new playback attempt reused the paused session")
-	}
-	if _, err := manager.GetSession(first.SessionID); !errors.Is(err, playback.ErrSessionNotFound) {
-		t.Fatalf("superseded session lookup error = %v, want ErrSessionNotFound", err)
-	}
-	remaining := manager.AllSessions()
-	if len(remaining) != 1 || remaining[0].ID != second.SessionID {
-		t.Fatalf("remaining sessions = %#v, want only replacement %s", remaining, second.SessionID)
-	}
-}
-
-func TestHandleStartPlaybackV3DoesNotSupersedePausedSessionFromAnotherDevice(t *testing.T) {
-	manager := playback.NewSessionManager(0, 0)
-	handler := NewPlaybackHandler(manager, testPlaybackFileResolver{file: v3HandlerFixtureFile(t)})
-	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{}}
-	handler.ItemAccess = allowAllPlaybackItemAccess{}
-
-	start := func(attemptID, deviceID string) playback.DecisionResponseV3 {
-		t.Helper()
-		request := v3HandlerStartRequest()
-		request.PlaybackAttemptID = attemptID
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/playback/start", strings.NewReader(marshalV3StartRequest(t, request))).WithContext(newAuthorizedPlaybackContext())
-		req.Header.Set(deviceIDHeader, deviceID)
-		rr := httptest.NewRecorder()
-		handler.HandleStartPlayback(rr, req)
-		var response playback.DecisionResponseV3
-		if rr.Code != http.StatusCreated || json.Unmarshal(rr.Body.Bytes(), &response) != nil {
-			t.Fatalf("start status=%d body=%s", rr.Code, rr.Body.String())
-		}
-		return response
-	}
-
-	first := start("attempt-other-device-0001", "living-room")
-	if err := manager.UpdateProgress(first.SessionID, 75, true); err != nil {
-		t.Fatal(err)
-	}
-	_ = start("attempt-other-device-0002", "bedroom")
-	if got := len(manager.AllSessions()); got != 2 {
-		t.Fatalf("sessions = %d, want both devices preserved", got)
 	}
 }
 

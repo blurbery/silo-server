@@ -67,10 +67,6 @@ type sessionStarterWithFilesContext interface {
 	StartSessionWithFilesContext(ctx context.Context, userID int, profileID string, effectiveFileID int, requestedFileID int, method playback.PlayMethod, transcodeAudio bool) (*playback.Session, error)
 }
 
-type sessionSnapshotLister interface {
-	AllSessions() []*playback.Session
-}
-
 type transcodePermissionChecker interface {
 	CheckTranscodingAllowed(ctx context.Context, userID int, requiresVideoTranscode bool) error
 }
@@ -1081,7 +1077,6 @@ func playbackClientInfoFromRequest(r *http.Request) playback.ClientInfo {
 		return playback.ClientInfo{}
 	}
 	return playback.ClientInfo{
-		DeviceID:  deviceMetadataFromRequest(r).DeviceID,
 		Name:      strings.TrimSpace(r.Header.Get("X-Silo-Client")),
 		Version:   strings.TrimSpace(r.Header.Get("X-Silo-Client-Version")),
 		UserAgent: r.UserAgent(),
@@ -1292,8 +1287,8 @@ func alignedSeekSeconds(seekSeconds float64, segmentDuration int, targetVideoCod
 }
 
 // HandleGetTranscodeManifest handles GET /playback/transcode/{session_id}/master.m3u8.
-// The router accepts either live account auth or the session-bound signed
-// stream token. When either supplies an auth context, ownership is verified.
+// Auth is optional — the session UUID serves as an access token (same pattern
+// as /stream/{session_id}). When auth context is present, ownership is verified.
 //
 // Known-duration encoded sessions expose a synthetic full VOD manifest so the
 // player can seek immediately. Copy-video sessions expose FFmpeg's real
@@ -1348,13 +1343,12 @@ func (h *PlaybackHandler) HandleGetTranscodeManifest(w http.ResponseWriter, r *h
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	w.Header().Set("Pragma", "no-cache")
-	playback.DisableProxyBuffering(w)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(manifest)
 }
 
 // HandleGetTranscodeSegment handles GET /playback/transcode/{session_id}/segment/{name}.
-// The router accepts either live account auth or the session-bound stream token.
+// Auth is optional — the session UUID serves as an access token.
 func (h *PlaybackHandler) HandleGetTranscodeSegment(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "session_id")
 	session, status, card := h.loadTranscodeServeSession(r, sessionID)
@@ -1533,7 +1527,6 @@ func (h *PlaybackHandler) HandleGetTranscodeSegment(w http.ResponseWriter, r *ht
 
 	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	w.Header().Set("Pragma", "no-cache")
-	playback.DisableProxyBuffering(w)
 	http.ServeFile(w, r, segmentPath)
 }
 
