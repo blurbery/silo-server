@@ -261,11 +261,11 @@ func startRemuxWithOptions(ctx context.Context, filePath, outputFormat string, s
 	case RemuxDVStripToHDR10V3, RemuxDVStripToBaseV3:
 		if dvProfile != 7 && dvProfile != 8 {
 			cancel()
-			return nil, fmt.Errorf("Dolby Vision base-layer strip requires profile 7 or 8")
+			return nil, fmt.Errorf("profile 7 or 8 is required for Dolby Vision base-layer stripping")
 		}
 		if !supportsDoviRPUFilter(bin) {
 			cancel()
-			return nil, fmt.Errorf("Dolby Vision base-layer remux requires the dovi_rpu/filter_units bitstream filters")
+			return nil, fmt.Errorf("the Dolby Vision base-layer remux requires the dovi_rpu/filter_units bitstream filters")
 		}
 		// The planner refuses this recipe for a source that fails the probe,
 		// so reaching here means a session or stream token minted before the

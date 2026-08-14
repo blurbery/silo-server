@@ -23,6 +23,8 @@ const (
 	audioLayoutMonoV3                    = "mono"
 	audioLayoutStereoV3                  = "stereo"
 	audioLayoutSurround51V3              = "5.1"
+	colorTransferPQV3                    = "smpte2084"
+	colorTransferBT709V3                 = "bt709"
 )
 
 type PlannerInputV3 struct {
@@ -842,7 +844,7 @@ type dolbyVisionBaseLayerFallbackV3Result struct {
 // Dolby Vision profile has an explicitly compatible base layer. Profile 5 and
 // unknown/zero compatibility IDs are deliberately excluded: removing their
 // RPU and pretending the remaining pixels are ordinary HDR/SDR produces wrong
-// colours. Profile 7's base layer is HDR10; Profile 8 declares its compatible
+// colors. Profile 7's base layer is HDR10; Profile 8 declares its compatible
 // signal through the BL compatibility ID (1/6 HDR10, 2 SDR, 4 HLG).
 func dolbyVisionBaseLayerFallbackV3(source SourceDescriptorV3, request StartRequestV3, registry *TransformationRegistryV3) (dolbyVisionBaseLayerFallbackV3Result, bool) {
 	if source.DynamicRange != DynamicRangeDolbyVisionV3 || registry == nil {
@@ -900,12 +902,12 @@ func dolbyVisionBaseTransferMatchesV3(transfer, dynamicRange string) bool {
 	transfer = strings.ToLower(strings.TrimSpace(transfer))
 	switch dynamicRange {
 	case DynamicRangeHDR10V3:
-		return transfer == "smpte2084" || transfer == "pq"
+		return transfer == colorTransferPQV3 || transfer == "pq"
 	case DynamicRangeHLGV3:
 		return transfer == "arib-std-b67" || transfer == "hlg"
 	case DynamicRangeSDRV3:
 		switch transfer {
-		case "bt709", "bt470bg", "smpte170m", "iec61966-2-1":
+		case colorTransferBT709V3, "bt470bg", "smpte170m", "iec61966-2-1":
 			return true
 		}
 	}
