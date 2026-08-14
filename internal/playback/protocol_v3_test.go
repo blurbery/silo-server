@@ -783,6 +783,37 @@ func TestPlanPlaybackV3TVOSMKVPrefersServerHDR10HLSForProfile7(t *testing.T) {
 	}
 }
 
+func TestPlanPlaybackV3WebNativeHLSAvoidsProgressiveProfile7Fallback(t *testing.T) {
+	file := detailedFixtureFileV3()
+	file.CodecAudio = "truehd"
+	file.AudioChannels = 8
+	file.AudioTracks[0] = models.AudioTrack{Codec: "truehd", Channels: 8, Layout: "7.1", Default: true}
+	file.VideoTracks[0].DVProfile = 7
+	file.VideoTracks[0].DVBLCompatID = 6
+	file.VideoTracks[0].VideoRange = "DolbyVision"
+	file.VideoTracks[0].VideoRangeType = "DOVIWithEL"
+
+	req := validStartRequestV3()
+	req.ClientPlaybackContext.Device.Platform = "web"
+	req.Capabilities.CodecsAudio = append(req.Capabilities.CodecsAudio, "truehd")
+	req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
+	req.Capabilities.HDRDetails = &HDRCapabilitiesV3{HDR10: true}
+	req.ClientPlaybackContext.Output.HDRDetails = req.Capabilities.HDRDetails
+	hls := req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3]
+	hls.VideoCodecs = append(hls.VideoCodecs, "hevc")
+	hls.HDRDetails = req.Capabilities.HDRDetails
+	hls.Features = append(hls.Features, ClientNativeHLSPlaybackV3)
+	req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3] = hls
+
+	result := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: testTransformationRegistryV3()})
+	if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxHLSV3 || result.Plan.EffectiveRecipe.DynamicRange != DynamicRangeHDR10V3 {
+		t.Fatalf("result = %s", ExplainPlannerResultV3(result))
+	}
+	if result.TargetVideoCodec != "copy" || result.TargetAudioCodec != "aac" || !result.TranscodeAudio {
+		t.Fatalf("execution = video %q audio %q transcodeAudio=%v", result.TargetVideoCodec, result.TargetAudioCodec, result.TranscodeAudio)
+	}
+}
+
 func TestPlanPlaybackV3TVOSMKVPreservesProfile8OverServerHLS(t *testing.T) {
 	file := detailedFixtureFileV3()
 	file.CodecAudio = "eac3"

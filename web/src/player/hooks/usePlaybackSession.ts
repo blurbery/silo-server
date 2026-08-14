@@ -299,6 +299,9 @@ export function usePlaybackSession(
   const playbackStartedRef = useRef(false);
   const switchingRef = useRef(false);
   const loadSequenceRef = useRef(0);
+  const loadInFlightSequenceRef = useRef<number | null>(null);
+  const pendingCapabilityRefreshRef = useRef(false);
+  const [capabilityRefreshRevision, setCapabilityRefreshRevision] = useState(0);
 
   // v3 identity. `playback_attempt_id` spans one whole attempt chain (a start
   // and every replan that follows it); `plan_attempt_id` identifies the single
@@ -517,6 +520,7 @@ export function usePlaybackSession(
       const previousSessionId = sessionIdRef.current;
       const hasExistingSession = !!previousState.sessionId && !!previousState.streamUrl;
       const loadSequence = ++loadSequenceRef.current;
+      loadInFlightSequenceRef.current = loadSequence;
       const previousAttempt = {
         playbackAttemptId: playbackAttemptIdRef.current,
         planAttemptId: planAttemptIdRef.current,
@@ -634,6 +638,14 @@ export function usePlaybackSession(
 
         const nextError = describePlaybackSessionError(err, initialErrorMessage);
         retirePreviousSession(nextError);
+      } finally {
+        if (loadInFlightSequenceRef.current === loadSequence) {
+          loadInFlightSequenceRef.current = null;
+          if (pendingCapabilityRefreshRef.current) {
+            pendingCapabilityRefreshRef.current = false;
+            setCapabilityRefreshRevision((revision) => revision + 1);
+          }
+        }
       }
     },
     [adoptDecision, requestStart, selectFileId, stopSession],
@@ -651,6 +663,7 @@ export function usePlaybackSession(
       position: initialPosition,
       forceStartPosition: forceInitialPosition,
     };
+    pendingCapabilityRefreshRef.current = false;
     hasAdoptedPlanRef.current = false;
     awaitingInitialPlayerPositionRef.current = false;
     playbackPlayingRef.current = true;
@@ -916,11 +929,19 @@ export function usePlaybackSession(
     ) {
       return;
     }
-    activeCapabilityRequestKeyRef.current = capabilityRequestKey;
-
     const plan = planRef.current;
     const sessionId = sessionIdRef.current;
     if (!plan || !sessionId) {
+      if (loadInFlightSequenceRef.current !== null) {
+        // Capability probes settle asynchronously in Safari. Starting another
+        // session while the resume-aware start is still in flight lets both
+        // requests race through durable progress resolution; the zero-anchor
+        // replacement can then win. Let the first start finish and replan it
+        // once with the newest output evidence instead.
+        pendingCapabilityRefreshRef.current = true;
+        return;
+      }
+      activeCapabilityRequestKeyRef.current = capabilityRequestKey;
       const startIntent = startIntentRef.current;
       const resumeFromAdoptedPlan = hasAdoptedPlanRef.current;
       void loadSession({
@@ -934,6 +955,8 @@ export function usePlaybackSession(
       return;
     }
 
+    activeCapabilityRequestKeyRef.current = capabilityRequestKey;
+
     if (!serverFeaturesRef.current.includes(FEATURE_OUTPUT_CHANGE_V3)) {
       return;
     }
@@ -945,7 +968,15 @@ export function usePlaybackSession(
       },
       true,
     );
-  }, [capabilityRequestKey, fileId, loadSession, replan, requestKey, retireActiveSession]);
+  }, [
+    capabilityRefreshRevision,
+    capabilityRequestKey,
+    fileId,
+    loadSession,
+    replan,
+    requestKey,
+    retireActiveSession,
+  ]);
 
   const switchAudioTrack = useCallback(
     (index: number, currentPosition: number) => {
@@ -1061,7 +1092,6 @@ export function usePlaybackSession(
     if (Number.isFinite(positionSeconds) && positionSeconds >= 0) {
       const isUninitializedPlayerZero =
         awaitingInitialPlayerPositionRef.current &&
-        !playing &&
         positionSeconds === 0 &&
         playbackPositionRef.current > 0;
       if (!isUninitializedPlayerZero) {

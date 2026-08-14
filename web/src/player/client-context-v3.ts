@@ -41,16 +41,22 @@ const WEB_SUBTITLE_CAPABILITIES: DeliverySubtitleCapabilitiesV3 = {
   font_attachments: true,
 };
 
-/** Detects whether either hls.js or the native media element can play HLS. */
-export function detectHLSSupport(): boolean {
+/** Detects whether the media element itself can play HLS without hls.js. */
+export function detectNativeHLSSupport(): boolean {
   if (typeof document !== "undefined") {
     try {
       const video = document.createElement("video");
       if (video.canPlayType("application/vnd.apple.mpegurl") !== "") return true;
     } catch {
-      // Fall through to the hls.js/MSE probe.
+      // An unavailable or restricted media element is not a native-HLS claim.
     }
   }
+  return false;
+}
+
+/** Detects whether either hls.js or the native media element can play HLS. */
+export function detectHLSSupport(): boolean {
+  if (detectNativeHLSSupport()) return true;
   if (typeof MediaSource === "undefined") return false;
   try {
     // hls.js muxes into fMP4/TS; the baseline it requires is an MSE that can
@@ -76,8 +82,10 @@ export interface WebCapabilityProbe {
   hdr: boolean;
   /** Structured HDR formats supported by the active browser output path. */
   hdrDetails: HDRCapabilitiesV3;
-  /** Whether hls.js can be used on this browser. */
+  /** Whether HLS is available through either hls.js or the media element. */
   hls: boolean;
+  /** Whether the media element itself, rather than hls.js, owns HLS playback. */
+  nativeHls: boolean;
 }
 
 /**
@@ -147,6 +155,11 @@ export function buildDeliveriesV3(
   delete nonProgressiveHDRDetails.hdr10_max_height;
   delete nonProgressiveHDRDetails.hdr10_max_frame_rate;
   delete nonProgressiveHDRDetails.hdr10_max_bitrate_kbps;
+  // Native HLS and progressive playback both run through the media element.
+  // When that element passes the exact HEVC/HDR probe, its native HLS route
+  // may carry the same normalized fMP4 samples. hls.js keeps the conservative
+  // MSE-only declaration because the file probe says nothing about its path.
+  const hlsHDRDetails = probe.nativeHls ? probe.hdrDetails : nonProgressiveHDRDetails;
   return {
     original_http: buildDeliveryCapability(probe, {
       hdr_details: nonProgressiveHDRDetails,
@@ -158,7 +171,9 @@ export function buildDeliveriesV3(
       supported_on_device: probe.hls,
       ...(probe.hls ? {} : { failure_reason: "media_source_extensions_unavailable" }),
       containers: ["hls"],
-      hdr_details: nonProgressiveHDRDetails,
+      video_codecs: probe.nativeHls ? probe.progressiveCodecsVideo : probe.codecsVideo,
+      hdr_details: hlsHDRDetails,
+      features: probe.nativeHls ? ["native_hls_playback_v1"] : [],
     }),
   };
 }
