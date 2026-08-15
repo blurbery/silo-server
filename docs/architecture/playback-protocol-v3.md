@@ -386,17 +386,16 @@ format claim, and it does not gate format claims on it either. Decoder capabilit
 and active-output HDR are separate facts — browsers tone-map HDR content onto SDR
 outputs, and Safari 26 reports `dynamic-range: standard` even on an XDR display —
 so the media query survives only as the best-effort `hdr` output boolean. Format
-claims come from exact shape probes matched to the bytes the remux delivers:
-HDR10 requires Media Capabilities support for Silo's progressive 2160p HEVC
-Main10, Rec. 2020, PQ, SMPTE ST 2086 shape, probed under exactly the `hvc1`
-sample entry because the explicit v3 HDR10 strip remux labels its output `hvc1`
-(legacy and automatic strip paths retain FFmpeg's default `hev1`). Dolby Vision
-requires a definitive media-element answer for exactly `dvh1.05.06` or
-`dvh1.08.06`, because the preserve remux tags its output `dvh1`. An answer only
-for the other spelling (`hev1`/`dvhe`) is evidence for a file Silo never sends
-and earns no claim. Both claims are scoped to `progressive`: they
-are cleared from `original_http` and `hls` because those delivery paths were not
-tested by the same probe. An HDR10 claim can carry `hdr10_max_width`, `hdr10_max_height`,
+claims come from exact shape probes matched to each playback engine's bytes.
+Progressive and native HLS use the media element and probe Silo's 2160p HEVC
+Main10, Rec. 2020, PQ, SMPTE ST 2086 shape under `hvc1`. hls.js uses
+MediaSource and independently probes the same HDR shape under `hev1`; evidence
+from one engine never authorizes the other. Dolby Vision requires a definitive
+media-element answer for exactly `dvh1.05.06` or `dvh1.08.06`, because the
+native preserve remux tags its output `dvh1`. An answer only for another
+spelling is evidence for bytes Silo does not send on that route and earns no
+claim. These claims are cleared from `original_http`, which was not tested by
+either remux probe. An HDR10 claim can carry `hdr10_max_width`, `hdr10_max_height`,
 `hdr10_max_frame_rate`, and `hdr10_max_bitrate_kbps`; these ceilings keep a
 successful format probe from admitting an untested stream class.
 
@@ -411,7 +410,7 @@ client negotiates in three classes.
 | --- | --- | --- |
 | `original_http` | `original_http` | The source file, byte-for-byte, over HTTP with range support |
 | `server_remux_progressive` | `progressive` | Repackaged into a new container, streamed as one chunked response |
-| `server_remux_hls` | `hls` | Repackaged into HLS segments; codecs untouched |
+| `server_remux_hls` | `hls` | Repackaged into HLS segments; native Apple HLS uses the validated `hvc1`/`dvh1` sample entry while hls.js MediaSource routes use independently validated `hev1` |
 | `server_transcode_hls` | `hls` | Re-encoded and segmented |
 
 `client_playback_context.deliveries` is keyed by **class**, because a client's
@@ -786,8 +785,8 @@ A transformation is a named, versioned media operation with claims attached.
 | --- | --- | --- | --- | --- |
 | `audio_to_aac` | `server` | `1` | — | `audio_decode` |
 | `video_to_h264` | `server` | `2` | `sdr` output | `h264_decode` |
-| `server_dv7_to_hdr10` | `server` | `2` | `hdr10` output | `dolby_vision_metadata_removed`, `hdr10_base_layer_preserved`, `enhancement_layer_discarded` |
-| `server_dv8_to_compatible_base` | `server` | `1` | Range selected from the explicit Profile 8 BL compatibility ID: `hdr10` (1/6), `sdr` (2), or `hlg` (4) | `dolby_vision_metadata_removed` plus the matching base-layer claim |
+| `server_dv7_to_hdr10` | `server` | `3` | `hdr10` output; progressive/native Apple HLS label copied HEVC `hvc1`, while hls.js labels its independently probed MediaSource path `hev1` | `dolby_vision_metadata_removed`, `hdr10_base_layer_preserved`, `enhancement_layer_discarded` |
+| `server_dv8_to_compatible_base` | `server` | `2` | Range selected from the explicit Profile 8 BL compatibility ID: `hdr10` (1/6), `sdr` (2), or `hlg` (4), with the same route-specific `hvc1`/`hev1` isolation | `dolby_vision_metadata_removed` plus the matching base-layer claim |
 
 They are advertised only if the installed FFmpeg actually has the required
 capability, probed once at startup:

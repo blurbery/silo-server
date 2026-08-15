@@ -53,6 +53,7 @@ type RecipeCard struct {
 	SourceVideoBitDepth    int     `json:"source_video_bit_depth,omitempty"`
 	SoftwareVideoDecode    bool    `json:"software_video_decode,omitempty"`
 	VideoBitstreamFilter   string  `json:"video_bitstream_filter,omitempty"`
+	VideoSampleEntry       string  `json:"video_sample_entry,omitempty"`
 	SeekSeconds            float64 `json:"seek_seconds"`
 	StreamOriginSeconds    float64 `json:"stream_origin_seconds,omitempty"`
 	CopySeekAnchorResolved bool    `json:"copy_seek_anchor_resolved,omitempty"`
@@ -97,6 +98,8 @@ func NewRecipeCard(userID int, profileID string, mediaFileID int, transcodeNodeU
 		SourceVideoBitDepth:    opts.SourceVideoBitDepth,
 		SoftwareVideoDecode:    opts.SoftwareVideoDecode,
 		VideoBitstreamFilter:   opts.VideoBitstreamFilter,
+		VideoSampleEntry:       opts.VideoSampleEntry,
+		RemuxDVMode:            opts.RemuxDVMode,
 		SeekSeconds:            opts.SeekSeconds,
 		StreamOriginSeconds:    opts.StreamOriginSeconds,
 		CopySeekAnchorResolved: opts.CopySeekAnchorResolved,
@@ -168,6 +171,8 @@ func (c RecipeCard) TranscodeOpts(outputDir, ffmpegPath string, logSink FFmpegLo
 		SourceVideoBitDepth:    c.SourceVideoBitDepth,
 		SoftwareVideoDecode:    c.SoftwareVideoDecode,
 		VideoBitstreamFilter:   c.VideoBitstreamFilter,
+		VideoSampleEntry:       c.VideoSampleEntry,
+		RemuxDVMode:            c.RemuxDVMode,
 		SeekSeconds:            c.SeekSeconds,
 		StreamOriginSeconds:    c.StreamOriginSeconds,
 		CopySeekAnchorResolved: c.CopySeekAnchorResolved,
@@ -228,6 +233,7 @@ func (c RecipeCard) ToClaims() streamtoken.Claims {
 		SourceVideoBitDepth:    c.SourceVideoBitDepth,
 		SoftwareVideoDecode:    c.SoftwareVideoDecode,
 		VideoBitstreamFilter:   c.VideoBitstreamFilter,
+		VideoSampleEntry:       c.VideoSampleEntry,
 		SeekSeconds:            c.SeekSeconds,
 		StreamOriginSeconds:    c.StreamOriginSeconds,
 		CopySeekAnchorResolved: c.CopySeekAnchorResolved,
@@ -274,6 +280,7 @@ func RecipeCardFromClaims(c *streamtoken.Claims) RecipeCard {
 		SourceVideoBitDepth:    c.SourceVideoBitDepth,
 		SoftwareVideoDecode:    c.SoftwareVideoDecode,
 		VideoBitstreamFilter:   c.VideoBitstreamFilter,
+		VideoSampleEntry:       c.VideoSampleEntry,
 		SeekSeconds:            c.SeekSeconds,
 		StreamOriginSeconds:    c.StreamOriginSeconds,
 		CopySeekAnchorResolved: c.CopySeekAnchorResolved,

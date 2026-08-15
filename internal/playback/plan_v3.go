@@ -194,17 +194,20 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		dvFallbackLocal = dolbyVisionBaseLayerFallbackV3Result{}
 		dvFallback = dolbyVisionBaseLayerFallbackV3Result{}
 	}
-	// Keep native-HLS preference browser-only. Silo Apple uses original_http for
+	// Keep HLS preference browser-only. Silo Apple uses original_http for
 	// Matroska as the signal to launch its client-side loopback remuxer; that path
 	// also installs AVDisplayCriteria so tvOS Match Frame Rate and Match Dynamic
 	// Range can follow the source. Forcing server HLS bypasses that client policy.
-	// Safari's native HLS path still avoids the decoder failure its progressive
-	// media-element route can report for a server-normalized Profile 7 HDR10
-	// fallback. Prefer it only when the complete copy recipe is executable, so a
-	// missing server toolchain never takes away a working progressive fallback.
-	preferServerHLS := prefersWebNativeHLSForMKVV3(source, input.Request) &&
+	// Web Dolby routes are probed per delivery: Safari's native HLS consumes
+	// hvc1/dvh1 while hls.js consumes hev1 through MediaSource. Prefer that exact
+	// HLS recipe before a progressive remux so Firefox/Chrome do not first wait
+	// for a known-incompatible media-element attempt to fail. The progressive
+	// recipe remains the recovery route when the HLS delivery rejects the plan.
+	// Require the complete copy recipe here so a missing server toolchain never
+	// takes away a working progressive fallback.
+	preferServerHLS := prefersWebHLSForMKVDolbyV3(source, input.Request) &&
 		videoOK && !source.VideoCopyUnsafe && hlsRemuxSubtitleOK &&
-		((source.DVProfile == 7 && dvStripEligible) || (source.DVProfile != 7 && rangeOK)) &&
+		(rangeOK || dvStripEligible) &&
 		hlsAudioRouteExecutableV3(source, input)
 	clientDV81Eligible := canClientTransformDV7ToDV81V3(source, input.Request)
 	clientHDR10Eligible := canClientTransformDV7ToHDR10V3(source, input.Request)
@@ -415,6 +418,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		if !dvStrip {
 			applyCopiedVideoQuirksV3(&plan, source, input.Request, high10Quirk)
 		}
+		plan.EffectiveRecipe.VideoSampleEntry = progressiveVideoSampleEntryV3(source, dvStrip)
 		// The progressive remux executes on this process's ffmpeg, so its
 		// server transformations must be locally available; when only pooled
 		// nodes carry them, the HLS remux below ships the same recipe on a
@@ -435,6 +439,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 			plan.RuntimeCorrections = []string{}
 			plan.Delivery = DeliveryRemuxHLSV3
 			plan.Stream = StreamV3{Protocol: StreamHLSV3, Container: "hls", MIMEType: "application/vnd.apple.mpegurl", Headers: map[string]string{}, HeaderRefresh: HeaderRefreshNoneV3}
+			plan.EffectiveRecipe.VideoSampleEntry = hlsVideoSampleEntryV3(source, input.Request, dvStrip)
 			hlsTranscodeAudio := transcodeAudio
 			hlsAudioChannels := 0
 			if hlsTranscodeAudio {
@@ -513,6 +518,39 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	}
 
 	return terminalPlannerResultV3("adaptation_unavailable", "No validated playback route is available for this source and output route.", false)
+}
+
+// Progressive remuxes are consumed by a media element. Explicit Dolby Vision
+// recipes already label their MP4 output hvc1/dvh1; ordinary HEVC remuxes keep
+// FFmpeg's hev1 default. Freezing that distinction on the plan prevents an HLS
+// reconstruction from inheriting Safari's sample entry on another browser.
+func progressiveVideoSampleEntryV3(source SourceDescriptorV3, dvStrip bool) string {
+	if !strings.EqualFold(source.VideoCodec, "hevc") {
+		return ""
+	}
+	if dvStrip {
+		return VideoSampleEntryHVC1V3
+	}
+	if source.DVProfile == 5 || source.DVProfile == 8 {
+		return VideoSampleEntryDVH1V3
+	}
+	return VideoSampleEntryHEV1V3
+}
+
+// Native HLS uses the same Apple media-element evidence as progressive
+// playback, while hls.js consumes MediaSource fMP4 and is probed against hev1.
+// Keep those byte recipes separate even when they preserve the same HDR range.
+func hlsVideoSampleEntryV3(source SourceDescriptorV3, request StartRequestV3, dvStrip bool) string {
+	if !strings.EqualFold(source.VideoCodec, "hevc") {
+		return ""
+	}
+	if !deliverySupportsFeatureV3(request, DeliveryClassHLSV3, ClientNativeHLSPlaybackV3) {
+		return VideoSampleEntryHEV1V3
+	}
+	if !dvStrip && (source.DVProfile == 5 || source.DVProfile == 8) {
+		return VideoSampleEntryDVH1V3
+	}
+	return VideoSampleEntryHVC1V3
 }
 
 // availableQualitiesV3 publishes the server ladder rungs a client could
@@ -810,19 +848,17 @@ func applySubtitleDecisionV3(plan *PlanV3, decision SubtitleDecisionV3) {
 	plan.Subtitle.Inventory = inventory
 }
 
-func prefersWebNativeHLSForMKVV3(source SourceDescriptorV3, request StartRequestV3) bool {
+func prefersWebHLSForMKVDolbyV3(source SourceDescriptorV3, request StartRequestV3) bool {
 	if !strings.EqualFold(source.Container, "mkv") && !strings.EqualFold(source.Container, "matroska") {
 		return false
 	}
-	if !deliveryAvailableV3(request, DeliveryClassHLSV3) {
+	if !strings.EqualFold(strings.TrimSpace(request.ClientPlaybackContext.Device.Platform), "web") || source.DVProfile <= 0 {
 		return false
 	}
-	// A browser's native HLS route uses the same media element that supplied
-	// its exact HDR10/HEVC evidence. Prefer that route only for Profile 7,
-	// where Safari has demonstrated that it rejects the equivalent progressive
-	// HDR10 fallback even though its capability probe accepts the sample shape.
-	return source.DVProfile == 7 &&
-		deliverySupportsFeatureV3(request, DeliveryClassHLSV3, ClientNativeHLSPlaybackV3)
+	// deliverySupportsPlanV3 later applies the narrower, independently probed
+	// native-HLS or MediaSource codec/HDR evidence to the concrete recipe. This
+	// gate only changes ordering; unsupported HLS plans fall back to progressive.
+	return deliveryAvailableV3(request, DeliveryClassHLSV3)
 }
 
 func hlsAudioRouteExecutableV3(source SourceDescriptorV3, input PlannerInputV3) bool {

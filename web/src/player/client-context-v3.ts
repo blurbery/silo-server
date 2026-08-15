@@ -74,6 +74,8 @@ export interface WebCapabilityProbe {
   codecsVideo: string[];
   /** Video codecs supported specifically by direct media-element playback. */
   progressiveCodecsVideo: string[];
+  /** Video codecs supported specifically by hls.js' MediaSource path. */
+  hlsCodecsVideo: string[];
   /** Audio codec names the browser reported support for. */
   codecsAudio: string[];
   /** Best-effort screen-derived resolution ceiling. */
@@ -82,6 +84,8 @@ export interface WebCapabilityProbe {
   hdr: boolean;
   /** Structured HDR formats supported by the active browser output path. */
   hdrDetails: HDRCapabilitiesV3;
+  /** Structured HDR formats supported by hls.js' MediaSource path. */
+  hlsHDRDetails: HDRCapabilitiesV3;
   /** Whether HLS is available through either hls.js or the media element. */
   hls: boolean;
   /** Whether the media element itself, rather than hls.js, owns HLS playback. */
@@ -95,7 +99,9 @@ export interface WebCapabilityProbe {
  * server treats the two lists identically.
  */
 export function buildClientCapabilitiesV3(probe: WebCapabilityProbe): ClientCodecCapabilitiesV3 {
-  const codecsVideo = Array.from(new Set([...probe.codecsVideo, ...probe.progressiveCodecsVideo]));
+  const codecsVideo = Array.from(
+    new Set([...probe.codecsVideo, ...probe.progressiveCodecsVideo, ...probe.hlsCodecsVideo]),
+  );
   return {
     video_evidence: "declared",
     audio_evidence: "declared",
@@ -160,7 +166,7 @@ export function buildDeliveriesV3(
   // When that element passes the exact HEVC/HDR probe, its native HLS route
   // may carry the same normalized fMP4 samples. hls.js keeps the conservative
   // MSE-only declaration because the file probe says nothing about its path.
-  const hlsHDRDetails = probe.nativeHls ? probe.hdrDetails : nonProgressiveHDRDetails;
+  const hlsHDRDetails = probe.nativeHls ? probe.hdrDetails : probe.hlsHDRDetails;
   return {
     original_http: buildDeliveryCapability(probe, {
       hdr_details: nonProgressiveHDRDetails,
@@ -172,7 +178,7 @@ export function buildDeliveriesV3(
       supported_on_device: probe.hls,
       ...(probe.hls ? {} : { failure_reason: "media_source_extensions_unavailable" }),
       containers: ["hls"],
-      video_codecs: probe.nativeHls ? probe.progressiveCodecsVideo : probe.codecsVideo,
+      video_codecs: probe.nativeHls ? probe.progressiveCodecsVideo : probe.hlsCodecsVideo,
       hdr_details: hlsHDRDetails,
       features: probe.nativeHls ? ["native_hls_playback_v1"] : [],
     }),

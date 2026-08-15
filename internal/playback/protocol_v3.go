@@ -136,8 +136,11 @@ const (
 	TransformationServerDV8BaseV3  = "server_dv8_to_compatible_base"
 
 	TransformationVideoToH264RecipeVersionV3    = "2"
-	TransformationServerDV7HDR10RecipeVersionV3 = "2"
-	TransformationServerDV8BaseRecipeVersionV3  = "1"
+	TransformationServerDV7HDR10RecipeVersionV3 = "3"
+	TransformationServerDV8BaseRecipeVersionV3  = "2"
+	VideoSampleEntryHEV1V3                      = "hev1"
+	VideoSampleEntryHVC1V3                      = "hvc1"
+	VideoSampleEntryDVH1V3                      = "dvh1"
 )
 
 // Transformation executors: who runs the transformation. A "server"
@@ -539,15 +542,16 @@ type TimelineV3 struct {
 }
 
 type EffectiveRecipeV3 struct {
-	VideoCodec    string   `json:"video_codec,omitempty"`
-	AudioCodec    string   `json:"audio_codec,omitempty"`
-	Width         *int     `json:"width,omitempty"`
-	Height        *int     `json:"height,omitempty"`
-	FrameRate     *float64 `json:"frame_rate,omitempty"`
-	BitrateKbps   *int     `json:"bitrate_kbps,omitempty"`
-	DynamicRange  string   `json:"dynamic_range,omitempty"`
-	AudioChannels *int     `json:"audio_channels,omitempty"`
-	AudioLayout   string   `json:"audio_layout,omitempty"`
+	VideoCodec       string   `json:"video_codec,omitempty"`
+	VideoSampleEntry string   `json:"video_sample_entry,omitempty"`
+	AudioCodec       string   `json:"audio_codec,omitempty"`
+	Width            *int     `json:"width,omitempty"`
+	Height           *int     `json:"height,omitempty"`
+	FrameRate        *float64 `json:"frame_rate,omitempty"`
+	BitrateKbps      *int     `json:"bitrate_kbps,omitempty"`
+	DynamicRange     string   `json:"dynamic_range,omitempty"`
+	AudioChannels    *int     `json:"audio_channels,omitempty"`
+	AudioLayout      string   `json:"audio_layout,omitempty"`
 }
 
 type SourceDescriptorV3 struct {

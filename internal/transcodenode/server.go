@@ -36,6 +36,8 @@ type TranscodeStartRequest struct {
 	SourceVideoBitDepth    int     `json:"source_video_bit_depth,omitempty"`
 	SoftwareVideoDecode    bool    `json:"software_video_decode,omitempty"`
 	VideoBitstreamFilter   string  `json:"video_bitstream_filter,omitempty"`
+	VideoSampleEntry       string  `json:"video_sample_entry,omitempty"`
+	RemuxDVMode            string  `json:"remux_dv_mode,omitempty"`
 	SeekSeconds            float64 `json:"seek_seconds"`
 	StreamOriginSeconds    float64 `json:"stream_origin_seconds,omitempty"`
 	CopySeekAnchorResolved bool    `json:"copy_seek_anchor_resolved,omitempty"`
@@ -743,6 +745,8 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		SourceVideoBitDepth:    req.SourceVideoBitDepth,
 		SoftwareVideoDecode:    req.SoftwareVideoDecode,
 		VideoBitstreamFilter:   req.VideoBitstreamFilter,
+		VideoSampleEntry:       req.VideoSampleEntry,
+		RemuxDVMode:            playback.RemuxDVMode(req.RemuxDVMode),
 		SeekSeconds:            req.SeekSeconds,
 		StreamOriginSeconds:    req.StreamOriginSeconds,
 		CopySeekAnchorResolved: req.CopySeekAnchorResolved,

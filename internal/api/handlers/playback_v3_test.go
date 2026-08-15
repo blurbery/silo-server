@@ -1999,6 +1999,7 @@ func TestValidateSeekReanchorPlanV3RejectsRouteDrift(t *testing.T) {
 		{name: "delivery recipe", mutate: func(value *playback.PlanV3) { value.Delivery = playback.DeliveryRemuxProgressiveV3 }},
 		{name: "stream MIME", mutate: func(value *playback.PlanV3) { value.Stream.MIMEType = "application/x-mpegURL" }},
 		{name: "header refresh", mutate: func(value *playback.PlanV3) { value.Stream.HeaderRefresh = playback.HeaderRefreshSessionV3 }},
+		{name: "video sample entry", mutate: func(value *playback.PlanV3) { value.EffectiveRecipe.VideoSampleEntry = playback.VideoSampleEntryHVC1V3 }},
 		{name: "frame rate", mutate: func(value *playback.PlanV3) {
 			changed := 24.0
 			value.EffectiveRecipe.FrameRate = &changed

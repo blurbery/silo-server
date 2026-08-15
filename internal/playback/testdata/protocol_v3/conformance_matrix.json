@@ -2397,8 +2397,8 @@
         "outcome": "playable",
         "delivery": "server_remux_progressive",
         "decision_reason": "container_normalization",
-        "plan_id": "plan:b0fabdf793bdfddfe228437da393616f",
-        "plan_attempt_key": "v3:11afdf62d282fb34",
+        "plan_id": "plan:bfa24c705369c7ff1ce3244b4f072314",
+        "plan_attempt_key": "v3:7cf13c349fab7bcc",
         "selected_tracks": {
           "audio": {
             "id": "file:42:audio:0",
@@ -2432,7 +2432,7 @@
           {
             "name": "server_dv7_to_hdr10",
             "executor": "server",
-            "recipe_version": "2",
+            "recipe_version": "3",
             "validated_claims": [
               "dolby_vision_metadata_removed",
               "hdr10_base_layer_preserved",
@@ -2637,8 +2637,8 @@
         "outcome": "playable",
         "delivery": "server_remux_progressive",
         "decision_reason": "audio_adaptation",
-        "plan_id": "plan:cccf704a0487d09d54a95b51d095c474",
-        "plan_attempt_key": "v3:8a79df3157b88939",
+        "plan_id": "plan:8c43bb18d9b47ce8fab1682b95489b8a",
+        "plan_attempt_key": "v3:bd97f800babcf897",
         "selected_tracks": {
           "audio": {
             "id": "file:42:audio:0",
