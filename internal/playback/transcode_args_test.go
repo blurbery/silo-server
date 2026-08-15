@@ -74,6 +74,22 @@ func TestStartTranscodeRejectsUnvalidatedBitstreamFilter(t *testing.T) {
 	if err == nil {
 		t.Fatal("Dolby Vision strip mode was accepted without its bitstream filter")
 	}
+	_, err = StartTranscode(context.Background(), TranscodeOpts{
+		DropInitialLeadingPictures: true,
+		SourceVideoCodec:           "h264",
+		TargetCodecVideo:           "copy",
+	})
+	if err == nil {
+		t.Fatal("leading-picture normalization was accepted for H.264")
+	}
+	_, err = StartTranscode(context.Background(), TranscodeOpts{
+		DropInitialLeadingPictures: true,
+		SourceVideoCodec:           "hevc",
+		TargetCodecVideo:           "h264",
+	})
+	if err == nil {
+		t.Fatal("leading-picture normalization was accepted for encoded video")
+	}
 }
 
 func TestBuildFFmpegArgs_QSVDropsSuperfastPreset(t *testing.T) {
@@ -173,6 +189,58 @@ func TestBuildFFmpegArgs_CopyVideoAppliesValidatedBitstreamFilter(t *testing.T) 
 	}
 	if strings.Contains(joined, "dvh1") || strings.Contains(joined, "-strict unofficial") {
 		t.Fatalf("stripped HDR10 HLS must not retain Dolby Vision output signaling: %s", joined)
+	}
+}
+
+func TestBuildFFmpegArgs_CopyVideoResumePrependsLeadingPictureFilter(t *testing.T) {
+	args := buildFFmpegArgs(TranscodeOpts{
+		InputPath:                  "/media/movie.mkv",
+		OutputDir:                  "/tmp/out",
+		SessionID:                  "session-firefox-resume",
+		SourceVideoCodec:           "hevc",
+		TargetCodecVideo:           "copy",
+		TargetCodecAudio:           "aac",
+		VideoBitstreamFilter:       DV7ToHDR10BitstreamFilter,
+		DropInitialLeadingPictures: true,
+		VideoSampleEntry:           VideoSampleEntryHEV1V3,
+		SeekSeconds:                983.178,
+		SegmentDuration:            2,
+	})
+
+	combined := DropInitialLeadingPicturesBitstreamFilter + "," + DV7ToHDR10BitstreamFilter
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-c:v copy -bsf:v "+combined+" -tag:v hev1") {
+		t.Fatalf("resumed Firefox copy-HLS filter chain = %s, want %q", joined, combined)
+	}
+
+	zeroStart := buildFFmpegArgs(TranscodeOpts{
+		InputPath:                  "/media/movie.mkv",
+		OutputDir:                  "/tmp/out",
+		SessionID:                  "session-firefox-zero",
+		SourceVideoCodec:           "hevc",
+		TargetCodecVideo:           "copy",
+		TargetCodecAudio:           "aac",
+		VideoBitstreamFilter:       DV7ToHDR10BitstreamFilter,
+		DropInitialLeadingPictures: true,
+		SegmentDuration:            2,
+	})
+	zeroJoined := strings.Join(zeroStart, " ")
+	if strings.Contains(zeroJoined, DropInitialLeadingPicturesBitstreamFilter) || !strings.Contains(zeroJoined, "-bsf:v "+DV7ToHDR10BitstreamFilter) {
+		t.Fatalf("zero-start copy-HLS changed its filter recipe: %s", zeroJoined)
+	}
+
+	encoded := buildFFmpegArgs(TranscodeOpts{
+		InputPath:                  "/media/movie.mkv",
+		OutputDir:                  "/tmp/out",
+		SessionID:                  "session-h264",
+		SourceVideoCodec:           "hevc",
+		TargetCodecVideo:           "h264",
+		TargetCodecAudio:           "aac",
+		DropInitialLeadingPictures: true,
+		SegmentDuration:            2,
+	})
+	if strings.Contains(strings.Join(encoded, " "), DropInitialLeadingPicturesBitstreamFilter) {
+		t.Fatalf("encoded-video HLS received the copy-only filter: %s", strings.Join(encoded, " "))
 	}
 }
 

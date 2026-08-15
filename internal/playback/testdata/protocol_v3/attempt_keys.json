@@ -19,10 +19,10 @@
   },
   {
     "name": "direct_device_quirk_and_runtime_correction_identity",
-    "server_plan_attempt_key": "v3:32a3a37d71bc4f43",
-    "replan_echo": "v3:32a3a37d71bc4f43",
+    "server_plan_attempt_key": "v3:392b54d763d3fe72",
+    "replan_echo": "v3:392b54d763d3fe72",
     "attempted_plan_keys": [
-      "v3:32a3a37d71bc4f43"
+      "v3:392b54d763d3fe72"
     ],
     "expected_server_action": "reject_already_attempted_plan"
   }

@@ -824,6 +824,7 @@ func TestPlanPlaybackV3WebHLSJSKeepsProgressiveDolbyRouteFirst(t *testing.T) {
 
 			req := validStartRequestV3()
 			req.ClientPlaybackContext.Device.Platform = "web"
+			req.ClientPlaybackContext.Device.PlatformDetails = map[string]string{"user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0"}
 			req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
 			req.Capabilities.HDRDetails = &HDRCapabilitiesV3{HDR10: true}
 			req.ClientPlaybackContext.Output.HDRDetails = req.Capabilities.HDRDetails
@@ -843,6 +844,9 @@ func TestPlanPlaybackV3WebHLSJSKeepsProgressiveDolbyRouteFirst(t *testing.T) {
 			if result.PlayMethod != PlayRemux || result.Plan.EffectiveRecipe.VideoCodec != "hevc" || result.Plan.EffectiveMediaFileID != file.ID {
 				t.Fatalf("the first browser route did not keep the 4K HEVC remux: %#v", result)
 			}
+			if !result.DropInitialLeadingPictures || len(result.Plan.AppliedQuirks) != 1 || result.Plan.AppliedQuirks[0].ID != QuirkFirefoxHEVCOpenGOPV3 {
+				t.Fatalf("Firefox progressive resume recipe was not frozen: %#v", result)
+			}
 
 			input.AttemptedKeys = []string{PlanAttemptKeyV3(*result.Plan, req.ClientPlaybackContext.Output.OutputContextID, nil)}
 			fallback := PlanPlaybackV3(input)
@@ -851,6 +855,9 @@ func TestPlanPlaybackV3WebHLSJSKeepsProgressiveDolbyRouteFirst(t *testing.T) {
 			}
 			if fallback.Plan.EffectiveRecipe.VideoSampleEntry != VideoSampleEntryHEV1V3 {
 				t.Fatalf("hls.js recovery sample entry = %q, want hev1", fallback.Plan.EffectiveRecipe.VideoSampleEntry)
+			}
+			if !fallback.DropInitialLeadingPictures || len(fallback.Plan.AppliedQuirks) != 1 || fallback.Plan.AppliedQuirks[0].ID != QuirkFirefoxHEVCOpenGOPV3 {
+				t.Fatalf("Firefox HLS resume recipe was not frozen: %#v", fallback)
 			}
 		})
 	}

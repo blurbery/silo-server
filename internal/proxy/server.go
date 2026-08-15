@@ -366,12 +366,13 @@ func (s *Server) handleRemux(w http.ResponseWriter, r *http.Request) {
 	// legacy auto behavior for old tokens), mirroring how the integrated
 	// server's stream handler serves the same claims.
 	_ = playback.ServeRemuxWithOptions(w, r, claims.MediaPath, "mp4", seekSeconds, claims.TranscodeAudio, claims.AudioTrackIndex, claims.DVProfile, playback.RemuxServeOptions{
-		DVMode:                 playback.RemuxDVMode(claims.RemuxDVMode),
-		FFmpegPath:             s.watcher.Config().Playback.FFmpegPath,
-		ContentType:            playback.RemuxContentType(claims.AudioOnly),
-		AudioOnly:              claims.AudioOnly,
-		TargetAudioChannels:    claims.TargetAudioChannels,
-		TargetAudioBitrateKbps: claims.TargetAudioBitrateKbps,
+		DVMode:                     playback.RemuxDVMode(claims.RemuxDVMode),
+		DropInitialLeadingPictures: claims.DropInitialLeadingPictures,
+		FFmpegPath:                 s.watcher.Config().Playback.FFmpegPath,
+		ContentType:                playback.RemuxContentType(claims.AudioOnly),
+		AudioOnly:                  claims.AudioOnly,
+		TargetAudioChannels:        claims.TargetAudioChannels,
+		TargetAudioBitrateKbps:     claims.TargetAudioBitrateKbps,
 	})
 }
 

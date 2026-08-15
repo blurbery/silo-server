@@ -9,35 +9,36 @@ import (
 
 func TestRecipeCardRoundTripOpts(t *testing.T) {
 	opts := TranscodeOpts{
-		InputPath:              "/media/movie.mkv",
-		OutputDir:              "/tmp/silo-transcode/abc",
-		SessionID:              "abc",
-		SourceVideoCodec:       "hevc",
-		SourceVideoProfile:     "Main 10",
-		SourceVideoBitDepth:    10,
-		SoftwareVideoDecode:    true,
-		VideoBitstreamFilter:   DV7ToHDR10BitstreamFilter,
-		VideoSampleEntry:       VideoSampleEntryHEV1V3,
-		RemuxDVMode:            RemuxDVStripToHDR10V3,
-		SeekSeconds:            900,
-		StreamOriginSeconds:    896,
-		CopySeekAnchorResolved: true,
-		TargetResolution:       "1080p",
-		TargetCodecVideo:       "h264",
-		TargetCodecAudio:       "aac",
-		TargetAudioChannels:    1,
-		TargetAudioBitrateKbps: 96,
-		SegmentDuration:        2,
-		StartSegmentNumber:     450,
-		HWAccel:                "qsv",
-		HWDevice:               "/dev/dri/renderD128",
-		SubtitleTrackIndex:     3,
-		SubtitleBurnIn:         true,
-		SubtitleCodec:          "hdmv_pgs_subtitle",
-		AudioTrackIndex:        1,
-		TargetBitrateKbps:      8000,
-		TotalDuration:          7200,
-		FastStart:              true,
+		InputPath:                  "/media/movie.mkv",
+		OutputDir:                  "/tmp/silo-transcode/abc",
+		SessionID:                  "abc",
+		SourceVideoCodec:           "hevc",
+		SourceVideoProfile:         "Main 10",
+		SourceVideoBitDepth:        10,
+		SoftwareVideoDecode:        true,
+		VideoBitstreamFilter:       DV7ToHDR10BitstreamFilter,
+		DropInitialLeadingPictures: true,
+		VideoSampleEntry:           VideoSampleEntryHEV1V3,
+		RemuxDVMode:                RemuxDVStripToHDR10V3,
+		SeekSeconds:                900,
+		StreamOriginSeconds:        896,
+		CopySeekAnchorResolved:     true,
+		TargetResolution:           "1080p",
+		TargetCodecVideo:           "copy",
+		TargetCodecAudio:           "aac",
+		TargetAudioChannels:        1,
+		TargetAudioBitrateKbps:     96,
+		SegmentDuration:            2,
+		StartSegmentNumber:         450,
+		HWAccel:                    "qsv",
+		HWDevice:                   "/dev/dri/renderD128",
+		SubtitleTrackIndex:         3,
+		SubtitleBurnIn:             true,
+		SubtitleCodec:              "hdmv_pgs_subtitle",
+		AudioTrackIndex:            1,
+		TargetBitrateKbps:          8000,
+		TotalDuration:              7200,
+		FastStart:                  true,
 	}
 
 	card := NewRecipeCard(42, "profile-1", 77, "", opts)
@@ -65,7 +66,7 @@ func TestRecipeCardRoundTripOpts(t *testing.T) {
 	if got.AudioTrackIndex != 1 || got.SubtitleTrackIndex != 3 {
 		t.Errorf("track indices wrong: audio=%d sub=%d", got.AudioTrackIndex, got.SubtitleTrackIndex)
 	}
-	if got.TargetCodecVideo != "h264" || got.TargetBitrateKbps != 8000 {
+	if got.TargetCodecVideo != "copy" || got.TargetBitrateKbps != 8000 {
 		t.Errorf("encode params wrong: %+v", got)
 	}
 	if got.TargetAudioChannels != 1 || got.TargetAudioBitrateKbps != 96 {
@@ -73,6 +74,9 @@ func TestRecipeCardRoundTripOpts(t *testing.T) {
 	}
 	if got.VideoBitstreamFilter != DV7ToHDR10BitstreamFilter {
 		t.Errorf("VideoBitstreamFilter = %q", got.VideoBitstreamFilter)
+	}
+	if !got.DropInitialLeadingPictures {
+		t.Error("DropInitialLeadingPictures lost in round trip")
 	}
 	if got.VideoSampleEntry != VideoSampleEntryHEV1V3 {
 		t.Errorf("VideoSampleEntry = %q", got.VideoSampleEntry)
@@ -161,7 +165,7 @@ func TestReconstructSessionRestoresClientMetadata(t *testing.T) {
 	tm := NewTranscodeManager()
 	tm.Sessions = NewSessionManager(0, 0)
 
-	card := NewRecipeCard(42, "profile-1", 77, "", TranscodeOpts{SessionID: "sess-jf", InputPath: "/media/movie.mkv"})
+	card := NewRecipeCard(42, "profile-1", 77, "", TranscodeOpts{SessionID: "sess-jf", InputPath: "/media/movie.mkv", SourceVideoCodec: "hevc", TargetCodecVideo: "copy", DropInitialLeadingPictures: true})
 	card.ClientName = "Findroid"
 	card.ClientVersion = "0.15"
 	card.ClientUserAgent = "Findroid/0.15 (Android)"
@@ -175,6 +179,9 @@ func TestReconstructSessionRestoresClientMetadata(t *testing.T) {
 	}
 	if !session.TranscodeAudio {
 		t.Fatal("TranscodeAudio must be restored from the card (aac default re-encodes)")
+	}
+	if !session.DropInitialLeadingPictures {
+		t.Fatal("DropInitialLeadingPictures must survive session reconstruction")
 	}
 }
 
@@ -223,32 +230,33 @@ func TestRecipeCardLegacyDecodeHasEmptyPlayMethod(t *testing.T) {
 // not asserted here.
 func TestRecipeCardClaimsRoundTrip(t *testing.T) {
 	card := NewRecipeCard(42, "profile-1", 77, "http://node:9000", TranscodeOpts{
-		InputPath:              "/media/movie.mkv",
-		SessionID:              "abc",
-		SourceVideoCodec:       "hevc",
-		SourceVideoProfile:     "Main 10",
-		SourceVideoBitDepth:    10,
-		SoftwareVideoDecode:    true,
-		VideoBitstreamFilter:   DV7ToHDR10BitstreamFilter,
-		VideoSampleEntry:       VideoSampleEntryHEV1V3,
-		RemuxDVMode:            RemuxDVStripToHDR10V3,
-		SeekSeconds:            900,
-		StreamOriginSeconds:    896,
-		CopySeekAnchorResolved: true,
-		TargetResolution:       "1080p",
-		TargetCodecVideo:       "h264",
-		TargetCodecAudio:       "aac",
-		TargetAudioChannels:    6,
-		TargetAudioBitrateKbps: 320,
-		SegmentDuration:        2,
-		StartSegmentNumber:     450,
-		SubtitleTrackIndex:     3,
-		SubtitleBurnIn:         true,
-		SubtitleCodec:          "hdmv_pgs_subtitle",
-		AudioTrackIndex:        1,
-		TargetBitrateKbps:      8000,
-		TotalDuration:          7200,
-		FastStart:              true,
+		InputPath:                  "/media/movie.mkv",
+		SessionID:                  "abc",
+		SourceVideoCodec:           "hevc",
+		SourceVideoProfile:         "Main 10",
+		SourceVideoBitDepth:        10,
+		SoftwareVideoDecode:        true,
+		VideoBitstreamFilter:       DV7ToHDR10BitstreamFilter,
+		DropInitialLeadingPictures: true,
+		VideoSampleEntry:           VideoSampleEntryHEV1V3,
+		RemuxDVMode:                RemuxDVStripToHDR10V3,
+		SeekSeconds:                900,
+		StreamOriginSeconds:        896,
+		CopySeekAnchorResolved:     true,
+		TargetResolution:           "1080p",
+		TargetCodecVideo:           "copy",
+		TargetCodecAudio:           "aac",
+		TargetAudioChannels:        6,
+		TargetAudioBitrateKbps:     320,
+		SegmentDuration:            2,
+		StartSegmentNumber:         450,
+		SubtitleTrackIndex:         3,
+		SubtitleBurnIn:             true,
+		SubtitleCodec:              "hdmv_pgs_subtitle",
+		AudioTrackIndex:            1,
+		TargetBitrateKbps:          8000,
+		TotalDuration:              7200,
+		FastStart:                  true,
 	})
 
 	claims := card.ToClaims()
@@ -265,6 +273,7 @@ func TestRecipeCardClaimsRoundTrip(t *testing.T) {
 		got.SourceVideoProfile != card.SourceVideoProfile || got.SourceVideoBitDepth != card.SourceVideoBitDepth ||
 		got.SoftwareVideoDecode != card.SoftwareVideoDecode ||
 		got.VideoBitstreamFilter != card.VideoBitstreamFilter ||
+		got.DropInitialLeadingPictures != card.DropInitialLeadingPictures ||
 		got.VideoSampleEntry != card.VideoSampleEntry ||
 		got.RemuxDVMode != card.RemuxDVMode ||
 		got.SeekSeconds != card.SeekSeconds || got.StreamOriginSeconds != card.StreamOriginSeconds ||

@@ -28,6 +28,34 @@ func TestBuildRemuxArgsStripsDolbyVisionRPUForProfile7(t *testing.T) {
 	}
 }
 
+func TestBuildRemuxArgsNormalizesOnlyResumedFlaggedVideo(t *testing.T) {
+	combined := DropInitialLeadingPicturesBitstreamFilter + "," + DV7ToHDR10BitstreamFilter
+	resumed := buildRemuxArgsWithAudioV3("/movie.mkv", "mp4", 983.178, true, 0, 7, true, false, 2, 192, true)
+	if !argsContainPair(resumed, "-bsf:v", combined) {
+		t.Fatalf("resumed Firefox HEVC filter chain = %s, want %q", strings.Join(resumed, " "), combined)
+	}
+
+	zeroStart := buildRemuxArgsWithAudioV3("/movie.mkv", "mp4", 0, true, 0, 7, true, false, 2, 192, true)
+	if !argsContainPair(zeroStart, "-bsf:v", DV7ToHDR10BitstreamFilter) || argsContainPair(zeroStart, "-bsf:v", combined) {
+		t.Fatalf("zero-start remux changed its filter recipe: %s", strings.Join(zeroStart, " "))
+	}
+
+	unflagged := buildRemuxArgsWithAudioV3("/movie.mkv", "mp4", 983.178, true, 0, 7, true, false, 2, 192, false)
+	if !argsContainPair(unflagged, "-bsf:v", DV7ToHDR10BitstreamFilter) || strings.Contains(strings.Join(unflagged, " "), DropInitialLeadingPicturesBitstreamFilter) {
+		t.Fatalf("unflagged remux changed its filter recipe: %s", strings.Join(unflagged, " "))
+	}
+
+	preservedDV := buildRemuxArgsWithAudioV3("/movie.mkv", "mp4", 983.178, false, 0, 8, true, false, 0, 0, true)
+	if !argsContainPair(preservedDV, "-bsf:v", DropInitialLeadingPicturesBitstreamFilter) || strings.Contains(strings.Join(preservedDV, " "), DV7ToHDR10BitstreamFilter) {
+		t.Fatalf("Profile 8 preserve resume did not get only the leading-picture filter: %s", strings.Join(preservedDV, " "))
+	}
+
+	audioOnly := buildRemuxArgsWithAudioV3("/book.m4b", "mp4", 983.178, true, 0, 0, false, true, 2, 192, true)
+	if strings.Contains(strings.Join(audioOnly, " "), DropInitialLeadingPicturesBitstreamFilter) {
+		t.Fatalf("audio-only remux received a video filter: %s", strings.Join(audioOnly, " "))
+	}
+}
+
 func TestBuildRemuxArgsExcludesAttachedPictures(t *testing.T) {
 	args := buildRemuxArgs("/book.m4b", "mp4", 0, true, -1, 0, false, true)
 	joined := strings.Join(args, " ")
@@ -37,7 +65,7 @@ func TestBuildRemuxArgsExcludesAttachedPictures(t *testing.T) {
 }
 
 func TestBuildRemuxArgsHonorsPlannedAACOutput(t *testing.T) {
-	args := buildRemuxArgsWithAudioV3("/book.m4b", "mp4", 0, true, -1, 0, false, true, 1, 96)
+	args := buildRemuxArgsWithAudioV3("/book.m4b", "mp4", 0, true, -1, 0, false, true, 1, 96, false)
 	if !argsContainPair(args, "-ac", "1") || !argsContainPair(args, "-b:a", "96k") {
 		t.Fatalf("planned mono bitrate missing from remux args: %s", strings.Join(args, " "))
 	}
