@@ -47,6 +47,9 @@ type Claims struct {
 	// RemuxDVMode freezes whether a remux preserves Dolby Vision or removes it
 	// for a validated HDR10/HLG/SDR base layer. Empty is legacy auto behavior.
 	RemuxDVMode string `json:"dvm,omitempty"`
+	// DropInitialLeadingPictures enables the bounded HEVC open-GOP resume
+	// normalization selected by the signed server-side playback recipe.
+	DropInitialLeadingPictures bool `json:"dilp,omitempty"`
 
 	// Ownership / authorization lookup keys (re-resolved at reconstruct).
 	// Not trust assertions.

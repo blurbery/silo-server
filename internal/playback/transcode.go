@@ -44,6 +44,10 @@ type TranscodeOpts struct {
 	SourceVideoProfile   string
 	SourceVideoBitDepth  int
 	VideoBitstreamFilter string // validated copy-mode BSF, e.g. DV7ToHDR10BitstreamFilter
+	// DropInitialLeadingPictures enables the Firefox HEVC open-GOP resume
+	// normalization. It is typed so callers cannot inject an arbitrary FFmpeg
+	// bitstream-filter expression through a signed reconstruction recipe.
+	DropInitialLeadingPictures bool
 	// VideoSampleEntry is the exact HEVC MP4/fMP4 sample entry selected by the
 	// protocol-v3 plan (hev1, hvc1, or dvh1). It is carried independently from
 	// the Dolby transform so native Apple HLS packaging cannot leak into a
@@ -108,6 +112,11 @@ type TranscodeOpts struct {
 // the Dolby Vision configuration/RPUs; filter_units removes the interleaved
 // UNSPEC63 enhancement-layer NAL units that stream mapping cannot separate.
 const DV7ToHDR10BitstreamFilter = "dovi_rpu=strip=1,filter_units=remove_types=63"
+
+// DropInitialLeadingPicturesBitstreamFilter removes only non-key HEVC packets
+// whose presentation timestamp precedes the first packet in a resumed copy.
+// The escaped comma is part of one FFmpeg argv token.
+const DropInitialLeadingPicturesBitstreamFilter = `noise=drop=lt(pts\,startpts)*not(key)`
 
 const (
 	transcodeCodecH264 = "h264"
@@ -221,6 +230,10 @@ const (
 
 // StartTranscode launches an ffmpeg process that produces HLS segments.
 func StartTranscode(ctx context.Context, opts TranscodeOpts) (*TranscodeSession, error) {
+	if opts.DropInitialLeadingPictures &&
+		(!strings.EqualFold(opts.TargetCodecVideo, "copy") || !strings.EqualFold(opts.SourceVideoCodec, "hevc")) {
+		return nil, fmt.Errorf("initial leading-picture normalization requires HEVC video copy")
+	}
 	if opts.VideoBitstreamFilter != "" &&
 		(opts.VideoBitstreamFilter != DV7ToHDR10BitstreamFilter || !strings.EqualFold(opts.TargetCodecVideo, "copy")) {
 		return nil, fmt.Errorf("unsupported video bitstream filter recipe")
@@ -473,8 +486,8 @@ func buildFFmpegArgs(opts TranscodeOpts) []string {
 	// Video codec and encoding settings.
 	if isVideoCopy {
 		args = append(args, "-c:v", "copy")
-		if opts.VideoBitstreamFilter == DV7ToHDR10BitstreamFilter {
-			args = append(args, "-bsf:v", opts.VideoBitstreamFilter)
+		if bitstreamFilter := copyVideoBitstreamFilter(opts); bitstreamFilter != "" {
+			args = append(args, "-bsf:v", bitstreamFilter)
 		}
 		if opts.VideoSampleEntry != "" {
 			args = append(args, "-tag:v", opts.VideoSampleEntry)
@@ -552,6 +565,18 @@ func buildFFmpegArgs(opts TranscodeOpts) []string {
 	args = append(args, manifestPath)
 
 	return args
+}
+
+func copyVideoBitstreamFilter(opts TranscodeOpts) string {
+	filters := make([]string, 0, 2)
+	if opts.DropInitialLeadingPictures && opts.SeekSeconds > 0 &&
+		strings.EqualFold(opts.TargetCodecVideo, "copy") && strings.EqualFold(opts.SourceVideoCodec, "hevc") {
+		filters = append(filters, DropInitialLeadingPicturesBitstreamFilter)
+	}
+	if opts.VideoBitstreamFilter == DV7ToHDR10BitstreamFilter {
+		filters = append(filters, DV7ToHDR10BitstreamFilter)
+	}
+	return strings.Join(filters, ",")
 }
 
 func resolveEffectiveTranscodeHWAccel(opts TranscodeOpts) string {

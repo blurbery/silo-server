@@ -14,20 +14,21 @@ import (
 
 // Session represents an active playback session.
 type Session struct {
-	ID                   string
-	UserID               int
-	ProfileID            string
-	MediaFileID          int
-	RequestedMediaFileID int
-	PlayMethod           PlayMethod
-	BasePlayMethod       PlayMethod
-	TranscodeAudio       bool // when true, remux should transcode audio to AAC
-	RemuxDVMode          RemuxDVMode
-	ClientIP             string // resolved client IP for the playback session
-	ClientName           string // reported playback client name, when available
-	ClientVersion        string // reported playback client version, when available
-	ClientUserAgent      string // trimmed request user agent for the playback session
-	IsJellyfinCompat     bool   // immutable origin identity for Jellyfin compatibility sessions
+	ID                         string
+	UserID                     int
+	ProfileID                  string
+	MediaFileID                int
+	RequestedMediaFileID       int
+	PlayMethod                 PlayMethod
+	BasePlayMethod             PlayMethod
+	TranscodeAudio             bool // when true, remux should transcode audio to AAC
+	RemuxDVMode                RemuxDVMode
+	DropInitialLeadingPictures bool
+	ClientIP                   string // resolved client IP for the playback session
+	ClientName                 string // reported playback client name, when available
+	ClientVersion              string // reported playback client version, when available
+	ClientUserAgent            string // trimmed request user agent for the playback session
+	IsJellyfinCompat           bool   // immutable origin identity for Jellyfin compatibility sessions
 
 	TranscodeNodeURL     string // URL of assigned transcode node (empty = local/integrated)
 	TranscodeTransportID string // remote node process identity; empty means session ID
@@ -72,26 +73,27 @@ type Session struct {
 // change after a session is created (audio track, client IP, transcode target,
 // and reported bitrate).
 type SessionStreamState struct {
-	PlayMethod             PlayMethod
-	BasePlayMethod         PlayMethod
-	AudioTrackIndex        int
-	TranscodeAudio         bool
-	RemuxDVMode            RemuxDVMode
-	ClientIP               string
-	ClientName             string
-	ClientVersion          string
-	ClientUserAgent        string
-	StreamBitrateKbps      int
-	TargetResolution       string
-	TargetVideoCodec       string
-	TargetAudioCodec       string
-	TargetAudioChannels    int
-	TargetAudioBitrateKbps int
-	TargetBitrateKbps      int
-	TranscodeHWAccel       string
-	TranscodeNodeURL       string
-	TranscodeTransportID   string
-	TranscodeRouteSet      bool
+	PlayMethod                 PlayMethod
+	BasePlayMethod             PlayMethod
+	AudioTrackIndex            int
+	TranscodeAudio             bool
+	RemuxDVMode                RemuxDVMode
+	DropInitialLeadingPictures bool
+	ClientIP                   string
+	ClientName                 string
+	ClientVersion              string
+	ClientUserAgent            string
+	StreamBitrateKbps          int
+	TargetResolution           string
+	TargetVideoCodec           string
+	TargetAudioCodec           string
+	TargetAudioChannels        int
+	TargetAudioBitrateKbps     int
+	TargetBitrateKbps          int
+	TranscodeHWAccel           string
+	TranscodeNodeURL           string
+	TranscodeTransportID       string
+	TranscodeRouteSet          bool
 
 	// Byte-affecting transcode recipe fields preserved so an offloaded restart
 	// (e.g. audio switch) can rebuild the exact same stream. SubtitleTrackIndex
@@ -766,8 +768,14 @@ func applySessionStreamStateLocked(s *Session, state SessionStreamState) {
 		// later remux request fails the profile check. Legacy partial updates
 		// never carry a mode and must not clobber one.
 		s.RemuxDVMode = state.RemuxDVMode
-	} else if state.RemuxDVMode != "" {
-		s.RemuxDVMode = state.RemuxDVMode
+		s.DropInitialLeadingPictures = state.DropInitialLeadingPictures
+	} else {
+		if state.RemuxDVMode != "" {
+			s.RemuxDVMode = state.RemuxDVMode
+		}
+		if state.DropInitialLeadingPictures {
+			s.DropInitialLeadingPictures = true
+		}
 	}
 	s.ClientIP = state.ClientIP
 	if value := normalizeClientMetadataValue(state.ClientName, 128); value != "" {
@@ -804,29 +812,30 @@ func applySessionStreamStateLocked(s *Session, state SessionStreamState) {
 
 func snapshotSessionStreamStateLocked(s *Session) SessionStreamState {
 	return SessionStreamState{
-		PlayMethod:             s.PlayMethod,
-		BasePlayMethod:         s.BasePlayMethod,
-		AudioTrackIndex:        s.AudioTrackIndex,
-		TranscodeAudio:         s.TranscodeAudio,
-		RemuxDVMode:            s.RemuxDVMode,
-		ClientIP:               s.ClientIP,
-		ClientName:             s.ClientName,
-		ClientVersion:          s.ClientVersion,
-		ClientUserAgent:        s.ClientUserAgent,
-		StreamBitrateKbps:      s.StreamBitrateKbps,
-		TargetResolution:       s.TargetResolution,
-		TargetVideoCodec:       s.TargetVideoCodec,
-		TargetAudioCodec:       s.TargetAudioCodec,
-		TargetAudioChannels:    s.TargetAudioChannels,
-		TargetAudioBitrateKbps: s.TargetAudioBitrateKbps,
-		TargetBitrateKbps:      s.TargetBitrateKbps,
-		TranscodeHWAccel:       s.TranscodeHWAccel,
-		TranscodeNodeURL:       s.TranscodeNodeURL,
-		TranscodeTransportID:   s.TranscodeTransportID,
-		TranscodeRouteSet:      true,
-		SubtitleTrackIndex:     s.SubtitleTrackIndex,
-		SubtitleBurnIn:         s.SubtitleBurnIn,
-		SegmentDuration:        s.SegmentDuration,
+		PlayMethod:                 s.PlayMethod,
+		BasePlayMethod:             s.BasePlayMethod,
+		AudioTrackIndex:            s.AudioTrackIndex,
+		TranscodeAudio:             s.TranscodeAudio,
+		RemuxDVMode:                s.RemuxDVMode,
+		DropInitialLeadingPictures: s.DropInitialLeadingPictures,
+		ClientIP:                   s.ClientIP,
+		ClientName:                 s.ClientName,
+		ClientVersion:              s.ClientVersion,
+		ClientUserAgent:            s.ClientUserAgent,
+		StreamBitrateKbps:          s.StreamBitrateKbps,
+		TargetResolution:           s.TargetResolution,
+		TargetVideoCodec:           s.TargetVideoCodec,
+		TargetAudioCodec:           s.TargetAudioCodec,
+		TargetAudioChannels:        s.TargetAudioChannels,
+		TargetAudioBitrateKbps:     s.TargetAudioBitrateKbps,
+		TargetBitrateKbps:          s.TargetBitrateKbps,
+		TranscodeHWAccel:           s.TranscodeHWAccel,
+		TranscodeNodeURL:           s.TranscodeNodeURL,
+		TranscodeTransportID:       s.TranscodeTransportID,
+		TranscodeRouteSet:          true,
+		SubtitleTrackIndex:         s.SubtitleTrackIndex,
+		SubtitleBurnIn:             s.SubtitleBurnIn,
+		SegmentDuration:            s.SegmentDuration,
 	}
 }
 
@@ -836,6 +845,7 @@ func restoreSessionStreamStateLocked(s *Session, state SessionStreamState) {
 	s.AudioTrackIndex = state.AudioTrackIndex
 	s.TranscodeAudio = state.TranscodeAudio
 	s.RemuxDVMode = state.RemuxDVMode
+	s.DropInitialLeadingPictures = state.DropInitialLeadingPictures
 	s.ClientIP = state.ClientIP
 	s.ClientName = state.ClientName
 	s.ClientVersion = state.ClientVersion

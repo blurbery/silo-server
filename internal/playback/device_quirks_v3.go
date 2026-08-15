@@ -6,6 +6,7 @@ const (
 	QuirkFireTVAFTKRTHigh10V3  = "android.fire_tv.aftkrt.h264_high10_l52_v1"
 	QuirkFireTVAFTKRTEAC3HLSV3 = "android.fire_tv.aftkrt.eac3_7_1_hls_audio_adapt_v1"
 	QuirkFireTVDV8HDR10PlusV3  = "android.fire_tv.dv8_hdr10plus_sei_v1"
+	QuirkFirefoxHEVCOpenGOPV3  = "web.firefox.hevc_open_gop_resume_v1"
 )
 
 func high10DecodeOverrideV3(source SourceDescriptorV3, request StartRequestV3) (*AppliedQuirkV3, bool) {
@@ -60,6 +61,39 @@ func dv8HDR10PlusRuntimeCorrectionV3(source SourceDescriptorV3, request StartReq
 		Reason:           "The native Fire TV Dolby Vision path requires HDR10+ dynamic-metadata SEI removal for hybrid Profile 8 samples.",
 	}
 	return &quirk, true
+}
+
+// firefoxHEVCOpenGOPQuirkV3 marks copied HEVC remux recipes whose resumed
+// byte stream needs its initial open-GOP leading pictures normalized. Firefox
+// rejects those pre-key pictures after a demuxer seek even though it decodes
+// the same MKV from the beginning. The serving layer executes the filter only
+// for a non-zero seek, but the plan freezes the quirk from the first start so a
+// later seek reanchor cannot lose the byte recipe.
+func firefoxHEVCOpenGOPQuirkV3(source SourceDescriptorV3, request StartRequestV3) (*AppliedQuirkV3, bool) {
+	device := request.ClientPlaybackContext.Device
+	if !strings.EqualFold(device.Platform, "web") || !strings.EqualFold(source.VideoCodec, "hevc") {
+		return nil, false
+	}
+	userAgent := strings.ToLower(strings.TrimSpace(device.PlatformDetails["user_agent"]))
+	if !strings.Contains(userAgent, "firefox/") || strings.Contains(userAgent, "seamonkey/") {
+		return nil, false
+	}
+	quirk := AppliedQuirkV3{
+		ID:               QuirkFirefoxHEVCOpenGOPV3,
+		RegistryRevision: DeviceQuirkRegistryRevisionV3,
+		Action:           "server_copy_bitstream_normalization",
+		Reason:           "Firefox HEVC resume requires initial open-GOP leading pictures to be removed after a server-side seek.",
+	}
+	return &quirk, true
+}
+
+func applyFirefoxHEVCOpenGOPQuirkV3(plan *PlanV3, source SourceDescriptorV3, request StartRequestV3) bool {
+	quirk, ok := firefoxHEVCOpenGOPQuirkV3(source, request)
+	if !ok {
+		return false
+	}
+	appendAppliedQuirkV3(plan, *quirk, "")
+	return true
 }
 
 func applyCopiedVideoQuirksV3(plan *PlanV3, source SourceDescriptorV3, request StartRequestV3, high10 *AppliedQuirkV3) {

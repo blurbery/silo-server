@@ -2337,7 +2337,7 @@ func TestPrepareTransportV3ProgressiveRemuxUsesResolvedCopyAnchor(t *testing.T) 
 			EffectiveMediaFileID: 42,
 			Timeline:             playback.TimelineV3{SourceStartSeconds: requested, PlayerStartSeconds: requested, CanSeekAnywhere: true, SeekRestoration: "player_position"},
 		}
-		transport, transportErr := handler.prepareTransportV3(httptest.NewRequest(http.MethodPost, "/", nil), session, file, playback.PlannerResultV3{Plan: plan, PlayMethod: playback.PlayRemux})
+		transport, transportErr := handler.prepareTransportV3(httptest.NewRequest(http.MethodPost, "/", nil), session, file, playback.PlannerResultV3{Plan: plan, PlayMethod: playback.PlayRemux, DropInitialLeadingPictures: true})
 		if transportErr != nil {
 			t.Fatalf("prepare progressive transport: %v", transportErr)
 		}
@@ -2350,6 +2350,11 @@ func TestPrepareTransportV3ProgressiveRemuxUsesResolvedCopyAnchor(t *testing.T) 
 		if parsed.Query().Get("st") == "" || parsed.Query().Get("seek") != strconv.FormatFloat(requested, 'f', -1, 64) {
 			transport.rollback()
 			t.Fatalf("progressive reanchor URL %d = %q", index, transport.url)
+		}
+		claims, err := streamtoken.Verify(parsed.Query().Get("st"), handler.JWTSecret)
+		if err != nil || !claims.DropInitialLeadingPictures {
+			transport.rollback()
+			t.Fatalf("progressive resume token lost leading-picture recipe: claims=%#v err=%v", claims, err)
 		}
 		origin := requested - 0.75
 		if plan.Timeline.PlayerStartSeconds != 0.75 || plan.Timeline.StreamOriginSeconds != origin ||

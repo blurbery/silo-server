@@ -120,10 +120,10 @@ const (
 // decoder). Profile 8 RPUs stay: the base layer is self-contained and DV
 // clients can render it.
 func buildRemuxArgs(filePath, outputFormat string, seekSeconds float64, transcodeAudio bool, audioTrackIndex int, dvProfile int, tagSampleEntry, audioOnly bool) []string {
-	return buildRemuxArgsWithAudioV3(filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, dvProfile, tagSampleEntry, audioOnly, 0, 0)
+	return buildRemuxArgsWithAudioV3(filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, dvProfile, tagSampleEntry, audioOnly, 0, 0, false)
 }
 
-func buildRemuxArgsWithAudioV3(filePath, outputFormat string, seekSeconds float64, transcodeAudio bool, audioTrackIndex int, dvProfile int, tagSampleEntry, audioOnly bool, targetAudioChannels, targetAudioBitrateKbps int) []string {
+func buildRemuxArgsWithAudioV3(filePath, outputFormat string, seekSeconds float64, transcodeAudio bool, audioTrackIndex int, dvProfile int, tagSampleEntry, audioOnly bool, targetAudioChannels, targetAudioBitrateKbps int, dropInitialLeadingPictures bool) []string {
 	args := []string{
 		"-nostdin",
 		"-hide_banner",
@@ -173,8 +173,17 @@ func buildRemuxArgsWithAudioV3(filePath, outputFormat string, seekSeconds float6
 	}
 	args = append(args, "-sn", "-dn")
 
+	videoBitstreamFilters := make([]string, 0, 2)
+	if dropInitialLeadingPictures && seekSeconds > 0 && !audioOnly {
+		videoBitstreamFilters = append(videoBitstreamFilters, DropInitialLeadingPicturesBitstreamFilter)
+	}
 	if dvProfile == 7 {
-		args = append(args, "-bsf:v", DV7ToHDR10BitstreamFilter)
+		videoBitstreamFilters = append(videoBitstreamFilters, DV7ToHDR10BitstreamFilter)
+	}
+	if len(videoBitstreamFilters) > 0 {
+		args = append(args, "-bsf:v", strings.Join(videoBitstreamFilters, ","))
+	}
+	if dvProfile == 7 {
 		if tagSampleEntry {
 			// The explicit v3 strip recipe promised the client plain HDR10.
 			// Safari's media element only answers "probably" for hvc1 — the
@@ -197,7 +206,6 @@ func buildRemuxArgsWithAudioV3(filePath, outputFormat string, seekSeconds float6
 		// keep the pre-v3 hev1 labeling their demuxers accept.
 		args = append(args, "-tag:v", "dvh1", "-strict", "unofficial")
 	}
-
 	if transcodeAudio {
 		channels, bitrateKbps := resolvedAACOutputV3(targetAudioChannels, targetAudioBitrateKbps)
 		// Video copy + AAC encode is effectively single-threaded work.
@@ -245,10 +253,10 @@ func StartRemux(ctx context.Context, filePath, outputFormat string, seekSeconds 
 // v3 callers must pass the configured playback path so the strip capability
 // promised by the planner's probe holds for the binary that actually runs.
 func StartRemuxWithDVMode(ctx context.Context, filePath, outputFormat string, seekSeconds float64, transcodeAudio bool, audioTrackIndex int, dvProfile int, mode RemuxDVMode, ffmpegPath string) (*RemuxSession, error) {
-	return startRemuxWithOptions(ctx, filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, dvProfile, mode, ffmpegPath, false, 0, 0)
+	return startRemuxWithOptions(ctx, filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, dvProfile, mode, ffmpegPath, false, 0, 0, false)
 }
 
-func startRemuxWithOptions(ctx context.Context, filePath, outputFormat string, seekSeconds float64, transcodeAudio bool, audioTrackIndex int, dvProfile int, mode RemuxDVMode, ffmpegPath string, audioOnly bool, targetAudioChannels, targetAudioBitrateKbps int) (*RemuxSession, error) {
+func startRemuxWithOptions(ctx context.Context, filePath, outputFormat string, seekSeconds float64, transcodeAudio bool, audioTrackIndex int, dvProfile int, mode RemuxDVMode, ffmpegPath string, audioOnly bool, targetAudioChannels, targetAudioBitrateKbps int, dropInitialLeadingPictures bool) (*RemuxSession, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
 	bin := ResolveFFmpegPath(ffmpegPath)
@@ -303,7 +311,7 @@ func startRemuxWithOptions(ctx context.Context, filePath, outputFormat string, s
 		cancel()
 		return nil, fmt.Errorf("unknown remux Dolby Vision mode %q", mode)
 	}
-	args := buildRemuxArgsWithAudioV3(filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, effectiveProfile, tagSampleEntry, audioOnly, targetAudioChannels, targetAudioBitrateKbps)
+	args := buildRemuxArgsWithAudioV3(filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, effectiveProfile, tagSampleEntry, audioOnly, targetAudioChannels, targetAudioBitrateKbps, dropInitialLeadingPictures)
 	cmd := exec.CommandContext(ctx, bin, args...)
 
 	stdout, err := cmd.StdoutPipe()
@@ -367,6 +375,9 @@ type RemuxServeOptions struct {
 	ContentType string
 	// AudioOnly permits the otherwise-mandatory video map to be absent.
 	AudioOnly bool
+	// DropInitialLeadingPictures applies the frozen Firefox HEVC resume recipe
+	// only for a non-zero seek. Zero-start and audio-only remuxes are unchanged.
+	DropInitialLeadingPictures bool
 	// TargetAudioChannels and TargetAudioBitrateKbps freeze the planned AAC
 	// output. Zero values retain the historical stereo 192 kbps behavior.
 	TargetAudioChannels    int
@@ -415,7 +426,7 @@ func ServeRemuxWithOptions(w http.ResponseWriter, r *http.Request, filePath, out
 		return err
 	}
 
-	session, err := startRemuxWithOptions(r.Context(), filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, dvProfile, mode, ffmpegPath, opts.AudioOnly, opts.TargetAudioChannels, opts.TargetAudioBitrateKbps)
+	session, err := startRemuxWithOptions(r.Context(), filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, dvProfile, mode, ffmpegPath, opts.AudioOnly, opts.TargetAudioChannels, opts.TargetAudioBitrateKbps, opts.DropInitialLeadingPictures)
 	if err != nil {
 		http.Error(w, "failed to start remux", http.StatusInternalServerError)
 		return err
