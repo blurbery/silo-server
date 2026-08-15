@@ -448,7 +448,7 @@ describe("VideoPlayer progressive resume timeline", () => {
     vi.restoreAllMocks();
   });
 
-  it("waits for Firefox's resumed fMP4 seek before autoplaying once", async () => {
+  it("plays Firefox's server-reanchored fMP4 without a second browser seek", async () => {
     const play = vi.mocked(HTMLMediaElement.prototype.play);
     const plan = fixturePlanV3({
       delivery: "server_remux_progressive",
@@ -473,23 +473,19 @@ describe("VideoPlayer progressive resume timeline", () => {
 
     await waitFor(() => expect(video.src).toContain("/api/v1/stream/session-1"));
     expect(video.currentTime).toBe(0);
-    expect(play).not.toHaveBeenCalled();
+    expect(play).toHaveBeenCalledOnce();
 
     fireEvent.loadedMetadata(video);
-    expect(video.currentTime).toBe(0.02);
-    expect(play).not.toHaveBeenCalled();
-
     Object.defineProperty(video, "readyState", { configurable: true, value: 3 });
     fireEvent.canPlay(video);
-    expect(play).not.toHaveBeenCalled();
-
     fireEvent.seeked(video);
     fireEvent.loadedData(video);
 
+    expect(video.currentTime).toBe(0);
     expect(play).toHaveBeenCalledOnce();
   });
 
-  it("applies Firefox's resume position without autoplay when playback is paused", async () => {
+  it("leaves Firefox's server-reanchored stream at its keyframe when paused", async () => {
     const play = vi.mocked(HTMLMediaElement.prototype.play);
     const plan = fixturePlanV3({
       delivery: "server_remux_progressive",
@@ -522,7 +518,7 @@ describe("VideoPlayer progressive resume timeline", () => {
     fireEvent.canPlay(video);
     fireEvent.seeked(video);
 
-    expect(video.currentTime).toBe(1.04);
+    expect(video.currentTime).toBe(0);
     expect(play).not.toHaveBeenCalled();
   });
 
@@ -551,7 +547,7 @@ describe("VideoPlayer progressive resume timeline", () => {
     expect(play).toHaveBeenCalledOnce();
   });
 
-  it("cannot autoplay from a stale Firefox seek after the transport plan changes", async () => {
+  it("starts each replacement Firefox reanchored stream without stale seek listeners", async () => {
     const play = vi.mocked(HTMLMediaElement.prototype.play);
     const firstPlan = fixturePlanV3({
       delivery: "server_remux_progressive",
@@ -577,19 +573,10 @@ describe("VideoPlayer progressive resume timeline", () => {
     const video = container.querySelector("video");
     if (!video) throw new Error("expected video element");
 
-    const seeks: number[] = [];
-    let mediaTime = 0;
-    Object.defineProperty(video, "currentTime", {
-      configurable: true,
-      get: () => mediaTime,
-      set: (value: number) => {
-        mediaTime = value;
-        seeks.push(value);
-      },
-    });
-
     fireEvent.loadedMetadata(video);
-    expect(seeks).toEqual([1.04]);
+    fireEvent.seeked(video);
+    expect(video.currentTime).toBe(0);
+    expect(play).toHaveBeenCalledOnce();
 
     const replacementPlan = fixturePlanV3({
       ...firstPlan,
@@ -607,16 +594,12 @@ describe("VideoPlayer progressive resume timeline", () => {
       initialPosition: 626.04,
     });
 
-    // This would complete the old plan's pending seek if cleanup had left its
-    // listener behind. It must not start either the discarded or new source.
     fireEvent.seeked(video);
-    expect(play).not.toHaveBeenCalled();
-
     fireEvent.loadedMetadata(video);
     fireEvent.seeked(video);
 
-    expect(seeks).toEqual([1.04, 2.04]);
-    expect(play).toHaveBeenCalledOnce();
+    expect(video.currentTime).toBe(0);
+    expect(play).toHaveBeenCalledTimes(2);
   });
 });
 

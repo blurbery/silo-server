@@ -1377,13 +1377,10 @@ export function VideoPlayer({
     let destroyed = false;
     let autoplayStarted = false;
     let nativeHLSMetadataHandler: (() => void) | null = null;
-    let progressiveResumeMetadataHandler: (() => void) | null = null;
-    let progressiveResumeSeekedHandler: (() => void) | null = null;
-    const deferFirefoxProgressiveResume =
+    const skipFirefoxProgressiveInitialSeek =
       isFirefoxBrowser &&
       plan.delivery === "server_remux_progressive" &&
-      effectiveInitialPosition > 0;
-    let progressiveResumePending = deferFirefoxProgressiveResume;
+      plan.timeline.stream_origin_seconds > 0;
 
     mediaRecoveryAttemptsRef.current = 0;
     setError(null);
@@ -1396,14 +1393,6 @@ export function VideoPlayer({
       if (nativeHLSMetadataHandler) {
         video.removeEventListener("loadedmetadata", nativeHLSMetadataHandler);
         nativeHLSMetadataHandler = null;
-      }
-      if (progressiveResumeMetadataHandler) {
-        video.removeEventListener("loadedmetadata", progressiveResumeMetadataHandler);
-        progressiveResumeMetadataHandler = null;
-      }
-      if (progressiveResumeSeekedHandler) {
-        video.removeEventListener("seeked", progressiveResumeSeekedHandler);
-        progressiveResumeSeekedHandler = null;
       }
     };
 
@@ -1423,7 +1412,6 @@ export function VideoPlayer({
     };
 
     const attemptAutoplayWhenReady = () => {
-      if (progressiveResumePending) return;
       // HAVE_FUTURE_DATA means the browser has enough media to advance beyond
       // the current frame. Starting HLS earlier can produce a visible first-
       // frame freeze where audio advances before video begins moving.
@@ -1574,34 +1562,18 @@ export function VideoPlayer({
           }
         }
       } else {
-        // Firefox can reject a resumed fragmented MP4 when source attachment,
-        // a non-zero seek, and play all race during decoder initialization.
-        // Keep its known-fast zero-start path (and every other browser) as-is;
-        // only a resumed progressive remux waits for metadata and its initial
-        // seek before the shared readiness gate issues one autoplay request.
-        if (deferFirefoxProgressiveResume) {
-          progressiveResumeMetadataHandler = () => {
-            progressiveResumeMetadataHandler = null;
-            progressiveResumeSeekedHandler = () => {
-              progressiveResumeSeekedHandler = null;
-              progressiveResumePending = false;
-              // play() owns any final buffering from here. Starting as soon as
-              // the resume seek settles avoids adding a second startup delay.
-              completeStartup();
-            };
-            video.addEventListener("seeked", progressiveResumeSeekedHandler, { once: true });
-            video.currentTime = effectiveInitialPosition;
-          };
-          video.addEventListener("loadedmetadata", progressiveResumeMetadataHandler, {
-            once: true,
-          });
-        }
+        // A resumed copy remux is already cut by the server at the preceding
+        // keyframe and its timeline offset maps player time back to media time.
+        // Firefox rejects a second non-zero seek inside this live, chunked fMP4
+        // because the response is not byte-range seekable. Attach and play it
+        // exactly like the known-good zero-start path; at worst playback begins
+        // in the short keyframe pre-roll immediately before the saved position.
         video.src = effectiveStreamUrl;
-        if (!deferFirefoxProgressiveResume) {
+        if (!skipFirefoxProgressiveInitialSeek) {
           video.currentTime = effectiveInitialPosition;
-          if (shouldAutoPlay) {
-            completeStartup();
-          }
+        }
+        if (shouldAutoPlay) {
+          completeStartup();
         }
       }
     }
@@ -1632,6 +1604,7 @@ export function VideoPlayer({
     isHlsStream,
     isPlayerReady,
     plan.delivery,
+    plan.timeline.stream_origin_seconds,
     planRevision,
     plannedBitrateKbps,
     reportCurrentPlanFailure,
