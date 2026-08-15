@@ -44,7 +44,16 @@ type TranscodeOpts struct {
 	SourceVideoProfile   string
 	SourceVideoBitDepth  int
 	VideoBitstreamFilter string // validated copy-mode BSF, e.g. DV7ToHDR10BitstreamFilter
-	SeekSeconds          float64
+	// VideoSampleEntry is the exact HEVC MP4/fMP4 sample entry selected by the
+	// protocol-v3 plan (hev1, hvc1, or dvh1). It is carried independently from
+	// the Dolby transform so native Apple HLS packaging cannot leak into a
+	// MediaSource route after reconstruction or failover.
+	VideoSampleEntry string
+	// RemuxDVMode freezes the Dolby Vision treatment selected by protocol v3.
+	// VideoSampleEntry separately freezes the container label the client probe
+	// validated.
+	RemuxDVMode RemuxDVMode
+	SeekSeconds float64
 	// StreamOriginSeconds is the keyframe timestamp at which a copy-video
 	// stream actually begins. SeekSeconds remains the client-requested -ss so
 	// FFmpeg performs exactly one demuxer seek; this origin keeps response and
@@ -215,6 +224,40 @@ func StartTranscode(ctx context.Context, opts TranscodeOpts) (*TranscodeSession,
 	if opts.VideoBitstreamFilter != "" &&
 		(opts.VideoBitstreamFilter != DV7ToHDR10BitstreamFilter || !strings.EqualFold(opts.TargetCodecVideo, "copy")) {
 		return nil, fmt.Errorf("unsupported video bitstream filter recipe")
+	}
+	sampleEntry := strings.ToLower(strings.TrimSpace(opts.VideoSampleEntry))
+	switch sampleEntry {
+	case "":
+		// Legacy recipes let FFmpeg choose its existing default.
+	case VideoSampleEntryHEV1V3, VideoSampleEntryHVC1V3, VideoSampleEntryDVH1V3:
+		if !strings.EqualFold(opts.TargetCodecVideo, "copy") || !strings.EqualFold(opts.SourceVideoCodec, "hevc") {
+			return nil, fmt.Errorf("video sample entry requires HEVC video copy")
+		}
+	default:
+		return nil, fmt.Errorf("unsupported video sample entry")
+	}
+	opts.VideoSampleEntry = sampleEntry
+	switch opts.RemuxDVMode {
+	case "":
+		if sampleEntry == VideoSampleEntryDVH1V3 {
+			return nil, fmt.Errorf("dvh1 sample entry requires Dolby Vision preserve mode")
+		}
+	case RemuxDVStripToHDR10V3, RemuxDVStripToBaseV3:
+		if opts.VideoBitstreamFilter != DV7ToHDR10BitstreamFilter || !strings.EqualFold(opts.TargetCodecVideo, "copy") {
+			return nil, fmt.Errorf("dolby vision base-layer HLS requires the validated copy recipe")
+		}
+		if sampleEntry != VideoSampleEntryHEV1V3 && sampleEntry != VideoSampleEntryHVC1V3 {
+			return nil, fmt.Errorf("dolby vision base-layer HLS requires an HEVC sample entry")
+		}
+	case RemuxDVPreserveV3:
+		if opts.VideoBitstreamFilter != "" || !strings.EqualFold(opts.TargetCodecVideo, "copy") {
+			return nil, fmt.Errorf("dolby vision preserve HLS requires unfiltered video copy")
+		}
+		if sampleEntry != VideoSampleEntryDVH1V3 {
+			return nil, fmt.Errorf("dolby vision preserve HLS requires the dvh1 sample entry")
+		}
+	default:
+		return nil, fmt.Errorf("unsupported dolby vision HLS mode")
 	}
 	if opts.SegmentDuration <= 0 {
 		opts.SegmentDuration = defaultSegmentDuration
@@ -432,6 +475,14 @@ func buildFFmpegArgs(opts TranscodeOpts) []string {
 		args = append(args, "-c:v", "copy")
 		if opts.VideoBitstreamFilter == DV7ToHDR10BitstreamFilter {
 			args = append(args, "-bsf:v", opts.VideoBitstreamFilter)
+		}
+		if opts.VideoSampleEntry != "" {
+			args = append(args, "-tag:v", opts.VideoSampleEntry)
+			if opts.VideoSampleEntry == VideoSampleEntryDVH1V3 {
+				// FFmpeg requires this relaxation to write the Dolby configuration
+				// record promised by the native Apple dvh1 route.
+				args = append(args, "-strict", "unofficial")
+			}
 		}
 	} else {
 		args = appendVideoArgs(args, opts)

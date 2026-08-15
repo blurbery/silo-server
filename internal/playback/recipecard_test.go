@@ -17,6 +17,8 @@ func TestRecipeCardRoundTripOpts(t *testing.T) {
 		SourceVideoBitDepth:    10,
 		SoftwareVideoDecode:    true,
 		VideoBitstreamFilter:   DV7ToHDR10BitstreamFilter,
+		VideoSampleEntry:       VideoSampleEntryHEV1V3,
+		RemuxDVMode:            RemuxDVStripToHDR10V3,
 		SeekSeconds:            900,
 		StreamOriginSeconds:    896,
 		CopySeekAnchorResolved: true,
@@ -71,6 +73,12 @@ func TestRecipeCardRoundTripOpts(t *testing.T) {
 	}
 	if got.VideoBitstreamFilter != DV7ToHDR10BitstreamFilter {
 		t.Errorf("VideoBitstreamFilter = %q", got.VideoBitstreamFilter)
+	}
+	if got.VideoSampleEntry != VideoSampleEntryHEV1V3 {
+		t.Errorf("VideoSampleEntry = %q", got.VideoSampleEntry)
+	}
+	if got.RemuxDVMode != RemuxDVStripToHDR10V3 {
+		t.Errorf("RemuxDVMode = %q", got.RemuxDVMode)
 	}
 	if !got.SoftwareVideoDecode {
 		t.Error("SoftwareVideoDecode lost in round trip")
@@ -222,6 +230,8 @@ func TestRecipeCardClaimsRoundTrip(t *testing.T) {
 		SourceVideoBitDepth:    10,
 		SoftwareVideoDecode:    true,
 		VideoBitstreamFilter:   DV7ToHDR10BitstreamFilter,
+		VideoSampleEntry:       VideoSampleEntryHEV1V3,
+		RemuxDVMode:            RemuxDVStripToHDR10V3,
 		SeekSeconds:            900,
 		StreamOriginSeconds:    896,
 		CopySeekAnchorResolved: true,
@@ -255,6 +265,8 @@ func TestRecipeCardClaimsRoundTrip(t *testing.T) {
 		got.SourceVideoProfile != card.SourceVideoProfile || got.SourceVideoBitDepth != card.SourceVideoBitDepth ||
 		got.SoftwareVideoDecode != card.SoftwareVideoDecode ||
 		got.VideoBitstreamFilter != card.VideoBitstreamFilter ||
+		got.VideoSampleEntry != card.VideoSampleEntry ||
+		got.RemuxDVMode != card.RemuxDVMode ||
 		got.SeekSeconds != card.SeekSeconds || got.StreamOriginSeconds != card.StreamOriginSeconds ||
 		got.CopySeekAnchorResolved != card.CopySeekAnchorResolved || got.TargetResolution != card.TargetResolution ||
 		got.TargetCodecVideo != card.TargetCodecVideo || got.TargetCodecAudio != card.TargetCodecAudio ||

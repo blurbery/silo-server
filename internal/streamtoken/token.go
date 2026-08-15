@@ -72,6 +72,7 @@ type Claims struct {
 	SourceVideoBitDepth    int     `json:"svb,omitempty"`
 	SoftwareVideoDecode    bool    `json:"svd,omitempty"`
 	VideoBitstreamFilter   string  `json:"vbsf,omitempty"`
+	VideoSampleEntry       string  `json:"vse,omitempty"`
 	OutputSubdir           string  `json:"osd,omitempty"`
 	SeekSeconds            float64 `json:"seek,omitempty"`
 	StreamOriginSeconds    float64 `json:"origin,omitempty"`

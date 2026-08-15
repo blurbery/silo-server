@@ -369,6 +369,7 @@ export interface TimelineV3 {
 
 export interface EffectiveRecipeV3 {
   video_codec?: string;
+  video_sample_entry?: "hev1" | "hvc1" | "dvh1";
   audio_codec?: string;
   width?: number;
   height?: number;

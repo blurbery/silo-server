@@ -1244,6 +1244,63 @@ describe("usePlaybackSession version switches", () => {
 });
 
 describe("usePlaybackSession replans", () => {
+  it("keeps the server-resolved resume anchor when decoding fails before first timeupdate", async () => {
+    const resumedPlan = fixturePlanV3({ session_id: "session-resume" });
+    resumedPlan.timeline = {
+      ...resumedPlan.timeline,
+      source_start_seconds: 604.257,
+      player_start_seconds: 604.257,
+      timeline_offset_seconds: 0,
+    };
+    const replanBodies: Array<{ operation: string; position_seconds: number }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/playback/start")) {
+        return jsonResponse({
+          protocol_version: 3,
+          server_features: ["playback_plan_v3"],
+          outcome: "playable",
+          session_id: "session-resume",
+          playback_plan: resumedPlan,
+        });
+      }
+      if (url.endsWith("/playback/session-resume/replan")) {
+        replanBodies.push(
+          JSON.parse(String(init?.body)) as { operation: string; position_seconds: number },
+        );
+        return jsonResponse({
+          protocol_version: 3,
+          server_features: ["playback_plan_v3"],
+          outcome: "playable",
+          session_id: "session-resume",
+          playback_plan: fixturePlanV3({
+            plan_id: "plan:resume-fallback",
+            plan_attempt_key: "v3:resume-fallback",
+          }),
+        });
+      }
+      if (url.endsWith("/playback/route-events")) return new Response(null, { status: 202 });
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result, unmount } = renderHook(
+      () => usePlaybackSession("request-1", [], [], 7, 0, false, "auto"),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.plan).not.toBeNull());
+
+    act(() => result.current.recoverFromFailure({ classification: "decoder_error" }, 0));
+
+    await waitFor(() => expect(replanBodies).toHaveLength(1));
+    expect(replanBodies[0]).toMatchObject({
+      operation: "failure_recovery",
+      position_seconds: 604.257,
+    });
+    unmount();
+  });
+
   it("drops a queued predecessor failure after the in-flight replan adopts a new plan", async () => {
     const initialPlan = fixturePlanV3();
     let resolveFirstReplan: ((response: Response) => void) | undefined;
