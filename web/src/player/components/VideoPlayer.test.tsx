@@ -429,6 +429,197 @@ describe("VideoPlayer native HLS timeline", () => {
   });
 });
 
+describe("VideoPlayer progressive resume timeline", () => {
+  beforeEach(() => {
+    realtimeOptions.current = null;
+    controls.current = null;
+    subtitleTimeline.textOffsetSeconds = null;
+    subtitleTimeline.assOffsetSeconds = null;
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+    vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0",
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("waits for Firefox's resumed fMP4 seek before autoplaying once", async () => {
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    const plan = fixturePlanV3({
+      delivery: "server_remux_progressive",
+      stream: {
+        url: "/stream/session-1",
+        protocol: "http_progressive",
+        headers: {},
+        header_refresh: "none",
+      },
+      timeline: {
+        source_start_seconds: 624.02,
+        player_start_seconds: 0.02,
+        stream_origin_seconds: 624,
+        timeline_offset_seconds: 624,
+        can_seek_anywhere: false,
+        seek_restoration: "source_position",
+      },
+    });
+    const { container } = renderPlayer({ plan, initialPosition: 624.02 });
+    const video = container.querySelector("video");
+    if (!video) throw new Error("expected video element");
+
+    await waitFor(() => expect(video.src).toContain("/api/v1/stream/session-1"));
+    expect(video.currentTime).toBe(0);
+    expect(play).not.toHaveBeenCalled();
+
+    fireEvent.loadedMetadata(video);
+    expect(video.currentTime).toBe(0.02);
+    expect(play).not.toHaveBeenCalled();
+
+    Object.defineProperty(video, "readyState", { configurable: true, value: 3 });
+    fireEvent.canPlay(video);
+    expect(play).not.toHaveBeenCalled();
+
+    fireEvent.seeked(video);
+    fireEvent.loadedData(video);
+
+    expect(play).toHaveBeenCalledOnce();
+  });
+
+  it("applies Firefox's resume position without autoplay when playback is paused", async () => {
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    const plan = fixturePlanV3({
+      delivery: "server_remux_progressive",
+      stream: {
+        url: "/stream/session-1",
+        protocol: "http_progressive",
+        headers: {},
+        header_refresh: "none",
+      },
+      timeline: {
+        source_start_seconds: 625.04,
+        player_start_seconds: 1.04,
+        stream_origin_seconds: 624,
+        timeline_offset_seconds: 624,
+        can_seek_anywhere: false,
+        seek_restoration: "source_position",
+      },
+    });
+    const { container } = renderPlayer({
+      plan,
+      initialPosition: 625.04,
+      shouldAutoPlay: false,
+    });
+    const video = container.querySelector("video");
+    if (!video) throw new Error("expected video element");
+
+    await waitFor(() => expect(video.src).toContain("/api/v1/stream/session-1"));
+    fireEvent.loadedMetadata(video);
+    Object.defineProperty(video, "readyState", { configurable: true, value: 3 });
+    fireEvent.canPlay(video);
+    fireEvent.seeked(video);
+
+    expect(video.currentTime).toBe(1.04);
+    expect(play).not.toHaveBeenCalled();
+  });
+
+  it("keeps Firefox zero-start progressive playback on the immediate path", async () => {
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    const plan = fixturePlanV3({
+      delivery: "server_remux_progressive",
+      stream: {
+        url: "/stream/session-1",
+        protocol: "http_progressive",
+        headers: {},
+        header_refresh: "none",
+      },
+    });
+    const { container } = renderPlayer({ plan });
+    const video = container.querySelector("video");
+    if (!video) throw new Error("expected video element");
+
+    await waitFor(() => expect(video.src).toContain("/api/v1/stream/session-1"));
+    expect(video.currentTime).toBe(0);
+    expect(play).toHaveBeenCalledOnce();
+
+    Object.defineProperty(video, "readyState", { configurable: true, value: 3 });
+    fireEvent.canPlay(video);
+
+    expect(play).toHaveBeenCalledOnce();
+  });
+
+  it("cannot autoplay from a stale Firefox seek after the transport plan changes", async () => {
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    const firstPlan = fixturePlanV3({
+      delivery: "server_remux_progressive",
+      stream: {
+        url: "/stream/session-1",
+        protocol: "http_progressive",
+        headers: {},
+        header_refresh: "none",
+      },
+      timeline: {
+        source_start_seconds: 625.04,
+        player_start_seconds: 1.04,
+        stream_origin_seconds: 624,
+        timeline_offset_seconds: 624,
+        can_seek_anywhere: false,
+        seek_restoration: "source_position",
+      },
+    });
+    const { container, rerenderPlayer } = renderPlayer({
+      plan: firstPlan,
+      initialPosition: 625.04,
+    });
+    const video = container.querySelector("video");
+    if (!video) throw new Error("expected video element");
+
+    const seeks: number[] = [];
+    let mediaTime = 0;
+    Object.defineProperty(video, "currentTime", {
+      configurable: true,
+      get: () => mediaTime,
+      set: (value: number) => {
+        mediaTime = value;
+        seeks.push(value);
+      },
+    });
+
+    fireEvent.loadedMetadata(video);
+    expect(seeks).toEqual([1.04]);
+
+    const replacementPlan = fixturePlanV3({
+      ...firstPlan,
+      plan_id: "plan:2222222222222222",
+      plan_attempt_key: "v3:2222222222222222",
+      timeline: {
+        ...firstPlan.timeline,
+        source_start_seconds: 626.04,
+        player_start_seconds: 2.04,
+      },
+    });
+    rerenderPlayer({
+      plan: replacementPlan,
+      planRevision: 2,
+      initialPosition: 626.04,
+    });
+
+    // This would complete the old plan's pending seek if cleanup had left its
+    // listener behind. It must not start either the discarded or new source.
+    fireEvent.seeked(video);
+    expect(play).not.toHaveBeenCalled();
+
+    fireEvent.loadedMetadata(video);
+    fireEvent.seeked(video);
+
+    expect(seeks).toEqual([1.04, 2.04]);
+    expect(play).toHaveBeenCalledOnce();
+  });
+});
+
 describe("VideoPlayer translation handoff", () => {
   beforeEach(() => {
     realtimeOptions.current = null;
