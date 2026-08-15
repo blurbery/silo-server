@@ -804,7 +804,7 @@ func TestPlanPlaybackV3WebNativeHLSPreservesCompatibleDolbyVisionAsDVH1(t *testi
 	}
 }
 
-func TestPlanPlaybackV3WebHLSJSPrefersExactDolbyRoute(t *testing.T) {
+func TestPlanPlaybackV3WebHLSJSKeepsProgressiveDolbyRouteFirst(t *testing.T) {
 	for _, test := range []struct {
 		name           string
 		profile        int
@@ -832,15 +832,25 @@ func TestPlanPlaybackV3WebHLSJSPrefersExactDolbyRoute(t *testing.T) {
 			hls.HDRDetails = &HDRCapabilitiesV3{HDR10: true}
 			req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3] = hls
 
-			result := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: testTransformationRegistryV3()})
-			if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxHLSV3 || result.Plan.EffectiveRecipe.DynamicRange != DynamicRangeHDR10V3 {
+			input := PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: testTransformationRegistryV3()}
+			result := PlanPlaybackV3(input)
+			if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxProgressiveV3 || result.Plan.EffectiveRecipe.DynamicRange != DynamicRangeHDR10V3 {
 				t.Fatalf("result = %s", ExplainPlannerResultV3(result))
 			}
-			if result.Plan.EffectiveRecipe.VideoSampleEntry != VideoSampleEntryHEV1V3 {
-				t.Fatalf("hls.js sample entry = %q, want hev1", result.Plan.EffectiveRecipe.VideoSampleEntry)
+			if result.Plan.EffectiveRecipe.VideoSampleEntry != VideoSampleEntryHVC1V3 {
+				t.Fatalf("progressive sample entry = %q, want hvc1", result.Plan.EffectiveRecipe.VideoSampleEntry)
 			}
-			if result.TargetVideoCodec != "copy" || result.Plan.EffectiveMediaFileID != file.ID {
-				t.Fatalf("the first browser route did not preserve the 4K source: %#v", result)
+			if result.PlayMethod != PlayRemux || result.Plan.EffectiveRecipe.VideoCodec != "hevc" || result.Plan.EffectiveMediaFileID != file.ID {
+				t.Fatalf("the first browser route did not keep the 4K HEVC remux: %#v", result)
+			}
+
+			input.AttemptedKeys = []string{PlanAttemptKeyV3(*result.Plan, req.ClientPlaybackContext.Output.OutputContextID, nil)}
+			fallback := PlanPlaybackV3(input)
+			if fallback.Plan == nil || fallback.Plan.Delivery != DeliveryRemuxHLSV3 || fallback.Plan.EffectiveMediaFileID != file.ID {
+				t.Fatalf("the same-file HLS recovery route was lost: %#v", fallback)
+			}
+			if fallback.Plan.EffectiveRecipe.VideoSampleEntry != VideoSampleEntryHEV1V3 {
+				t.Fatalf("hls.js recovery sample entry = %q, want hev1", fallback.Plan.EffectiveRecipe.VideoSampleEntry)
 			}
 		})
 	}
