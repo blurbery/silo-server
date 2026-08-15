@@ -127,9 +127,9 @@ unknown, and both look like an absent field.
 delivery classes a client negotiates in. §4 gives the folding.
 
 `transformations` advertises only what the *installed* FFmpeg was probed for at
-startup — a server without a `dovi_rpu` bitstream filter does not list
-`server_dv7_to_hdr10`. A client must not assume a transformation exists because
-this document names it.
+startup — a server without both the `dovi_rpu` and `filter_units` bitstream
+filters does not list either Dolby Vision base-layer transformation. A client
+must not assume a transformation exists because this document names it.
 
 `enabled` survives from the rollout period and is now constant `true`; the
 negative shape was deliberately removed before v1 lock because v3 is the only
@@ -786,14 +786,16 @@ A transformation is a named, versioned media operation with claims attached.
 | --- | --- | --- | --- | --- |
 | `audio_to_aac` | `server` | `1` | — | `audio_decode` |
 | `video_to_h264` | `server` | `2` | `sdr` output | `h264_decode` |
-| `server_dv7_to_hdr10` | `server` | `1` | `hdr10` output | `dolby_vision_metadata_removed`, `hdr10_base_layer_preserved`, `enhancement_layer_discarded` |
+| `server_dv7_to_hdr10` | `server` | `2` | `hdr10` output | `dolby_vision_metadata_removed`, `hdr10_base_layer_preserved`, `enhancement_layer_discarded` |
+| `server_dv8_to_compatible_base` | `server` | `1` | Range selected from the explicit Profile 8 BL compatibility ID: `hdr10` (1/6), `sdr` (2), or `hlg` (4) | `dolby_vision_metadata_removed` plus the matching base-layer claim |
 
 They are advertised only if the installed FFmpeg actually has the required
 capability, probed once at startup:
 
 | Transformation | Probe |
 | --- | --- |
-| `server_dv7_to_hdr10` | `ffmpeg -bsfs` contains `dovi_rpu` |
+| `server_dv7_to_hdr10` | `ffmpeg -bsfs` contains both `dovi_rpu` and `filter_units` |
+| `server_dv8_to_compatible_base` | `ffmpeg -bsfs` contains both `dovi_rpu` and `filter_units` |
 | `audio_to_aac` | `ffmpeg -encoders` contains an `aac` encoder |
 | `video_to_h264` | `ffmpeg -encoders` contains any of `libx264`, `h264_qsv`, `h264_vaapi`, `h264_nvenc`, `h264_videotoolbox` |
 

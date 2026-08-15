@@ -50,10 +50,10 @@ func ResolveFFmpegPath(configured string) string {
 	return ffmpegBinary()
 }
 
-// supportsDoviRPUFilter reports whether the given FFmpeg binary can strip
-// Dolby Vision RPU metadata via the dovi_rpu bitstream filter (FFmpeg 7.1+).
-// The enhancement layer itself is dropped by stream mapping, so stripping the
-// RPUs yields a clean HDR10 base layer. Probed once per binary path.
+// supportsDoviRPUFilter reports whether the given FFmpeg binary can produce a
+// clean HDR10 base layer from Profile 7: dovi_rpu strips DV metadata and
+// filter_units removes the interleaved enhancement-layer NAL units. Probed
+// once per binary path.
 func supportsDoviRPUFilter(bin string) bool {
 	doviRPUMu.Lock()
 	defer doviRPUMu.Unlock()
@@ -61,9 +61,9 @@ func supportsDoviRPUFilter(bin string) bool {
 		return available
 	}
 	out, err := exec.Command(bin, "-hide_banner", "-bsfs").Output()
-	available := err == nil && bytes.Contains(out, []byte("dovi_rpu"))
+	available := err == nil && bytes.Contains(out, []byte("dovi_rpu")) && bytes.Contains(out, []byte("filter_units"))
 	if !available {
-		slog.Warn("ffmpeg lacks the dovi_rpu bitstream filter (needs FFmpeg 7.1+); validated Profile 7 HDR10 remux is disabled", "ffmpeg", bin)
+		slog.Warn("ffmpeg lacks the dovi_rpu/filter_units bitstream filters; validated Profile 7 HDR10 remux is disabled", "ffmpeg", bin)
 	}
 	if doviRPUCache == nil {
 		doviRPUCache = make(map[string]bool)
@@ -104,6 +104,7 @@ const (
 	RemuxDVLegacyAutoV3   RemuxDVMode = "legacy_auto"
 	RemuxDVPreserveV3     RemuxDVMode = "preserve"
 	RemuxDVStripToHDR10V3 RemuxDVMode = "strip_to_hdr10"
+	RemuxDVStripToBaseV3  RemuxDVMode = "strip_to_compatible_base"
 	RemuxDVRejectP7V3     RemuxDVMode = "reject_profile_7"
 )
 
@@ -114,10 +115,10 @@ const (
 // When transcodeAudio is true, video is copied but audio is transcoded to
 // stereo AAC (handles cases like DTS/TrueHD that browsers cannot decode).
 // dvProfile is the file's Dolby Vision profile (0 = none). Profile 7 remuxes
-// strip DV RPUs: the enhancement layer is dropped by the video map below, so
-// the RPUs would dangle — stripping yields a clean HDR10 base layer (the
-// Apple-parity fallback for devices without a P7 decoder). Profile 8 RPUs
-// stay: the base layer is self-contained and DV clients can render it.
+// strip DV metadata and the interleaved enhancement-layer NAL units, yielding
+// a clean HDR10 base layer (the Apple fallback for devices without a P7
+// decoder). Profile 8 RPUs stay: the base layer is self-contained and DV
+// clients can render it.
 func buildRemuxArgs(filePath, outputFormat string, seekSeconds float64, transcodeAudio bool, audioTrackIndex int, dvProfile int, tagSampleEntry, audioOnly bool) []string {
 	return buildRemuxArgsWithAudioV3(filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, dvProfile, tagSampleEntry, audioOnly, 0, 0)
 }
@@ -173,7 +174,7 @@ func buildRemuxArgsWithAudioV3(filePath, outputFormat string, seekSeconds float6
 	args = append(args, "-sn", "-dn")
 
 	if dvProfile == 7 {
-		args = append(args, "-bsf:v", "dovi_rpu=strip=1")
+		args = append(args, "-bsf:v", DV7ToHDR10BitstreamFilter)
 		if tagSampleEntry {
 			// The explicit v3 strip recipe promised the client plain HDR10.
 			// Safari's media element only answers "probably" for hvc1 — the
@@ -257,14 +258,14 @@ func startRemuxWithOptions(ctx context.Context, filePath, outputFormat string, s
 	case "", RemuxDVLegacyAutoV3:
 		effectiveProfile = remuxDVProfile(dvProfile, supportsDoviRPUFilter(bin) &&
 			(dvProfile != 7 || sharedDVRPUProbe.CanStrip(ctx, bin, filePath)))
-	case RemuxDVStripToHDR10V3:
+	case RemuxDVStripToHDR10V3, RemuxDVStripToBaseV3:
 		if dvProfile != 7 && dvProfile != 8 {
 			cancel()
-			return nil, fmt.Errorf("Dolby Vision HDR10 strip requires profile 7 or 8")
+			return nil, fmt.Errorf("profile 7 or 8 is required for Dolby Vision base-layer stripping")
 		}
 		if !supportsDoviRPUFilter(bin) {
 			cancel()
-			return nil, fmt.Errorf("Dolby Vision HDR10 remux requires the dovi_rpu bitstream filter")
+			return nil, fmt.Errorf("the Dolby Vision base-layer remux requires the dovi_rpu/filter_units bitstream filters")
 		}
 		// The planner refuses this recipe for a source that fails the probe,
 		// so reaching here means a session or stream token minted before the
@@ -275,7 +276,7 @@ func startRemuxWithOptions(ctx context.Context, filePath, outputFormat string, s
 		// next start re-plans against the now-cached verdict.
 		if !sharedDVRPUProbe.CanStrip(ctx, bin, filePath) {
 			cancel()
-			return nil, fmt.Errorf("this source's Dolby Vision RPU cannot be stripped to HDR10")
+			return nil, fmt.Errorf("this source's Dolby Vision RPU cannot be stripped to its compatible base layer")
 		}
 		// buildRemuxArgs uses profile 7 as the explicit strip sentinel; the
 		// filter is equally required for a compatible profile 8 base layer.

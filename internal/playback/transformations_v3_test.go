@@ -32,7 +32,7 @@ func TestH264EncoderAvailabilityAcceptsAnyPipelineEncoder(t *testing.T) {
 
 func TestProbeTransformationRegistryV3AdvertisesVideoToH264RecipeVersion2(t *testing.T) {
 	ffmpeg := filepath.Join(t.TempDir(), "ffmpeg")
-	script := "#!/bin/sh\ncase \"$2\" in\n-bsfs) echo dovi_rpu ;;\n-encoders) echo ' V....D libx264 H.264'; echo ' A....D aac AAC' ;;\nesac\n"
+	script := "#!/bin/sh\ncase \"$2\" in\n-bsfs) echo dovi_rpu; echo filter_units ;;\n-encoders) echo ' V....D libx264 H.264'; echo ' A....D aac AAC' ;;\nesac\n"
 	if err := os.WriteFile(ffmpeg, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -47,4 +47,46 @@ func TestProbeTransformationRegistryV3AdvertisesVideoToH264RecipeVersion2(t *tes
 		}
 	}
 	t.Fatal("video_to_h264 was not advertised")
+}
+
+func TestProbeTransformationRegistryV3RequiresBothDV7BaseLayerFilters(t *testing.T) {
+	tests := []struct {
+		name    string
+		listing string
+		want    bool
+	}{
+		{name: "metadata strip alone", listing: "dovi_rpu", want: false},
+		{name: "unit filter alone", listing: "filter_units", want: false},
+		{name: "complete base layer recipe", listing: "dovi_rpu\\nfilter_units", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ffmpeg := filepath.Join(t.TempDir(), "ffmpeg")
+			script := "#!/bin/sh\nif [ \"$2\" = \"-bsfs\" ]; then printf \"" + tt.listing + "\\n\"; fi\n"
+			if err := os.WriteFile(ffmpeg, []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			registry := ProbeTransformationRegistryV3(context.Background(), ffmpeg)
+			if got := registry.Available(TransformationServerDV7HDR10V3); got != tt.want {
+				t.Fatalf("server_dv7_to_hdr10 available = %v, want %v", got, tt.want)
+			}
+			if got := registry.Available(TransformationServerDV8BaseV3); got != tt.want {
+				t.Fatalf("server_dv8_to_compatible_base available = %v, want %v", got, tt.want)
+			}
+			if !tt.want {
+				return
+			}
+			versions := map[string]string{}
+			for _, transformation := range registry.Advertised() {
+				versions[transformation.Name] = transformation.RecipeVersion
+			}
+			if versions[TransformationServerDV7HDR10V3] != TransformationServerDV7HDR10RecipeVersionV3 {
+				t.Fatalf("server_dv7_to_hdr10 recipe version = %q, want %q", versions[TransformationServerDV7HDR10V3], TransformationServerDV7HDR10RecipeVersionV3)
+			}
+			if versions[TransformationServerDV8BaseV3] != TransformationServerDV8BaseRecipeVersionV3 {
+				t.Fatalf("server_dv8_to_compatible_base recipe version = %q, want %q", versions[TransformationServerDV8BaseV3], TransformationServerDV8BaseRecipeVersionV3)
+			}
+		})
+	}
 }

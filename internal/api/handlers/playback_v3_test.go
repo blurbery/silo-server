@@ -1452,7 +1452,7 @@ func TestHandleReplanPlaybackV3SeekReanchorPreservesFallbackRecipe(t *testing.T)
 	presetLocalRegistryV3(handler, playback.NewTransformationRegistryV3([]playback.TransformationSpecV3{
 		{Name: "audio_to_aac", RecipeVersion: "1", Available: true},
 		{Name: "video_to_h264", RecipeVersion: "2", Available: true},
-		{Name: "server_dv7_to_hdr10", RecipeVersion: "1", Available: true},
+		{Name: "server_dv7_to_hdr10", RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3, Available: true},
 	}))
 	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{}}
 	handler.ItemAccess = allowAllPlaybackItemAccess{}
@@ -2116,7 +2116,7 @@ func TestFrozenSeekReanchorResultV3PreservesRouteMatrix(t *testing.T) {
 		}},
 		{name: "Dolby Vision transformation", mutate: func(plan *playback.PlanV3, _ *playback.PlannerResultV3) {
 			plan.EffectiveRecipe.DynamicRange = "hdr10"
-			plan.Transformations = []playback.TransformationV3{{Name: "server_dv7_to_hdr10", Executor: "server", RecipeVersion: "1"}}
+			plan.Transformations = []playback.TransformationV3{{Name: "server_dv7_to_hdr10", Executor: "server", RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3}}
 		}},
 		{name: "pooled node only transformation", mutate: func(plan *playback.PlanV3, result *playback.PlannerResultV3) {
 			plan.Delivery = playback.DeliveryTranscodeHLSV3
@@ -2766,9 +2766,21 @@ func TestTransportGenerationV3IsUniqueAndSessionScoped(t *testing.T) {
 }
 
 func TestRemuxDVModeForPlanV3ExecutesProfile8Strip(t *testing.T) {
-	plan := &playback.PlanV3{Source: playback.SourceDescriptorV3{DVProfile: 8}, Transformations: []playback.TransformationV3{{Name: "server_dv7_to_hdr10"}}}
-	if got := remuxDVModeForPlanV3(plan); got != playback.RemuxDVStripToHDR10V3 {
+	plan := &playback.PlanV3{Source: playback.SourceDescriptorV3{DVProfile: 8}, Transformations: []playback.TransformationV3{{Name: playback.TransformationServerDV8BaseV3}}}
+	if got := remuxDVModeForPlanV3(plan); got != playback.RemuxDVStripToBaseV3 {
 		t.Fatalf("mode = %q", got)
+	}
+}
+
+func TestVideoBitstreamFilterForPlanV3ExecutesEveryDolbyBaseLayerRecipe(t *testing.T) {
+	for _, transformation := range []playback.TransformationV3{
+		{Name: playback.TransformationServerDV7HDR10V3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3},
+		{Name: playback.TransformationServerDV8BaseV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationServerDV8BaseRecipeVersionV3},
+	} {
+		plan := &playback.PlanV3{Transformations: []playback.TransformationV3{transformation}}
+		if got := videoBitstreamFilterForPlanV3(plan); got != playback.DV7ToHDR10BitstreamFilter {
+			t.Fatalf("transformation %q filter = %q", transformation.Name, got)
+		}
 	}
 }
 
@@ -3998,7 +4010,7 @@ func capableProxyStubV3(t *testing.T) *httptest.Server {
 		}
 		writeJSON(w, http.StatusOK, playback.HWAccelInfo{Transformations: []playback.TransformationV3{
 			{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"},
-			{Name: playback.TransformationServerDV7HDR10V3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"},
+			{Name: playback.TransformationServerDV7HDR10V3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3},
 		}})
 	}))
 	t.Cleanup(server.Close)

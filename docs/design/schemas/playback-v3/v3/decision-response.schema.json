@@ -739,6 +739,10 @@
         "color_range": {
           "type": "string"
         },
+        "color_transfer": {
+          "type": "string",
+          "description": "Normalized HEVC transfer characteristic used to validate compatible Dolby Vision base-layer fallbacks."
+        },
         "width": {
           "type": "integer"
         },

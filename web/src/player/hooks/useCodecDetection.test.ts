@@ -4,6 +4,7 @@ import {
   detectHDRFromMatchMedia,
   detectMaxResolutionFromScreen,
   probeHDR10PlaybackSupport,
+  probeHLGPlaybackSupport,
   probeWebCapabilities,
   useCodecDetection,
 } from "./useCodecDetection";
@@ -115,6 +116,51 @@ describe("probeWebCapabilities", () => {
     });
     expect(capabilities.codecsVideo).not.toContain("hevc");
     expect(capabilities.progressiveCodecsVideo).toContain("hevc");
+  });
+
+  it("advertises native Profile 5 through Safari's exact level-7 answer", () => {
+    vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockImplementation((mime) =>
+      mime === 'video/mp4; codecs="dvh1.05.07"' ? "probably" : "",
+    );
+
+    const capabilities = probeWebCapabilities();
+
+    expect(capabilities.hdrDetails.dolby_vision_profiles).toEqual([5]);
+    expect(capabilities.hdrDetails.dolby_vision_profile_levels).toEqual([
+      { profile: 5, max_level: 7 },
+    ]);
+  });
+
+  it("publishes the highest exact Profile 8 level Safari confirms", () => {
+    vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockImplementation((mime) =>
+      ['video/mp4; codecs="dvh1.08.07"', 'video/mp4; codecs="dvh1.08.06"'].includes(mime)
+        ? "probably"
+        : "",
+    );
+
+    expect(probeWebCapabilities().hdrDetails.dolby_vision_profile_levels).toEqual([
+      { profile: 8, max_level: 7, bl_compatibility_ids: [1] },
+    ]);
+  });
+
+  it("probes the clean Profile 8.4 HLG fallback independently", async () => {
+    const decodingInfo = vi.fn().mockImplementation((configuration: MediaDecodingConfiguration) => {
+      const supported = configuration.video?.transferFunction === "hlg";
+      return Promise.resolve({ supported, smooth: supported, powerEfficient: supported });
+    });
+    vi.stubGlobal("navigator", { mediaCapabilities: { decodingInfo } });
+
+    await expect(probeHLGPlaybackSupport()).resolves.toBe(true);
+    await expect(probeHDR10PlaybackSupport()).resolves.toBe(false);
+    expect(decodingInfo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        video: expect.objectContaining({
+          contentType: 'video/mp4; codecs="hvc1.2.4.L153.B0"',
+          colorGamut: "rec2020",
+          transferFunction: "hlg",
+        }),
+      }),
+    );
   });
 
   // The preserve remux tags its output dvh1; a browser that answers only for
