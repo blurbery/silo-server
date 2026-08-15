@@ -198,11 +198,11 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	// Matroska as the signal to launch its client-side loopback remuxer; that path
 	// also installs AVDisplayCriteria so tvOS Match Frame Rate and Match Dynamic
 	// Range can follow the source. Forcing server HLS bypasses that client policy.
-	// Web Dolby routes are probed per delivery: Safari's native HLS consumes
-	// hvc1/dvh1 while hls.js consumes hev1 through MediaSource. Prefer that exact
-	// HLS recipe before a progressive remux so Firefox/Chrome do not first wait
-	// for a known-incompatible media-element attempt to fail. The progressive
-	// recipe remains the recovery route when the HLS delivery rejects the plan.
+	// Safari's native HLS consumes the explicitly probed hvc1/dvh1 recipe, so it
+	// remains the preferred web Dolby route. Browsers using hls.js (including
+	// Firefox) stay progressive-first: that direct remux is their proven fast
+	// path and avoids moving an otherwise playable 4K source through MediaSource.
+	// HLS remains available as a recovery route if the progressive delivery fails.
 	// Require the complete copy recipe here so a missing server toolchain never
 	// takes away a working progressive fallback.
 	preferServerHLS := prefersWebHLSForMKVDolbyV3(source, input.Request) &&
@@ -855,10 +855,11 @@ func prefersWebHLSForMKVDolbyV3(source SourceDescriptorV3, request StartRequestV
 	if !strings.EqualFold(strings.TrimSpace(request.ClientPlaybackContext.Device.Platform), "web") || source.DVProfile <= 0 {
 		return false
 	}
-	// deliverySupportsPlanV3 later applies the narrower, independently probed
-	// native-HLS or MediaSource codec/HDR evidence to the concrete recipe. This
-	// gate only changes ordering; unsupported HLS plans fall back to progressive.
-	return deliveryAvailableV3(request, DeliveryClassHLSV3)
+	// Only a browser that explicitly advertised native HLS should change the
+	// normal progressive-first ordering. hls.js support is still advertised on
+	// the HLS delivery and can be selected after a genuine progressive failure.
+	return deliveryAvailableV3(request, DeliveryClassHLSV3) &&
+		deliverySupportsFeatureV3(request, DeliveryClassHLSV3, ClientNativeHLSPlaybackV3)
 }
 
 func hlsAudioRouteExecutableV3(source SourceDescriptorV3, input PlannerInputV3) bool {
