@@ -23,6 +23,7 @@ const subtitleTimeline = vi.hoisted(() => ({
   assOffsetSeconds: null as number | null,
 }));
 const toastError = vi.hoisted(() => vi.fn());
+const hlsRuntime = vi.hoisted(() => ({ isSupported: vi.fn(() => false) }));
 
 vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn(), message: vi.fn() } }));
 
@@ -61,7 +62,7 @@ vi.mock("../hooks/useSubtitleAppearance", () => ({
 vi.mock("../hooks/useSubtitleLayout", () => ({
   useSubtitleLayout: () => ({ positionStyle: {}, fontScale: 1 }),
 }));
-vi.mock("hls.js", () => ({ default: { isSupported: () => false } }));
+vi.mock("hls.js", () => ({ default: hlsRuntime }));
 vi.mock("./PlayerControls", () => ({
   PlayerControls: vi.fn(
     (props: { activeSubtitleIndex: number | null; subtitleTracks: PlayerSubtitleInfo[] }) => {
@@ -349,6 +350,7 @@ describe("VideoPlayer native HLS timeline", () => {
     controls.current = null;
     subtitleTimeline.textOffsetSeconds = null;
     subtitleTimeline.assOffsetSeconds = null;
+    hlsRuntime.isSupported.mockReset().mockReturnValue(false);
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
@@ -390,6 +392,214 @@ describe("VideoPlayer native HLS timeline", () => {
     expect(video.currentTime).toBe(7);
     expect(subtitleTimeline.textOffsetSeconds).toBe(0);
     expect(subtitleTimeline.assOffsetSeconds).toBe(0);
+  });
+
+  it("prefers native HLS when Safari also exposes Media Source Extensions", async () => {
+    hlsRuntime.isSupported.mockReturnValue(true);
+    const plan = fixturePlanV3({
+      delivery: "server_remux_hls",
+      stream: {
+        url: "/playback/transcode/session-1/master.m3u8",
+        protocol: "hls",
+        headers: {},
+        header_refresh: "none",
+      },
+      timeline: {
+        source_start_seconds: 975.2,
+        player_start_seconds: 0.6,
+        stream_origin_seconds: 974.6,
+        timeline_offset_seconds: 974.6,
+        can_seek_anywhere: false,
+        seek_restoration: "source_position",
+      },
+    });
+    const { container } = renderPlayer({
+      plan,
+      streamUrl: "/api/v1/playback/transcode/session-1/master.m3u8?token=token",
+      initialPosition: 975.2,
+    });
+    const video = container.querySelector("video");
+    if (!video) throw new Error("expected video element");
+
+    await waitFor(() => expect(video.src).toContain("/playback/transcode/session-1/master.m3u8"));
+    fireEvent.loadedMetadata(video);
+
+    expect(video.currentTime).toBe(0.6);
+    expect(hlsRuntime.isSupported).not.toHaveBeenCalled();
+  });
+});
+
+describe("VideoPlayer progressive resume timeline", () => {
+  beforeEach(() => {
+    realtimeOptions.current = null;
+    controls.current = null;
+    subtitleTimeline.textOffsetSeconds = null;
+    subtitleTimeline.assOffsetSeconds = null;
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+    vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0",
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("plays Firefox's server-reanchored fMP4 without a second browser seek", async () => {
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    const plan = fixturePlanV3({
+      delivery: "server_remux_progressive",
+      stream: {
+        url: "/stream/session-1",
+        protocol: "http_progressive",
+        headers: {},
+        header_refresh: "none",
+      },
+      timeline: {
+        source_start_seconds: 624.02,
+        player_start_seconds: 0.02,
+        stream_origin_seconds: 624,
+        timeline_offset_seconds: 624,
+        can_seek_anywhere: false,
+        seek_restoration: "source_position",
+      },
+    });
+    const { container } = renderPlayer({ plan, initialPosition: 624.02 });
+    const video = container.querySelector("video");
+    if (!video) throw new Error("expected video element");
+
+    await waitFor(() => expect(video.src).toContain("/api/v1/stream/session-1"));
+    expect(video.currentTime).toBe(0);
+    expect(play).toHaveBeenCalledOnce();
+
+    fireEvent.loadedMetadata(video);
+    Object.defineProperty(video, "readyState", { configurable: true, value: 3 });
+    fireEvent.canPlay(video);
+    fireEvent.seeked(video);
+    fireEvent.loadedData(video);
+
+    expect(video.currentTime).toBe(0);
+    expect(play).toHaveBeenCalledOnce();
+  });
+
+  it("leaves Firefox's server-reanchored stream at its keyframe when paused", async () => {
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    const plan = fixturePlanV3({
+      delivery: "server_remux_progressive",
+      stream: {
+        url: "/stream/session-1",
+        protocol: "http_progressive",
+        headers: {},
+        header_refresh: "none",
+      },
+      timeline: {
+        source_start_seconds: 625.04,
+        player_start_seconds: 1.04,
+        stream_origin_seconds: 624,
+        timeline_offset_seconds: 624,
+        can_seek_anywhere: false,
+        seek_restoration: "source_position",
+      },
+    });
+    const { container } = renderPlayer({
+      plan,
+      initialPosition: 625.04,
+      shouldAutoPlay: false,
+    });
+    const video = container.querySelector("video");
+    if (!video) throw new Error("expected video element");
+
+    await waitFor(() => expect(video.src).toContain("/api/v1/stream/session-1"));
+    fireEvent.loadedMetadata(video);
+    Object.defineProperty(video, "readyState", { configurable: true, value: 3 });
+    fireEvent.canPlay(video);
+    fireEvent.seeked(video);
+
+    expect(video.currentTime).toBe(0);
+    expect(play).not.toHaveBeenCalled();
+  });
+
+  it("keeps Firefox zero-start progressive playback on the immediate path", async () => {
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    const plan = fixturePlanV3({
+      delivery: "server_remux_progressive",
+      stream: {
+        url: "/stream/session-1",
+        protocol: "http_progressive",
+        headers: {},
+        header_refresh: "none",
+      },
+    });
+    const { container } = renderPlayer({ plan });
+    const video = container.querySelector("video");
+    if (!video) throw new Error("expected video element");
+
+    await waitFor(() => expect(video.src).toContain("/api/v1/stream/session-1"));
+    expect(video.currentTime).toBe(0);
+    expect(play).toHaveBeenCalledOnce();
+
+    Object.defineProperty(video, "readyState", { configurable: true, value: 3 });
+    fireEvent.canPlay(video);
+
+    expect(play).toHaveBeenCalledOnce();
+  });
+
+  it("starts each replacement Firefox reanchored stream without stale seek listeners", async () => {
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    const firstPlan = fixturePlanV3({
+      delivery: "server_remux_progressive",
+      stream: {
+        url: "/stream/session-1",
+        protocol: "http_progressive",
+        headers: {},
+        header_refresh: "none",
+      },
+      timeline: {
+        source_start_seconds: 625.04,
+        player_start_seconds: 1.04,
+        stream_origin_seconds: 624,
+        timeline_offset_seconds: 624,
+        can_seek_anywhere: false,
+        seek_restoration: "source_position",
+      },
+    });
+    const { container, rerenderPlayer } = renderPlayer({
+      plan: firstPlan,
+      initialPosition: 625.04,
+    });
+    const video = container.querySelector("video");
+    if (!video) throw new Error("expected video element");
+
+    fireEvent.loadedMetadata(video);
+    fireEvent.seeked(video);
+    expect(video.currentTime).toBe(0);
+    expect(play).toHaveBeenCalledOnce();
+
+    const replacementPlan = fixturePlanV3({
+      ...firstPlan,
+      plan_id: "plan:2222222222222222",
+      plan_attempt_key: "v3:2222222222222222",
+      timeline: {
+        ...firstPlan.timeline,
+        source_start_seconds: 626.04,
+        player_start_seconds: 2.04,
+      },
+    });
+    rerenderPlayer({
+      plan: replacementPlan,
+      planRevision: 2,
+      initialPosition: 626.04,
+    });
+
+    fireEvent.seeked(video);
+    fireEvent.loadedMetadata(video);
+    fireEvent.seeked(video);
+
+    expect(video.currentTime).toBe(0);
+    expect(play).toHaveBeenCalledTimes(2);
   });
 });
 

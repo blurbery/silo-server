@@ -15,7 +15,11 @@ import (
 	"github.com/open-policy-agent/opa/v1/rego"
 )
 
-const defaultEvalTimeout = 25 * time.Millisecond
+// Prepared vendor decisions normally complete well below a millisecond. The
+// budget is deliberately wider than that CPU time because it is a wall-clock
+// deadline: under scan and direct-stream load, scheduler delay alone can exceed
+// 25ms and must not turn a valid playback request into a policy denial.
+const defaultEvalTimeout = 250 * time.Millisecond
 
 // DecisionName identifies a prepared policy decision query.
 type DecisionName string

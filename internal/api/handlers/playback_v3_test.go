@@ -34,6 +34,104 @@ type mutablePlaybackSettingsV3 struct {
 	values map[string]string
 }
 
+func TestSessionStartErrorV3DistinguishesPolicyFailureFromDenial(t *testing.T) {
+	unavailable := sessionStartErrorV3(playback.ErrPlaybackAdmissionUnavailable)
+	if unavailable == nil || unavailable.reason != "policy_unavailable" || !unavailable.retryable {
+		t.Fatalf("unavailable mapping = %#v, want retryable policy_unavailable", unavailable)
+	}
+
+	denied := sessionStartErrorV3(playback.ErrPlaybackNotAllowed)
+	if denied == nil || denied.reason != "policy_denied" || denied.retryable {
+		t.Fatalf("denied mapping = %#v, want non-retryable policy_denied", denied)
+	}
+}
+
+func TestTransportStreamClaimsMatchLiveSessionUsesHLSServeMethod(t *testing.T) {
+	baseClaims := streamtoken.Claims{
+		SessionID:   "session-1",
+		UserID:      7,
+		ProfileID:   "profile-1",
+		MediaFileID: 42,
+	}
+	baseSession := playback.Session{
+		ID:          "session-1",
+		UserID:      7,
+		ProfileID:   "profile-1",
+		MediaFileID: 42,
+		PlayMethod:  playback.PlayRemux,
+	}
+
+	tests := []struct {
+		name    string
+		method  playback.PlayMethod
+		segment int
+		want    bool
+	}{
+		{name: "progressive remux accepts remux capability", method: playback.PlayRemux, want: true},
+		{name: "progressive remux rejects transcode capability", method: playback.PlayTranscode, want: false},
+		{name: "HLS remux accepts transcode recipe capability", method: playback.PlayTranscode, segment: 2, want: true},
+		{name: "HLS remux rejects stale progressive capability", method: playback.PlayRemux, segment: 2, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			claims := baseClaims
+			claims.PlayMethod = string(test.method)
+			session := baseSession
+			session.SegmentDuration = test.segment
+			if got := transportStreamClaimsMatchLiveSession(&claims, &session); got != test.want {
+				t.Fatalf("claims method %q with segment duration %d matched = %t, want %t", test.method, test.segment, got, test.want)
+			}
+		})
+	}
+}
+
+func TestSetStreamCapabilityQueryV3PreservesSubtitleIdentity(t *testing.T) {
+	const capability = "signed-stream-capability"
+	raw := "/stream/session-1/subtitles/3.vtt?file_id=42&downloaded_subtitle_id=71"
+	parsed, err := url.Parse(setStreamCapabilityQueryV3(raw, capability))
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	if query.Get("file_id") != "42" || query.Get(playback.DownloadedSubtitleIDParamV3) != "71" {
+		t.Fatalf("subtitle identity query was not preserved: %q", parsed.RawQuery)
+	}
+	if query.Get(streamTokenParam) != capability {
+		t.Fatalf("stream capability = %q, want %q", query.Get(streamTokenParam), capability)
+	}
+}
+
+func TestAttachStreamCapabilityToSubtitleURLsV3SupportsEveryTopology(t *testing.T) {
+	const capability = "signed.stream.capability"
+	streamURLs := []string{
+		"/stream/session-1?st=" + capability,
+		"https://proxy.example/stream/direct/" + capability,
+		"https://proxy.example/stream/remux/" + capability + "?seek=39.5",
+		"https://proxy.example/stream/transcode/" + capability + "/master.m3u8",
+	}
+	for _, streamURL := range streamURLs {
+		t.Run(streamURL, func(t *testing.T) {
+			plan := &playback.PlanV3{
+				Stream: playback.StreamV3{URL: streamURL},
+				Subtitle: playback.SubtitleDecisionV3{Inventory: []playback.SubtitleInventoryItemV3{{
+					URL: "/stream/session-1/subtitles/3.vtt?file_id=42",
+				}}},
+			}
+			attachStreamCapabilityToSubtitleURLsV3(plan)
+			parsed, err := url.Parse(plan.Subtitle.Inventory[0].URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := parsed.Query().Get(streamTokenParam); got != capability {
+				t.Fatalf("capability = %q, want %q in %q", got, capability, plan.Subtitle.Inventory[0].URL)
+			}
+			if got := parsed.Query().Get("file_id"); got != "42" {
+				t.Fatalf("file_id = %q, want 42 in %q", got, plan.Subtitle.Inventory[0].URL)
+			}
+		})
+	}
+}
+
 type failingAudioPreferenceStoreV3 struct {
 	userstore.UserStore
 	err error
@@ -527,6 +625,7 @@ func TestHandleStartPlaybackV3PublishesSubtitleURLsWithSubtitlesOff(t *testing.T
 	handler := NewPlaybackHandler(manager, testPlaybackFileResolver{file: file})
 	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{"allow_4k_transcode": "true"}}
 	handler.ItemAccess = allowAllPlaybackItemAccess{}
+	handler.JWTSecret = "subtitle-stream-capability-secret"
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/playback/start", strings.NewReader(marshalV3StartRequest(t, v3HandlerStartRequest())))
 	req = req.WithContext(newAuthorizedPlaybackContext())
@@ -550,11 +649,26 @@ func TestHandleStartPlaybackV3PublishesSubtitleURLsWithSubtitlesOff(t *testing.T
 	if len(inventory) != 3 {
 		t.Fatalf("inventory = %#v, want all three tracks", inventory)
 	}
+	streamURL, err := url.Parse(response.PlaybackPlan.Stream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamCapability := streamURL.Query().Get(streamTokenParam)
+	if streamCapability == "" {
+		t.Fatalf("stream URL omitted %s: %q", streamTokenParam, response.PlaybackPlan.Stream.URL)
+	}
 	for _, item := range inventory {
 		switch item.Delivery {
 		case playback.SubtitleDeliverySidecarV3:
 			if !strings.HasPrefix(item.URL, "/stream/"+response.SessionID+"/subtitles/") {
 				t.Errorf("track %d (%s) url = %q, want a session-scoped sidecar URL", item.CombinedIndex, item.Codec, item.URL)
+			}
+			subtitleURL, err := url.Parse(item.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := subtitleURL.Query().Get(streamTokenParam); got != streamCapability {
+				t.Errorf("track %d capability = %q, want stream capability", item.CombinedIndex, got)
 			}
 		case playback.SubtitleDeliveryBurnInOnlyV3:
 			if item.URL != "" {
@@ -566,6 +680,10 @@ func TestHandleStartPlaybackV3PublishesSubtitleURLsWithSubtitlesOff(t *testing.T
 	}
 	if inventory[1].FontBundleURL == "" {
 		t.Errorf("embedded ASS track published no font bundle: %#v", inventory[1])
+	} else if fontURL, err := url.Parse(inventory[1].FontBundleURL); err != nil {
+		t.Fatal(err)
+	} else if got := fontURL.Query().Get(streamTokenParam); got != streamCapability {
+		t.Errorf("font bundle capability = %q, want stream capability", got)
 	}
 }
 
@@ -1334,7 +1452,7 @@ func TestHandleReplanPlaybackV3SeekReanchorPreservesFallbackRecipe(t *testing.T)
 	presetLocalRegistryV3(handler, playback.NewTransformationRegistryV3([]playback.TransformationSpecV3{
 		{Name: "audio_to_aac", RecipeVersion: "1", Available: true},
 		{Name: "video_to_h264", RecipeVersion: "2", Available: true},
-		{Name: "server_dv7_to_hdr10", RecipeVersion: "1", Available: true},
+		{Name: "server_dv7_to_hdr10", RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3, Available: true},
 	}))
 	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{}}
 	handler.ItemAccess = allowAllPlaybackItemAccess{}
@@ -1881,6 +1999,7 @@ func TestValidateSeekReanchorPlanV3RejectsRouteDrift(t *testing.T) {
 		{name: "delivery recipe", mutate: func(value *playback.PlanV3) { value.Delivery = playback.DeliveryRemuxProgressiveV3 }},
 		{name: "stream MIME", mutate: func(value *playback.PlanV3) { value.Stream.MIMEType = "application/x-mpegURL" }},
 		{name: "header refresh", mutate: func(value *playback.PlanV3) { value.Stream.HeaderRefresh = playback.HeaderRefreshSessionV3 }},
+		{name: "video sample entry", mutate: func(value *playback.PlanV3) { value.EffectiveRecipe.VideoSampleEntry = playback.VideoSampleEntryHVC1V3 }},
 		{name: "frame rate", mutate: func(value *playback.PlanV3) {
 			changed := 24.0
 			value.EffectiveRecipe.FrameRate = &changed
@@ -1998,7 +2117,7 @@ func TestFrozenSeekReanchorResultV3PreservesRouteMatrix(t *testing.T) {
 		}},
 		{name: "Dolby Vision transformation", mutate: func(plan *playback.PlanV3, _ *playback.PlannerResultV3) {
 			plan.EffectiveRecipe.DynamicRange = "hdr10"
-			plan.Transformations = []playback.TransformationV3{{Name: "server_dv7_to_hdr10", Executor: "server", RecipeVersion: "1"}}
+			plan.Transformations = []playback.TransformationV3{{Name: "server_dv7_to_hdr10", Executor: "server", RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3}}
 		}},
 		{name: "pooled node only transformation", mutate: func(plan *playback.PlanV3, result *playback.PlannerResultV3) {
 			plan.Delivery = playback.DeliveryTranscodeHLSV3
@@ -2218,7 +2337,7 @@ func TestPrepareTransportV3ProgressiveRemuxUsesResolvedCopyAnchor(t *testing.T) 
 			EffectiveMediaFileID: 42,
 			Timeline:             playback.TimelineV3{SourceStartSeconds: requested, PlayerStartSeconds: requested, CanSeekAnywhere: true, SeekRestoration: "player_position"},
 		}
-		transport, transportErr := handler.prepareTransportV3(httptest.NewRequest(http.MethodPost, "/", nil), session, file, playback.PlannerResultV3{Plan: plan, PlayMethod: playback.PlayRemux})
+		transport, transportErr := handler.prepareTransportV3(httptest.NewRequest(http.MethodPost, "/", nil), session, file, playback.PlannerResultV3{Plan: plan, PlayMethod: playback.PlayRemux, DropInitialLeadingPictures: true})
 		if transportErr != nil {
 			t.Fatalf("prepare progressive transport: %v", transportErr)
 		}
@@ -2231,6 +2350,11 @@ func TestPrepareTransportV3ProgressiveRemuxUsesResolvedCopyAnchor(t *testing.T) 
 		if parsed.Query().Get("st") == "" || parsed.Query().Get("seek") != strconv.FormatFloat(requested, 'f', -1, 64) {
 			transport.rollback()
 			t.Fatalf("progressive reanchor URL %d = %q", index, transport.url)
+		}
+		claims, err := streamtoken.Verify(parsed.Query().Get("st"), handler.JWTSecret)
+		if err != nil || !claims.DropInitialLeadingPictures {
+			transport.rollback()
+			t.Fatalf("progressive resume token lost leading-picture recipe: claims=%#v err=%v", claims, err)
 		}
 		origin := requested - 0.75
 		if plan.Timeline.PlayerStartSeconds != 0.75 || plan.Timeline.StreamOriginSeconds != origin ||
@@ -2648,9 +2772,21 @@ func TestTransportGenerationV3IsUniqueAndSessionScoped(t *testing.T) {
 }
 
 func TestRemuxDVModeForPlanV3ExecutesProfile8Strip(t *testing.T) {
-	plan := &playback.PlanV3{Source: playback.SourceDescriptorV3{DVProfile: 8}, Transformations: []playback.TransformationV3{{Name: "server_dv7_to_hdr10"}}}
-	if got := remuxDVModeForPlanV3(plan); got != playback.RemuxDVStripToHDR10V3 {
+	plan := &playback.PlanV3{Source: playback.SourceDescriptorV3{DVProfile: 8}, Transformations: []playback.TransformationV3{{Name: playback.TransformationServerDV8BaseV3}}}
+	if got := remuxDVModeForPlanV3(plan); got != playback.RemuxDVStripToBaseV3 {
 		t.Fatalf("mode = %q", got)
+	}
+}
+
+func TestVideoBitstreamFilterForPlanV3ExecutesEveryDolbyBaseLayerRecipe(t *testing.T) {
+	for _, transformation := range []playback.TransformationV3{
+		{Name: playback.TransformationServerDV7HDR10V3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3},
+		{Name: playback.TransformationServerDV8BaseV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationServerDV8BaseRecipeVersionV3},
+	} {
+		plan := &playback.PlanV3{Transformations: []playback.TransformationV3{transformation}}
+		if got := videoBitstreamFilterForPlanV3(plan); got != playback.DV7ToHDR10BitstreamFilter {
+			t.Fatalf("transformation %q filter = %q", transformation.Name, got)
+		}
 	}
 }
 
@@ -3880,7 +4016,7 @@ func capableProxyStubV3(t *testing.T) *httptest.Server {
 		}
 		writeJSON(w, http.StatusOK, playback.HWAccelInfo{Transformations: []playback.TransformationV3{
 			{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"},
-			{Name: playback.TransformationServerDV7HDR10V3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"},
+			{Name: playback.TransformationServerDV7HDR10V3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3},
 		}})
 	}))
 	t.Cleanup(server.Close)

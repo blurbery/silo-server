@@ -133,6 +133,7 @@ export const QUALITY_ORIGINAL_V3 = "original";
 export const TRANSFORMATION_AUDIO_TO_AAC_V3 = "audio_to_aac";
 export const TRANSFORMATION_VIDEO_TO_H264_V3 = "video_to_h264";
 export const TRANSFORMATION_SERVER_DV7_TO_HDR10_V3 = "server_dv7_to_hdr10";
+export const TRANSFORMATION_SERVER_DV8_TO_COMPATIBLE_BASE_V3 = "server_dv8_to_compatible_base";
 
 // ---------------------------------------------------------------------------
 // Request-side capability description
@@ -376,6 +377,7 @@ export interface TimelineV3 {
 
 export interface EffectiveRecipeV3 {
   video_codec?: string;
+  video_sample_entry?: "hev1" | "hvc1" | "dvh1";
   audio_codec?: string;
   width?: number;
   height?: number;
@@ -402,6 +404,7 @@ export interface SourceDescriptorV3 {
   video_level?: number;
   bit_depth?: number;
   color_range?: string;
+  color_transfer?: string;
   width?: number;
   height?: number;
   frame_rate?: number;

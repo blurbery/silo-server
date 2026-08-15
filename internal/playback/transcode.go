@@ -43,8 +43,21 @@ type TranscodeOpts struct {
 	SourceVideoCodec     string
 	SourceVideoProfile   string
 	SourceVideoBitDepth  int
-	VideoBitstreamFilter string // validated copy-mode BSF, e.g. dovi_rpu=strip=1
-	SeekSeconds          float64
+	VideoBitstreamFilter string // validated copy-mode BSF, e.g. DV7ToHDR10BitstreamFilter
+	// DropInitialLeadingPictures enables the Firefox HEVC open-GOP resume
+	// normalization. It is typed so callers cannot inject an arbitrary FFmpeg
+	// bitstream-filter expression through a signed reconstruction recipe.
+	DropInitialLeadingPictures bool
+	// VideoSampleEntry is the exact HEVC MP4/fMP4 sample entry selected by the
+	// protocol-v3 plan (hev1, hvc1, or dvh1). It is carried independently from
+	// the Dolby transform so native Apple HLS packaging cannot leak into a
+	// MediaSource route after reconstruction or failover.
+	VideoSampleEntry string
+	// RemuxDVMode freezes the Dolby Vision treatment selected by protocol v3.
+	// VideoSampleEntry separately freezes the container label the client probe
+	// validated.
+	RemuxDVMode RemuxDVMode
+	SeekSeconds float64
 	// StreamOriginSeconds is the keyframe timestamp at which a copy-video
 	// stream actually begins. SeekSeconds remains the client-requested -ss so
 	// FFmpeg performs exactly one demuxer seek; this origin keeps response and
@@ -94,9 +107,16 @@ type TranscodeOpts struct {
 	FFmpegLogSink          FFmpegLogSink
 }
 
-// DV7ToHDR10BitstreamFilter strips Dolby Vision RPU metadata during a
-// copy-mode HLS remux; the enhancement layer is dropped by stream mapping.
-const DV7ToHDR10BitstreamFilter = "dovi_rpu=strip=1"
+// DV7ToHDR10BitstreamFilter turns a single-track, dual-layer Profile 7 stream
+// into its plain HDR10 base layer during a copy-mode remux. dovi_rpu removes
+// the Dolby Vision configuration/RPUs; filter_units removes the interleaved
+// UNSPEC63 enhancement-layer NAL units that stream mapping cannot separate.
+const DV7ToHDR10BitstreamFilter = "dovi_rpu=strip=1,filter_units=remove_types=63"
+
+// DropInitialLeadingPicturesBitstreamFilter removes only non-key HEVC packets
+// whose presentation timestamp precedes the first packet in a resumed copy.
+// The escaped comma is part of one FFmpeg argv token.
+const DropInitialLeadingPicturesBitstreamFilter = `noise=drop=lt(pts\,startpts)*not(key)`
 
 const (
 	transcodeCodecH264 = "h264"
@@ -210,9 +230,47 @@ const (
 
 // StartTranscode launches an ffmpeg process that produces HLS segments.
 func StartTranscode(ctx context.Context, opts TranscodeOpts) (*TranscodeSession, error) {
+	if opts.DropInitialLeadingPictures &&
+		(!strings.EqualFold(opts.TargetCodecVideo, "copy") || !strings.EqualFold(opts.SourceVideoCodec, "hevc")) {
+		return nil, fmt.Errorf("initial leading-picture normalization requires HEVC video copy")
+	}
 	if opts.VideoBitstreamFilter != "" &&
 		(opts.VideoBitstreamFilter != DV7ToHDR10BitstreamFilter || !strings.EqualFold(opts.TargetCodecVideo, "copy")) {
 		return nil, fmt.Errorf("unsupported video bitstream filter recipe")
+	}
+	sampleEntry := strings.ToLower(strings.TrimSpace(opts.VideoSampleEntry))
+	switch sampleEntry {
+	case "":
+		// Legacy recipes let FFmpeg choose its existing default.
+	case VideoSampleEntryHEV1V3, VideoSampleEntryHVC1V3, VideoSampleEntryDVH1V3:
+		if !strings.EqualFold(opts.TargetCodecVideo, "copy") || !strings.EqualFold(opts.SourceVideoCodec, "hevc") {
+			return nil, fmt.Errorf("video sample entry requires HEVC video copy")
+		}
+	default:
+		return nil, fmt.Errorf("unsupported video sample entry")
+	}
+	opts.VideoSampleEntry = sampleEntry
+	switch opts.RemuxDVMode {
+	case "":
+		if sampleEntry == VideoSampleEntryDVH1V3 {
+			return nil, fmt.Errorf("dvh1 sample entry requires Dolby Vision preserve mode")
+		}
+	case RemuxDVStripToHDR10V3, RemuxDVStripToBaseV3:
+		if opts.VideoBitstreamFilter != DV7ToHDR10BitstreamFilter || !strings.EqualFold(opts.TargetCodecVideo, "copy") {
+			return nil, fmt.Errorf("dolby vision base-layer HLS requires the validated copy recipe")
+		}
+		if sampleEntry != VideoSampleEntryHEV1V3 && sampleEntry != VideoSampleEntryHVC1V3 {
+			return nil, fmt.Errorf("dolby vision base-layer HLS requires an HEVC sample entry")
+		}
+	case RemuxDVPreserveV3:
+		if opts.VideoBitstreamFilter != "" || !strings.EqualFold(opts.TargetCodecVideo, "copy") {
+			return nil, fmt.Errorf("dolby vision preserve HLS requires unfiltered video copy")
+		}
+		if sampleEntry != VideoSampleEntryDVH1V3 {
+			return nil, fmt.Errorf("dolby vision preserve HLS requires the dvh1 sample entry")
+		}
+	default:
+		return nil, fmt.Errorf("unsupported dolby vision HLS mode")
 	}
 	if opts.SegmentDuration <= 0 {
 		opts.SegmentDuration = defaultSegmentDuration
@@ -428,8 +486,16 @@ func buildFFmpegArgs(opts TranscodeOpts) []string {
 	// Video codec and encoding settings.
 	if isVideoCopy {
 		args = append(args, "-c:v", "copy")
-		if opts.VideoBitstreamFilter == DV7ToHDR10BitstreamFilter {
-			args = append(args, "-bsf:v", opts.VideoBitstreamFilter)
+		if bitstreamFilter := copyVideoBitstreamFilter(opts); bitstreamFilter != "" {
+			args = append(args, "-bsf:v", bitstreamFilter)
+		}
+		if opts.VideoSampleEntry != "" {
+			args = append(args, "-tag:v", opts.VideoSampleEntry)
+			if opts.VideoSampleEntry == VideoSampleEntryDVH1V3 {
+				// FFmpeg requires this relaxation to write the Dolby configuration
+				// record promised by the native Apple dvh1 route.
+				args = append(args, "-strict", "unofficial")
+			}
 		}
 	} else {
 		args = appendVideoArgs(args, opts)
@@ -499,6 +565,18 @@ func buildFFmpegArgs(opts TranscodeOpts) []string {
 	args = append(args, manifestPath)
 
 	return args
+}
+
+func copyVideoBitstreamFilter(opts TranscodeOpts) string {
+	filters := make([]string, 0, 2)
+	if opts.DropInitialLeadingPictures && opts.SeekSeconds > 0 &&
+		strings.EqualFold(opts.TargetCodecVideo, "copy") && strings.EqualFold(opts.SourceVideoCodec, "hevc") {
+		filters = append(filters, DropInitialLeadingPicturesBitstreamFilter)
+	}
+	if opts.VideoBitstreamFilter == DV7ToHDR10BitstreamFilter {
+		filters = append(filters, DV7ToHDR10BitstreamFilter)
+	}
+	return strings.Join(filters, ",")
 }
 
 func resolveEffectiveTranscodeHWAccel(opts TranscodeOpts) string {

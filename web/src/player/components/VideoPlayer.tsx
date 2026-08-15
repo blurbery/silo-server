@@ -1377,6 +1377,10 @@ export function VideoPlayer({
     let destroyed = false;
     let autoplayStarted = false;
     let nativeHLSMetadataHandler: (() => void) | null = null;
+    const skipFirefoxProgressiveInitialSeek =
+      isFirefoxBrowser &&
+      plan.delivery === "server_remux_progressive" &&
+      plan.timeline.stream_origin_seconds > 0;
 
     mediaRecoveryAttemptsRef.current = 0;
     setError(null);
@@ -1392,12 +1396,8 @@ export function VideoPlayer({
       }
     };
 
-    const attemptAutoplayWhenReady = () => {
+    const completeStartup = () => {
       if (destroyed || autoplayStarted || hlsStartupGuardRef.current?.hasFailed()) return;
-      // HAVE_FUTURE_DATA means the browser has enough media to advance beyond
-      // the current frame. Starting earlier can produce a visible first-frame
-      // freeze where audio advances before video begins moving.
-      if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) return;
       autoplayStarted = true;
       cleanupStartupListeners();
       if (!shouldAutoPlay) {
@@ -1406,7 +1406,17 @@ export function VideoPlayer({
         setPlaying(false);
         return;
       }
-      video.play().catch(() => setPlaying(false));
+      video.play().catch(() => {
+        if (!destroyed) setPlaying(false);
+      });
+    };
+
+    const attemptAutoplayWhenReady = () => {
+      // HAVE_FUTURE_DATA means the browser has enough media to advance beyond
+      // the current frame. Starting HLS earlier can produce a visible first-
+      // frame freeze where audio advances before video begins moving.
+      if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) return;
+      completeStartup();
     };
 
     video.addEventListener("loadeddata", attemptAutoplayWhenReady);
@@ -1420,7 +1430,18 @@ export function VideoPlayer({
           const Hls = await hlsPromise;
           if (destroyed || hlsStartupGuardRef.current?.hasFailed()) return;
 
-          if (Hls.isSupported()) {
+          // Honor the delivery capability this client advertised to the
+          // planner. Safari's exact HEVC/HDR evidence comes from its native
+          // media element, so routing the resulting plan through hls.js/MSE
+          // can accept the plan and then stall on a resumed fMP4 window.
+          if (video.canPlayType("application/vnd.apple.mpegurl")) {
+            video.src = effectiveStreamUrl;
+            nativeHLSMetadataHandler = () => {
+              video.currentTime = effectiveInitialPosition;
+              attemptAutoplayWhenReady();
+            };
+            video.addEventListener("loadedmetadata", nativeHLSMetadataHandler, { once: true });
+          } else if (Hls.isSupported()) {
             const maxBufferLength = plannedBitrateKbps >= 25000 ? 60 : 120;
             const retryingLoadPolicy = {
               maxTimeToFirstByteMs: 45000,
@@ -1518,13 +1539,6 @@ export function VideoPlayer({
             hls.loadSource(effectiveStreamUrl);
             hls.attachMedia(video);
             hlsRef.current = hls;
-          } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-            video.src = effectiveStreamUrl;
-            nativeHLSMetadataHandler = () => {
-              video.currentTime = effectiveInitialPosition;
-              attemptAutoplayWhenReady();
-            };
-            video.addEventListener("loadedmetadata", nativeHLSMetadataHandler, { once: true });
           } else {
             if (
               !reportCurrentPlanFailure({
@@ -1548,10 +1562,19 @@ export function VideoPlayer({
           }
         }
       } else {
-        // Direct play — set video src directly.
+        // A resumed copy remux is already cut by the server at the preceding
+        // keyframe and its timeline offset maps player time back to media time.
+        // Firefox rejects a second non-zero seek inside this live, chunked fMP4
+        // because the response is not byte-range seekable. Attach and play it
+        // exactly like the known-good zero-start path; at worst playback begins
+        // in the short keyframe pre-roll immediately before the saved position.
         video.src = effectiveStreamUrl;
-        video.currentTime = effectiveInitialPosition;
-        if (shouldAutoPlay) video.play().catch(() => setPlaying(false));
+        if (!skipFirefoxProgressiveInitialSeek) {
+          video.currentTime = effectiveInitialPosition;
+        }
+        if (shouldAutoPlay) {
+          completeStartup();
+        }
       }
     }
 
@@ -1577,8 +1600,11 @@ export function VideoPlayer({
   }, [
     effectiveStreamUrl,
     effectiveInitialPosition,
+    isFirefoxBrowser,
     isHlsStream,
     isPlayerReady,
+    plan.delivery,
+    plan.timeline.stream_origin_seconds,
     planRevision,
     plannedBitrateKbps,
     reportCurrentPlanFailure,

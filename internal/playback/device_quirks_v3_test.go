@@ -124,6 +124,44 @@ func TestDeviceQuirkProtocolRequiresTopLevelFeature(t *testing.T) {
 	}
 }
 
+func TestFirefoxHEVCOpenGOPQuirkIsExact(t *testing.T) {
+	source := SourceDescriptorV3{VideoCodec: "hevc"}
+	request := validStartRequestV3()
+	request.ClientPlaybackContext.Device = DeviceContextV3{
+		Platform: "web",
+		PlatformDetails: map[string]string{
+			"user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0",
+		},
+	}
+
+	quirk, ok := firefoxHEVCOpenGOPQuirkV3(source, request)
+	if !ok || quirk == nil || quirk.ID != QuirkFirefoxHEVCOpenGOPV3 {
+		t.Fatalf("Firefox HEVC quirk = %#v, ok=%v", quirk, ok)
+	}
+
+	for _, test := range []struct {
+		name      string
+		platform  string
+		userAgent string
+		codec     string
+	}{
+		{name: "Safari", platform: "web", userAgent: "Mozilla/5.0 Version/19.0 Safari/605.1.15", codec: "hevc"},
+		{name: "Chromium", platform: "web", userAgent: "Mozilla/5.0 Chrome/140.0.0.0 Safari/537.36", codec: "hevc"},
+		{name: "SeaMonkey", platform: "web", userAgent: "Mozilla/5.0 Gecko/20100101 Firefox/128.0 SeaMonkey/2.53", codec: "hevc"},
+		{name: "Firefox H264", platform: "web", userAgent: "Mozilla/5.0 Firefox/153.0", codec: "h264"},
+		{name: "non-web", platform: "android", userAgent: "Mozilla/5.0 Firefox/153.0", codec: "hevc"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := request
+			candidate.ClientPlaybackContext.Device.Platform = test.platform
+			candidate.ClientPlaybackContext.Device.PlatformDetails = map[string]string{"user_agent": test.userAgent}
+			if quirk, ok := firefoxHEVCOpenGOPQuirkV3(SourceDescriptorV3{VideoCodec: test.codec}, candidate); ok || quirk != nil {
+				t.Fatalf("unexpected quirk = %#v, ok=%v", quirk, ok)
+			}
+		})
+	}
+}
+
 func TestPlanAttemptKeyV3DeviceQuirkIsStable(t *testing.T) {
 	width, height, bitrate := 3840, 2160, 60_000
 	plan := PlanV3{
@@ -134,7 +172,7 @@ func TestPlanAttemptKeyV3DeviceQuirkIsStable(t *testing.T) {
 		AppliedQuirks:      []AppliedQuirkV3{{ID: QuirkFireTVDV8HDR10PlusV3, RegistryRevision: DeviceQuirkRegistryRevisionV3, Action: "client_runtime_correction"}},
 		RuntimeCorrections: []string{ClientDV8HDR10PlusSanitizerV3},
 	}
-	if got := PlanAttemptKeyV3(plan, "9", nil); got != "v3:32a3a37d71bc4f43" {
+	if got := PlanAttemptKeyV3(plan, "9", nil); got != "v3:392b54d763d3fe72" {
 		t.Fatalf("key = %q", got)
 	}
 }

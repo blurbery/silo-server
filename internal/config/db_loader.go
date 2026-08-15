@@ -13,6 +13,13 @@ import (
 	subtitleai "github.com/Silo-Server/silo-server/internal/subtitles/ai"
 )
 
+const (
+	policyEvalTimeoutSettingKey = "policy.eval_timeout_ms"
+	defaultPolicyEvalTimeoutMS  = 250
+	minPolicyEvalTimeoutMS      = 10
+	maxPolicyEvalTimeoutMS      = 5000
+)
+
 // stringOr returns the value from the map for the given key, or the fallback if absent/empty.
 func stringOr(m map[string]string, key, fallback string) string {
 	if v, ok := m[key]; ok && v != "" {
@@ -615,9 +622,12 @@ func LoadFromDB(m map[string]string) (*Config, error) {
 	cfg.Download.ArtifactMaxBytes = artifactMaxBytes
 
 	// Policy
-	policyEvalTimeoutMS, err := intOr(m, "policy.eval_timeout_ms", 25)
+	policyEvalTimeoutMS, err := intOr(m, policyEvalTimeoutSettingKey, defaultPolicyEvalTimeoutMS)
 	if err != nil {
 		return nil, err
+	}
+	if policyEvalTimeoutMS < minPolicyEvalTimeoutMS || policyEvalTimeoutMS > maxPolicyEvalTimeoutMS {
+		return nil, fmt.Errorf("invalid value for %q: must be between %d and %d", policyEvalTimeoutSettingKey, minPolicyEvalTimeoutMS, maxPolicyEvalTimeoutMS)
 	}
 	cfg.Policy.EvalTimeoutMS = policyEvalTimeoutMS
 	policyEditorEnabled, err := boolOr(m, "policy.editor_enabled", false)

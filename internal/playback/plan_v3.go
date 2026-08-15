@@ -23,6 +23,8 @@ const (
 	audioLayoutMonoV3                    = "mono"
 	audioLayoutStereoV3                  = "stereo"
 	audioLayoutSurround51V3              = "5.1"
+	colorTransferPQV3                    = "smpte2084"
+	colorTransferBT709V3                 = "bt709"
 )
 
 type PlannerInputV3 struct {
@@ -87,12 +89,17 @@ func (input PlannerInputV3) hlsRegistry() *TransformationRegistryV3 {
 }
 
 type PlannerResultV3 struct {
-	Plan             *PlanV3
-	Terminal         *TerminalV3
-	PlayMethod       PlayMethod
-	TranscodeAudio   bool
-	TargetVideoCodec string
-	TargetAudioCodec string
+	Plan           *PlanV3
+	Terminal       *TerminalV3
+	PlayMethod     PlayMethod
+	TranscodeAudio bool
+	// DropInitialLeadingPictures freezes the Firefox HEVC open-GOP resume
+	// normalization selected with this copied-video recipe. Execution still
+	// gates it on a non-zero seek, so starts from zero remain byte-for-byte
+	// unchanged while later seek reanchors retain the remedy.
+	DropInitialLeadingPictures bool
+	TargetVideoCodec           string
+	TargetAudioCodec           string
 	// TargetAudioChannels caps the transcode's re-encoded channel count;
 	// 0 keeps the historical stereo downmix.
 	TargetAudioChannels         int
@@ -168,15 +175,16 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	}
 	containerOK := containsFoldV3(input.Request.Capabilities.Containers, source.Container)
 	hlsDeliveryOK := deliveryAvailableV3(input.Request, DeliveryClassHLSV3)
-	// DV strip eligibility is split by executor pool: a progressive remux
+	// DV base-layer fallback eligibility is split by executor pool: a progressive remux
 	// executes on this process's ffmpeg, while an HLS remux may run on a
 	// pooled transcode node advertising the transformation. Node capability
 	// only counts when the client can actually run an HLS delivery, and the
 	// widened registry is consulted lazily so non-DV sources never touch it.
-	dvStripEligibleLocal := canStripDolbyVisionToHDR10V3(source, input.Request, input.Registry)
+	dvFallbackLocal, dvStripEligibleLocal := dolbyVisionBaseLayerFallbackV3(source, input.Request, input.Registry)
+	dvFallback := dvFallbackLocal
 	dvStripEligible := dvStripEligibleLocal
 	if !dvStripEligible && hlsDeliveryOK && source.DynamicRange == DynamicRangeDolbyVisionV3 {
-		dvStripEligible = canStripDolbyVisionToHDR10V3(source, input.Request, input.hlsRegistry())
+		dvFallback, dvStripEligible = dolbyVisionBaseLayerFallbackV3(source, input.Request, input.hlsRegistry())
 	}
 	// A source whose RPU ffmpeg cannot parse must lose the strip here rather
 	// than at the transport, so that the plan's HDR10 promise, the durable
@@ -188,7 +196,24 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		dvStripUnsupportedBySource = true
 		dvStripEligible = false
 		dvStripEligibleLocal = false
+		dvFallbackLocal = dolbyVisionBaseLayerFallbackV3Result{}
+		dvFallback = dolbyVisionBaseLayerFallbackV3Result{}
 	}
+	// Keep HLS preference browser-only. Silo Apple uses original_http for
+	// Matroska as the signal to launch its client-side loopback remuxer; that path
+	// also installs AVDisplayCriteria so tvOS Match Frame Rate and Match Dynamic
+	// Range can follow the source. Forcing server HLS bypasses that client policy.
+	// Safari's native HLS consumes the explicitly probed hvc1/dvh1 recipe, so it
+	// remains the preferred web Dolby route. Browsers using hls.js (including
+	// Firefox) stay progressive-first: that direct remux is their proven fast
+	// path and avoids moving an otherwise playable 4K source through MediaSource.
+	// HLS remains available as a recovery route if the progressive delivery fails.
+	// Require the complete copy recipe here so a missing server toolchain never
+	// takes away a working progressive fallback.
+	preferServerHLS := prefersWebHLSForMKVDolbyV3(source, input.Request) &&
+		videoOK && !source.VideoCopyUnsafe && hlsRemuxSubtitleOK &&
+		(rangeOK || dvStripEligible) &&
+		hlsAudioRouteExecutableV3(source, input)
 	clientDV81Eligible := canClientTransformDV7ToDV81V3(source, input.Request)
 	clientHDR10Eligible := canClientTransformDV7ToHDR10V3(source, input.Request)
 	// With the server strip gone, a client that cannot take the source range
@@ -293,7 +318,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	// source. A decoder profile/max-instance claim alone is not proof of native
 	// dual-layer output, so the default Android route mirrors Silo Apple: P8.1
 	// base-layer Dolby Vision first, then same-file HDR10.
-	if source.DVProfile == 7 && quality.PreservesSource && videoOK && containerOK && audioOK &&
+	if !preferServerHLS && source.DVProfile == 7 && quality.PreservesSource && videoOK && containerOK && audioOK &&
 		audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && !subtitle.RequiresBurn {
 		if clientDV81Eligible {
 			plan := base
@@ -337,7 +362,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		}
 	}
 
-	if source.DVProfile != 7 && deliveryAvailableV3(input.Request, DeliveryClassOriginalHTTPV3) && containerOK && videoOK && rangeOK && audioOK && quality.PreservesSource &&
+	if !preferServerHLS && source.DVProfile != 7 && deliveryAvailableV3(input.Request, DeliveryClassOriginalHTTPV3) && containerOK && videoOK && rangeOK && audioOK && quality.PreservesSource &&
 		audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && !subtitle.RequiresBurn {
 		plan := base
 		plan.Delivery = DeliveryOriginalHTTPV3
@@ -390,32 +415,37 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		}
 		dvStrip := dvStripEligible && (source.DVProfile == 7 || !rangeOK)
 		if dvStrip {
-			plan.Transformations = append(plan.Transformations, TransformationV3{Name: TransformationServerDV7HDR10V3, Executor: ExecutorServerV3, RecipeVersion: "1", ValidatedClaims: DV7ToHDR10ClaimsV3()})
-			plan.EffectiveRecipe.DynamicRange = DynamicRangeHDR10V3
-			plan.Claims.Video = VideoClaimsV3{HDR10: true}
-			plan.DegradationWarnings = append(plan.DegradationWarnings, DegradationWarningV3{Code: "dolby_vision_removed", Message: "Dolby Vision metadata is removed and the validated HDR10 base layer is preserved."})
+			plan.Transformations = append(plan.Transformations, dvFallback.Transformation)
+			plan.EffectiveRecipe.DynamicRange = dvFallback.DynamicRange
+			plan.Claims.Video = dvFallback.Claims
+			plan.DegradationWarnings = append(plan.DegradationWarnings, DegradationWarningV3{Code: "dolby_vision_removed", Message: dvFallback.Warning})
 		}
 		if !dvStrip {
 			applyCopiedVideoQuirksV3(&plan, source, input.Request, high10Quirk)
 		}
+		dropInitialLeadingPictures := applyFirefoxHEVCOpenGOPQuirkV3(&plan, source, input.Request)
+		plan.EffectiveRecipe.VideoSampleEntry = progressiveVideoSampleEntryV3(source, dvStrip)
 		// The progressive remux executes on this process's ffmpeg, so its
 		// server transformations must be locally available; when only pooled
 		// nodes carry them, the HLS remux below ships the same recipe on a
 		// node-offloadable delivery instead.
-		progressiveExecutable := (!transcodeAudio || localAudioConvertOK) && (!dvStrip || dvStripEligibleLocal)
-		if remuxSubtitleOK && progressiveExecutable {
+		progressiveExecutable := (!transcodeAudio || localAudioConvertOK) && (!dvStrip || dvStripEligibleLocal && dvFallbackLocal.DynamicRange == dvFallback.DynamicRange)
+		progressivePlan := plan
+		if !preferServerHLS && remuxSubtitleOK && progressiveExecutable {
 			applySubtitleDecisionV3(&plan, remuxSubtitle.Decision)
 			plan.Claims.Subtitles = remuxSubtitle.Claims
 			finalizePlanIdentityV3(&plan, input.Request.PlaybackAttemptID, input.Request.ClientPlaybackContext.Output.OutputContextID)
 			if deliverySupportsPlanV3(input.Request, DeliveryClassProgressiveV3, plan) && !planAttemptedV3(plan, input.Request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
-				return PlannerResultV3{Plan: &plan, PlayMethod: PlayRemux, TranscodeAudio: transcodeAudio, TargetAudioCodec: plan.EffectiveRecipe.AudioCodec, TargetAudioChannels: progressiveAudioChannels, SubtitleTrackIndex: remuxSubtitle.SelectedIndex, SubtitleTransportTrackIndex: remuxSubtitle.TransportIndex, SubtitleCodec: remuxSubtitle.Codec, DownloadedSubtitleID: remuxSubtitle.DownloadedSubtitleID}
+				return PlannerResultV3{Plan: &plan, PlayMethod: PlayRemux, TranscodeAudio: transcodeAudio, DropInitialLeadingPictures: dropInitialLeadingPictures, TargetAudioCodec: plan.EffectiveRecipe.AudioCodec, TargetAudioChannels: progressiveAudioChannels, SubtitleTrackIndex: remuxSubtitle.SelectedIndex, SubtitleTransportTrackIndex: remuxSubtitle.TransportIndex, SubtitleCodec: remuxSubtitle.Codec, DownloadedSubtitleID: remuxSubtitle.DownloadedSubtitleID}
 			}
 		}
 		if deliveryAvailableV3(input.Request, DeliveryClassHLSV3) && hlsRemuxSubtitleOK {
+			plan = progressivePlan
 			plan.AppliedQuirks = []AppliedQuirkV3{}
 			plan.RuntimeCorrections = []string{}
 			plan.Delivery = DeliveryRemuxHLSV3
 			plan.Stream = StreamV3{Protocol: StreamHLSV3, Container: "hls", MIMEType: "application/vnd.apple.mpegurl", Headers: map[string]string{}, HeaderRefresh: HeaderRefreshNoneV3}
+			plan.EffectiveRecipe.VideoSampleEntry = hlsVideoSampleEntryV3(source, input.Request, dvStrip)
 			hlsTranscodeAudio := transcodeAudio
 			hlsAudioChannels := 0
 			if hlsTranscodeAudio {
@@ -459,6 +489,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 			if !dvStrip {
 				applyCopiedVideoQuirksV3(&plan, source, input.Request, high10Quirk)
 			}
+			hlsDropInitialLeadingPictures := applyFirefoxHEVCOpenGOPQuirkV3(&plan, source, input.Request)
 			if hlsTranscodeAudio {
 				plan.DecisionReason = "hls_audio_adaptation"
 			} else {
@@ -472,7 +503,20 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 				if hlsTranscodeAudio {
 					targetAudio = "aac"
 				}
-				return PlannerResultV3{Plan: &plan, PlayMethod: PlayRemux, TranscodeAudio: hlsTranscodeAudio, TargetVideoCodec: "copy", TargetAudioCodec: targetAudio, TargetAudioChannels: hlsAudioChannels, TargetResolution: resolutionLabelV3(source.Height), TargetBitrateKbps: source.BitrateKbps, SubtitleTrackIndex: hlsSubtitle.SelectedIndex, SubtitleTransportTrackIndex: hlsSubtitle.TransportIndex, SubtitleCodec: hlsSubtitle.Codec, DownloadedSubtitleID: hlsSubtitle.DownloadedSubtitleID}
+				return PlannerResultV3{Plan: &plan, PlayMethod: PlayRemux, TranscodeAudio: hlsTranscodeAudio, DropInitialLeadingPictures: hlsDropInitialLeadingPictures, TargetVideoCodec: "copy", TargetAudioCodec: targetAudio, TargetAudioChannels: hlsAudioChannels, TargetResolution: resolutionLabelV3(source.Height), TargetBitrateKbps: source.BitrateKbps, SubtitleTrackIndex: hlsSubtitle.SelectedIndex, SubtitleTransportTrackIndex: hlsSubtitle.TransportIndex, SubtitleCodec: hlsSubtitle.Codec, DownloadedSubtitleID: hlsSubtitle.DownloadedSubtitleID}
+			}
+		}
+		// HLS is a preference, not a dead end. If this exact HLS recipe was
+		// already attempted (or the delivery's narrower claims reject it), retain
+		// the progressive remux as a recovery route rather than jumping directly
+		// to a full video transcode.
+		if preferServerHLS && remuxSubtitleOK && progressiveExecutable {
+			plan = progressivePlan
+			applySubtitleDecisionV3(&plan, remuxSubtitle.Decision)
+			plan.Claims.Subtitles = remuxSubtitle.Claims
+			finalizePlanIdentityV3(&plan, input.Request.PlaybackAttemptID, input.Request.ClientPlaybackContext.Output.OutputContextID)
+			if deliverySupportsPlanV3(input.Request, DeliveryClassProgressiveV3, plan) && !planAttemptedV3(plan, input.Request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
+				return PlannerResultV3{Plan: &plan, PlayMethod: PlayRemux, TranscodeAudio: transcodeAudio, DropInitialLeadingPictures: dropInitialLeadingPictures, TargetAudioCodec: plan.EffectiveRecipe.AudioCodec, TargetAudioChannels: progressiveAudioChannels, SubtitleTrackIndex: remuxSubtitle.SelectedIndex, SubtitleTransportTrackIndex: remuxSubtitle.TransportIndex, SubtitleCodec: remuxSubtitle.Codec, DownloadedSubtitleID: remuxSubtitle.DownloadedSubtitleID}
 			}
 		}
 	}
@@ -481,6 +525,39 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	}
 
 	return terminalPlannerResultV3("adaptation_unavailable", "No validated playback route is available for this source and output route.", false)
+}
+
+// Progressive remuxes are consumed by a media element. Explicit Dolby Vision
+// recipes already label their MP4 output hvc1/dvh1; ordinary HEVC remuxes keep
+// FFmpeg's hev1 default. Freezing that distinction on the plan prevents an HLS
+// reconstruction from inheriting Safari's sample entry on another browser.
+func progressiveVideoSampleEntryV3(source SourceDescriptorV3, dvStrip bool) string {
+	if !strings.EqualFold(source.VideoCodec, "hevc") {
+		return ""
+	}
+	if dvStrip {
+		return VideoSampleEntryHVC1V3
+	}
+	if source.DVProfile == 5 || source.DVProfile == 8 {
+		return VideoSampleEntryDVH1V3
+	}
+	return VideoSampleEntryHEV1V3
+}
+
+// Native HLS uses the same Apple media-element evidence as progressive
+// playback, while hls.js consumes MediaSource fMP4 and is probed against hev1.
+// Keep those byte recipes separate even when they preserve the same HDR range.
+func hlsVideoSampleEntryV3(source SourceDescriptorV3, request StartRequestV3, dvStrip bool) string {
+	if !strings.EqualFold(source.VideoCodec, "hevc") {
+		return ""
+	}
+	if !deliverySupportsFeatureV3(request, DeliveryClassHLSV3, ClientNativeHLSPlaybackV3) {
+		return VideoSampleEntryHEV1V3
+	}
+	if !dvStrip && (source.DVProfile == 5 || source.DVProfile == 8) {
+		return VideoSampleEntryDVH1V3
+	}
+	return VideoSampleEntryHVC1V3
 }
 
 // availableQualitiesV3 publishes the server ladder rungs a client could
@@ -778,13 +855,115 @@ func applySubtitleDecisionV3(plan *PlanV3, decision SubtitleDecisionV3) {
 	plan.Subtitle.Inventory = inventory
 }
 
-func canStripDolbyVisionToHDR10V3(source SourceDescriptorV3, request StartRequestV3, registry *TransformationRegistryV3) bool {
-	if source.DynamicRange != DynamicRangeDolbyVisionV3 || !clientSupportsHDR10V3(request) || registry == nil || !registry.Available(TransformationServerDV7HDR10V3) {
+func prefersWebHLSForMKVDolbyV3(source SourceDescriptorV3, request StartRequestV3) bool {
+	if !strings.EqualFold(source.Container, "mkv") && !strings.EqualFold(source.Container, "matroska") {
 		return false
 	}
-	// Profile 7 always carries an HDR10-viewable base layer. Profile 8 is
-	// safe only when the DOVI compatibility id explicitly identifies HDR10.
-	return source.DVProfile == 7 || source.DVProfile == 8 && source.DVBLCompatID == 1
+	if !strings.EqualFold(strings.TrimSpace(request.ClientPlaybackContext.Device.Platform), "web") || source.DVProfile <= 0 {
+		return false
+	}
+	// Only a browser that explicitly advertised native HLS should change the
+	// normal progressive-first ordering. hls.js support is still advertised on
+	// the HLS delivery and can be selected after a genuine progressive failure.
+	return deliveryAvailableV3(request, DeliveryClassHLSV3) &&
+		deliverySupportsFeatureV3(request, DeliveryClassHLSV3, ClientNativeHLSPlaybackV3)
+}
+
+func hlsAudioRouteExecutableV3(source SourceDescriptorV3, input PlannerInputV3) bool {
+	if source.AudioCodec == "" || hlsNativeAudioCodecV3(source.AudioCodec) {
+		return true
+	}
+	registry := input.hlsRegistry()
+	return registry != nil && registry.Available(TransformationAudioToAACV3)
+}
+
+type dolbyVisionBaseLayerFallbackV3Result struct {
+	Transformation TransformationV3
+	DynamicRange   string
+	Claims         VideoClaimsV3
+	Warning        string
+}
+
+// dolbyVisionBaseLayerFallbackV3 selects a fallback only when the source's
+// Dolby Vision profile has an explicitly compatible base layer. Profile 5 and
+// unknown/zero compatibility IDs are deliberately excluded: removing their
+// RPU and pretending the remaining pixels are ordinary HDR/SDR produces wrong
+// colors. Profile 7's base layer is HDR10; Profile 8 declares its compatible
+// signal through the BL compatibility ID (1/6 HDR10, 2 SDR, 4 HLG).
+func dolbyVisionBaseLayerFallbackV3(source SourceDescriptorV3, request StartRequestV3, registry *TransformationRegistryV3) (dolbyVisionBaseLayerFallbackV3Result, bool) {
+	if source.DynamicRange != DynamicRangeDolbyVisionV3 || registry == nil {
+		return dolbyVisionBaseLayerFallbackV3Result{}, false
+	}
+	if source.DVProfile == 7 {
+		if !clientSupportsHDR10V3(request) || !registry.Available(TransformationServerDV7HDR10V3) {
+			return dolbyVisionBaseLayerFallbackV3Result{}, false
+		}
+		return dolbyVisionBaseLayerFallbackV3Result{
+			Transformation: TransformationV3{Name: TransformationServerDV7HDR10V3, Executor: ExecutorServerV3, RecipeVersion: TransformationServerDV7HDR10RecipeVersionV3, ValidatedClaims: DV7ToHDR10ClaimsV3()},
+			DynamicRange:   DynamicRangeHDR10V3,
+			Claims:         VideoClaimsV3{HDR10: true},
+			Warning:        "Dolby Vision metadata and enhancement-layer data are removed and the validated HDR10 base layer is preserved.",
+		}, true
+	}
+	if source.DVProfile != 8 || !registry.Available(TransformationServerDV8BaseV3) {
+		return dolbyVisionBaseLayerFallbackV3Result{}, false
+	}
+
+	result := dolbyVisionBaseLayerFallbackV3Result{
+		Transformation: TransformationV3{Name: TransformationServerDV8BaseV3, Executor: ExecutorServerV3, RecipeVersion: TransformationServerDV8BaseRecipeVersionV3},
+	}
+	switch source.DVBLCompatID {
+	case 1, 6:
+		if !dolbyVisionBaseTransferMatchesV3(source.ColorTransfer, DynamicRangeHDR10V3) || !clientSupportsHDR10V3(request) {
+			return dolbyVisionBaseLayerFallbackV3Result{}, false
+		}
+		result.DynamicRange = DynamicRangeHDR10V3
+		result.Claims = VideoClaimsV3{HDR10: true}
+		result.Transformation.ValidatedClaims = DV8ToBaseLayerClaimsV3(ClaimHDR10BaseLayerPreservedV3)
+		result.Warning = "Dolby Vision metadata is removed and the validated HDR10-compatible base layer is preserved."
+	case 2:
+		if !dolbyVisionBaseTransferMatchesV3(source.ColorTransfer, DynamicRangeSDRV3) {
+			return dolbyVisionBaseLayerFallbackV3Result{}, false
+		}
+		result.DynamicRange = DynamicRangeSDRV3
+		result.Transformation.ValidatedClaims = DV8ToBaseLayerClaimsV3(ClaimSDRBaseLayerPreservedV3)
+		result.Warning = "Dolby Vision metadata is removed and the validated SDR-compatible base layer is preserved."
+	case 4:
+		if !dolbyVisionBaseTransferMatchesV3(source.ColorTransfer, DynamicRangeHLGV3) || !clientSupportsHLGV3(request) {
+			return dolbyVisionBaseLayerFallbackV3Result{}, false
+		}
+		result.DynamicRange = DynamicRangeHLGV3
+		result.Claims = VideoClaimsV3{HLG: true}
+		result.Transformation.ValidatedClaims = DV8ToBaseLayerClaimsV3(ClaimHLGBaseLayerPreservedV3)
+		result.Warning = "Dolby Vision metadata is removed and the validated HLG-compatible base layer is preserved."
+	default:
+		return dolbyVisionBaseLayerFallbackV3Result{}, false
+	}
+	return result, true
+}
+
+func dolbyVisionBaseTransferMatchesV3(transfer, dynamicRange string) bool {
+	transfer = strings.ToLower(strings.TrimSpace(transfer))
+	switch dynamicRange {
+	case DynamicRangeHDR10V3:
+		return transfer == colorTransferPQV3 || transfer == "pq"
+	case DynamicRangeHLGV3:
+		return transfer == "arib-std-b67" || transfer == "hlg"
+	case DynamicRangeSDRV3:
+		switch transfer {
+		case colorTransferBT709V3, "bt470bg", "smpte170m", "iec61966-2-1":
+			return true
+		}
+	}
+	return false
+}
+
+func clientSupportsHLGV3(request StartRequestV3) bool {
+	hdr := request.ClientPlaybackContext.Output.HDRDetails
+	if hdr == nil {
+		hdr = request.Capabilities.HDRDetails
+	}
+	return hdr != nil && hdr.HLG
 }
 
 func canClientTransformDV7ToDV81V3(source SourceDescriptorV3, request StartRequestV3) bool {

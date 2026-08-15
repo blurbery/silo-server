@@ -405,6 +405,10 @@
         "video_codec": {
           "type": "string"
         },
+        "video_sample_entry": {
+          "type": "string",
+          "enum": ["hev1", "hvc1", "dvh1"]
+        },
         "audio_codec": {
           "type": "string"
         },
@@ -738,6 +742,10 @@
         },
         "color_range": {
           "type": "string"
+        },
+        "color_transfer": {
+          "type": "string",
+          "description": "Normalized HEVC transfer characteristic used to validate compatible Dolby Vision base-layer fallbacks."
         },
         "width": {
           "type": "integer"

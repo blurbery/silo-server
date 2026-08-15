@@ -11,6 +11,7 @@ type ExecutableRecipeV3 struct {
 	PlanID                      string     `json:"plan_id"`
 	PlayMethod                  PlayMethod `json:"play_method"`
 	TranscodeAudio              bool       `json:"transcode_audio"`
+	DropInitialLeadingPictures  bool       `json:"drop_initial_leading_pictures,omitempty"`
 	TargetVideoCodec            string     `json:"target_video_codec,omitempty"`
 	TargetAudioCodec            string     `json:"target_audio_codec,omitempty"`
 	TargetAudioChannels         int        `json:"target_audio_channels,omitempty"`
@@ -52,6 +53,7 @@ func FreezeExecutableRecipeV3(result PlannerResultV3) ExecutableRecipeV3 {
 		PlanID:                      planID,
 		PlayMethod:                  result.PlayMethod,
 		TranscodeAudio:              result.TranscodeAudio,
+		DropInitialLeadingPictures:  result.DropInitialLeadingPictures,
 		TargetVideoCodec:            result.TargetVideoCodec,
 		TargetAudioCodec:            result.TargetAudioCodec,
 		TargetAudioChannels:         result.TargetAudioChannels,
@@ -87,15 +89,16 @@ func (r ExecutableRecipeV3) ValidFor(plan PlanV3) bool {
 
 func (r ExecutableRecipeV3) PlannerResult(plan *PlanV3) PlannerResultV3 {
 	return PlannerResultV3{
-		Plan:                   plan,
-		PlayMethod:             r.PlayMethod,
-		TranscodeAudio:         r.TranscodeAudio,
-		TargetVideoCodec:       r.TargetVideoCodec,
-		TargetAudioCodec:       r.TargetAudioCodec,
-		TargetAudioChannels:    r.TargetAudioChannels,
-		TargetAudioBitrateKbps: r.TargetAudioBitrateKbps,
-		TargetResolution:       r.TargetResolution,
-		TargetBitrateKbps:      r.TargetBitrateKbps,
+		Plan:                       plan,
+		PlayMethod:                 r.PlayMethod,
+		TranscodeAudio:             r.TranscodeAudio,
+		DropInitialLeadingPictures: r.DropInitialLeadingPictures,
+		TargetVideoCodec:           r.TargetVideoCodec,
+		TargetAudioCodec:           r.TargetAudioCodec,
+		TargetAudioChannels:        r.TargetAudioChannels,
+		TargetAudioBitrateKbps:     r.TargetAudioBitrateKbps,
+		TargetResolution:           r.TargetResolution,
+		TargetBitrateKbps:          r.TargetBitrateKbps,
 		FrozenSourceMetadata: &SourceExecutionMetadataV3{
 			VideoCodec:          r.SourceVideoCodec,
 			SoftwareVideoDecode: r.SoftwareVideoDecode,

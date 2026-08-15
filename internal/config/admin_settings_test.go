@@ -218,6 +218,8 @@ func TestNormalizeAdminSettingRejectsInvalidValues(t *testing.T) {
 		{key: "metadata.cache_images", value: "maybe"},
 		{key: chapterThumbnailSoftwareToneMapKey, value: "maybe"},
 		{key: "auth.access_token_expiry", value: "forever"},
+		{key: policyEvalTimeoutSettingKey, value: "9"},
+		{key: policyEvalTimeoutSettingKey, value: "5001"},
 		{key: "recommendations.embeddings_cron", value: "not a cron"},
 		{key: "notifications.server_channels.batch_seconds", value: "119"},
 		{key: "catalog.search.meilisearch.semantic_ratio", value: "1.2"},

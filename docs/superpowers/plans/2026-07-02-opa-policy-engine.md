@@ -16,7 +16,7 @@
 - **Performance first, reliability first** — prepared queries only; input-document-only (no OPA store mirroring, no DB reads inside eval); async decision logging that never blocks a decision; fail closed on every eval error/timeout.
 - **Frozen contracts:** `access.Scope` / `access.ResolveInput` shapes; PIN/profile-token crypto stays in `internal/access/profile_token.go`; `access_policy_revision` semantics (library_ids changes do NOT bump it — `internal/auth/repository.go` has an explicit comment); jellycompat and API keys pass `SkipPINVerification: true`.
 - **Narrowing-only overrides**, enforced in vendor Rego by tightening-direction merges (intersect libraries, min ceilings, AND booleans) — never by heuristic post-checks.
-- **Sandbox invariants:** custom modules compile under stripped `ast.Capabilities` (no `http.send`, `net.*`, `opa.runtime`) at save, activate, AND reload; per-eval `context.WithTimeout` (default 25ms, setting `policy.eval_timeout_ms`); package path must be `silo_custom.<domain>`.
+- **Sandbox invariants:** custom modules compile under stripped `ast.Capabilities` (no `http.send`, `net.*`, `opa.runtime`) at save, activate, AND reload; per-eval `context.WithTimeout` (default 250ms, setting `policy.eval_timeout_ms`); package path must be `silo_custom.<domain>`.
 - **Migrations:** timestamped Goose files via `make migrate-create NAME=...`; never touch legacy numeric migrations.
 - **One concern per PR**; Conventional Commit subjects; each PR links the OPA epic (`Part of #NNN` — create the epic issue before Phase 1 lands).
 - Worktree builds need `GOWORK=off` and a stubbed `web/dist` (see worktree-build-quirks memory). DB-backed Go tests use the `SILO_TEST_DATABASE_URL` skip pattern.
@@ -68,7 +68,7 @@
 - [ ] `internal/policy/vendor/scope.rego` (`package silo.scope`, `import rego.v1`): reproduce `access.Resolver.Resolve` — `effectiveLibraries` intersection logic, disabled-library subtraction (both restricted/unrestricted branches), quality min-merge, rating passthrough, `profile_verified` passthrough, explicit `unrestricted` output. Include the `data.silo_custom.scope.override(base_decision, input)` extension hook with tightening-only merge (intersect `allowed_library_ids`, union `disabled_library_ids`, min ceilings, AND `profile_verified`).
 - [ ] `internal/policy/vendor/scope_test.rego`: one Rego test per branch of `Resolve` (no profile / account-restricted / profile-restricted / both-intersect / disabled-subtraction / unverified profile), plus override-merge tests proving a widening override has no effect.
 - [ ] `internal/policy/vendor.go`: `//go:embed vendor` FS + module loader.
-- [ ] `internal/policy/engine.go`: `Engine` with `queries map[DecisionName]rego.PreparedEvalQuery`, RWMutex atomic `swap`, `Evaluate(ctx, name, input, out) (Meta, error)` with `context.WithTimeout` (25ms default), fail-closed on err/empty result/decode failure. Vendor-only compile path for now (no DB).
+- [ ] `internal/policy/engine.go`: `Engine` with `queries map[DecisionName]rego.PreparedEvalQuery`, RWMutex atomic `swap`, `Evaluate(ctx, name, input, out) (Meta, error)` with `context.WithTimeout` (250ms default), fail-closed on err/empty result/decode failure. Vendor-only compile path for now (no DB).
 - [ ] `internal/policy/compile.go` (first half): `LockedCapabilities()` stripping `http.send`, `net.*`, `opa.runtime`, `rego.parse_module` from `ast.CapabilitiesForThisVersion()`. (Custom-doc compile-check lands Phase 2; capabilities are needed now for the sandbox tests.)
 - [ ] `internal/policy/pdp.go`: `PDP.ResolveViewerScope(ctx, ScopeInput) (ScopeDecision, Meta, error)` only (other methods come with their surfaces).
 - [ ] `internal/policy/vendor_rego_test.go`: run all `vendor/*_test.rego` via `opa/v1/tester` inside `go test` (no CLI dependency).
@@ -90,7 +90,7 @@
 
 - [ ] `internal/cache/redis.go`: add `EventPolicyChanged = "policy_changed"` beside `EventSettingsChanged`.
 - [ ] `internal/policy/system.go`: `System` (mirrors `notifications.System`) — `NewSystem(pool, eventBus, settingsReader)`; `Start(ctx)` does initial `reloadFromStore` (vendor-only compile failure = fatal; custom failure = degraded WARN), subscribes to `ChannelAdmin` for `EventPolicyChanged`, runs 60s poll fallback comparing `policy_generation` to loaded generation (idiom: `internal/nodeconfig/watcher.go`); graceful stop.
-- [ ] Settings: `policy.eval_timeout_ms` (default 25) parsed in `internal/config/db_loader.go`, hot-applied via atomic value read by `Engine` — NOT in `restart_keys.go`.
+- [ ] Settings: `policy.eval_timeout_ms` (default 250) parsed in `internal/config/db_loader.go`, hot-applied via atomic value read by `Engine` — NOT in `restart_keys.go`.
 - [ ] Wire in `cmd/silo/main.go` (near notifications wiring ~1382): construct `policy.System`, `Start(appCtx)`, add `deps.PolicySystem` field to `api.Dependencies`, deferred stop in shutdown ordering. Skip construction in proxy/transcode standalone modes.
 - [ ] Cross-node test: two `System` instances over one test DB + EventBus double; activate on A, assert B converges via event AND (separately, with events suppressed) via poll fallback.
 - [ ] Verify: `GOWORK=off go build ./...`; integrated-mode boot smoke (`make dev-backend` locally) shows policy system start log; no behavior change anywhere (still nothing querying the PDP in request paths).

@@ -720,6 +720,7 @@ func TestPlanPlaybackV3DirectPlaysLegacyDolbyVisionProfile8(t *testing.T) {
 	file.VideoTracks[0].PixelFormat = "yuv420p10le"
 	file.VideoTracks[0].DVProfile = 8
 	file.VideoTracks[0].DVBLCompatID = 1
+	file.VideoTracks[0].ColorTransfer = "smpte2084"
 	file.VideoTracks[0].VideoRange = "DolbyVision"
 	file.VideoTracks[0].VideoRangeType = "DOVIWithHDR10"
 	req := validStartRequestV3()
@@ -733,6 +734,132 @@ func TestPlanPlaybackV3DirectPlaysLegacyDolbyVisionProfile8(t *testing.T) {
 	}
 	if result.Plan.RequestedMediaFileID != file.ID || result.Plan.EffectiveMediaFileID != file.ID {
 		t.Fatalf("source ids = requested %d effective %d", result.Plan.RequestedMediaFileID, result.Plan.EffectiveMediaFileID)
+	}
+}
+
+func TestPlanPlaybackV3WebNativeHLSAvoidsProgressiveProfile7Fallback(t *testing.T) {
+	file := detailedFixtureFileV3()
+	file.CodecAudio = "truehd"
+	file.AudioChannels = 8
+	file.AudioTracks[0] = models.AudioTrack{Codec: "truehd", Channels: 8, Layout: "7.1", Default: true}
+	file.VideoTracks[0].DVProfile = 7
+	file.VideoTracks[0].DVBLCompatID = 6
+	file.VideoTracks[0].VideoRange = "DolbyVision"
+	file.VideoTracks[0].VideoRangeType = "DOVIWithEL"
+
+	req := validStartRequestV3()
+	req.ClientPlaybackContext.Device.Platform = "web"
+	req.Capabilities.CodecsAudio = append(req.Capabilities.CodecsAudio, "truehd")
+	req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
+	req.Capabilities.HDRDetails = &HDRCapabilitiesV3{HDR10: true}
+	req.ClientPlaybackContext.Output.HDRDetails = req.Capabilities.HDRDetails
+	hls := req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3]
+	hls.VideoCodecs = append(hls.VideoCodecs, "hevc")
+	hls.HDRDetails = req.Capabilities.HDRDetails
+	hls.Features = append(hls.Features, ClientNativeHLSPlaybackV3)
+	req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3] = hls
+
+	result := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: testTransformationRegistryV3()})
+	if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxHLSV3 || result.Plan.EffectiveRecipe.DynamicRange != DynamicRangeHDR10V3 {
+		t.Fatalf("result = %s", ExplainPlannerResultV3(result))
+	}
+	if result.TargetVideoCodec != "copy" || result.TargetAudioCodec != "aac" || !result.TranscodeAudio {
+		t.Fatalf("execution = video %q audio %q transcodeAudio=%v", result.TargetVideoCodec, result.TargetAudioCodec, result.TranscodeAudio)
+	}
+	if result.Plan.EffectiveRecipe.VideoSampleEntry != VideoSampleEntryHVC1V3 {
+		t.Fatalf("native Apple HLS sample entry = %q, want hvc1", result.Plan.EffectiveRecipe.VideoSampleEntry)
+	}
+}
+
+func TestPlanPlaybackV3WebNativeHLSPreservesCompatibleDolbyVisionAsDVH1(t *testing.T) {
+	file := detailedFixtureFileV3()
+	file.VideoTracks[0].DVProfile = 8
+	file.VideoTracks[0].DVBLCompatID = 1
+	file.VideoTracks[0].DVLevel = 6
+	file.VideoTracks[0].ColorTransfer = "smpte2084"
+	file.VideoTracks[0].VideoRange = "DolbyVision"
+	file.VideoTracks[0].VideoRangeType = "DOVIWithHDR10"
+
+	req := validStartRequestV3()
+	req.ClientPlaybackContext.Device.Platform = "web"
+	req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
+	dv := &HDRCapabilitiesV3{
+		DolbyVisionProfiles:      []int{8},
+		DolbyVisionProfileLevels: []DolbyVisionProfileCapabilityV3{{Profile: 8, MaxLevel: 6, BLCompatibilityIDs: []int{1}}},
+	}
+	req.Capabilities.HDRDetails = dv
+	req.ClientPlaybackContext.Output.HDRDetails = dv
+	hls := req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3]
+	hls.VideoCodecs = []string{"hevc"}
+	hls.HDRDetails = dv
+	hls.Features = []string{ClientNativeHLSPlaybackV3}
+	req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3] = hls
+
+	result := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: testTransformationRegistryV3()})
+	if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxHLSV3 {
+		t.Fatalf("result = %s", ExplainPlannerResultV3(result))
+	}
+	if result.Plan.EffectiveRecipe.VideoSampleEntry != VideoSampleEntryDVH1V3 || !result.Plan.Claims.Video.DolbyVision {
+		t.Fatalf("native compatible Dolby Vision recipe = %#v", result.Plan.EffectiveRecipe)
+	}
+}
+
+func TestPlanPlaybackV3WebHLSJSKeepsProgressiveDolbyRouteFirst(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		profile        int
+		compatibility  int
+		videoRangeType string
+	}{
+		{name: "profile 7", profile: 7, compatibility: 6, videoRangeType: "DOVIWithEL"},
+		{name: "profile 8", profile: 8, compatibility: 1, videoRangeType: "DOVIWithHDR10"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file := detailedFixtureFileV3()
+			file.VideoTracks[0].DVProfile = test.profile
+			file.VideoTracks[0].DVBLCompatID = test.compatibility
+			file.VideoTracks[0].ColorTransfer = "smpte2084"
+			file.VideoTracks[0].VideoRange = "DolbyVision"
+			file.VideoTracks[0].VideoRangeType = test.videoRangeType
+
+			req := validStartRequestV3()
+			req.ClientPlaybackContext.Device.Platform = "web"
+			req.ClientPlaybackContext.Device.PlatformDetails = map[string]string{"user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0"}
+			req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
+			req.Capabilities.HDRDetails = &HDRCapabilitiesV3{HDR10: true}
+			req.ClientPlaybackContext.Output.HDRDetails = req.Capabilities.HDRDetails
+			hls := req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3]
+			hls.VideoCodecs = []string{"hevc"}
+			hls.HDRDetails = &HDRCapabilitiesV3{HDR10: true}
+			req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3] = hls
+
+			input := PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: testTransformationRegistryV3()}
+			result := PlanPlaybackV3(input)
+			if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxProgressiveV3 || result.Plan.EffectiveRecipe.DynamicRange != DynamicRangeHDR10V3 {
+				t.Fatalf("result = %s", ExplainPlannerResultV3(result))
+			}
+			if result.Plan.EffectiveRecipe.VideoSampleEntry != VideoSampleEntryHVC1V3 {
+				t.Fatalf("progressive sample entry = %q, want hvc1", result.Plan.EffectiveRecipe.VideoSampleEntry)
+			}
+			if result.PlayMethod != PlayRemux || result.Plan.EffectiveRecipe.VideoCodec != "hevc" || result.Plan.EffectiveMediaFileID != file.ID {
+				t.Fatalf("the first browser route did not keep the 4K HEVC remux: %#v", result)
+			}
+			if !result.DropInitialLeadingPictures || len(result.Plan.AppliedQuirks) != 1 || result.Plan.AppliedQuirks[0].ID != QuirkFirefoxHEVCOpenGOPV3 {
+				t.Fatalf("Firefox progressive resume recipe was not frozen: %#v", result)
+			}
+
+			input.AttemptedKeys = []string{PlanAttemptKeyV3(*result.Plan, req.ClientPlaybackContext.Output.OutputContextID, nil)}
+			fallback := PlanPlaybackV3(input)
+			if fallback.Plan == nil || fallback.Plan.Delivery != DeliveryRemuxHLSV3 || fallback.Plan.EffectiveMediaFileID != file.ID {
+				t.Fatalf("the same-file HLS recovery route was lost: %#v", fallback)
+			}
+			if fallback.Plan.EffectiveRecipe.VideoSampleEntry != VideoSampleEntryHEV1V3 {
+				t.Fatalf("hls.js recovery sample entry = %q, want hev1", fallback.Plan.EffectiveRecipe.VideoSampleEntry)
+			}
+			if !fallback.DropInitialLeadingPictures || len(fallback.Plan.AppliedQuirks) != 1 || fallback.Plan.AppliedQuirks[0].ID != QuirkFirefoxHEVCOpenGOPV3 {
+				t.Fatalf("Firefox HLS resume recipe was not frozen: %#v", fallback)
+			}
+		})
 	}
 }
 
@@ -1165,10 +1292,29 @@ func TestPlanPlaybackV3Profile7StripFallsBackToValidatedHLSCopy(t *testing.T) {
 	if first.Plan == nil || first.Plan.Delivery != DeliveryRemuxProgressiveV3 || len(first.Plan.Transformations) != 1 {
 		t.Fatalf("first = %#v", first)
 	}
+	if first.Plan.EffectiveRecipe.VideoSampleEntry != VideoSampleEntryHVC1V3 {
+		t.Fatalf("progressive strip sample entry = %q, want hvc1", first.Plan.EffectiveRecipe.VideoSampleEntry)
+	}
 	failedKey := PlanAttemptKeyV3(*first.Plan, req.ClientPlaybackContext.Output.OutputContextID, nil)
 	second := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: registry, AttemptedKeys: []string{failedKey}})
 	if second.Plan == nil || second.Plan.Delivery != DeliveryRemuxHLSV3 || second.TargetVideoCodec != "copy" || len(second.Plan.Transformations) != 1 || second.Plan.Transformations[0].Name != "server_dv7_to_hdr10" {
 		t.Fatalf("second = %#v", second)
+	}
+	if second.Plan.EffectiveRecipe.VideoSampleEntry != VideoSampleEntryHEV1V3 {
+		t.Fatalf("hls.js fallback sample entry = %q, want hev1", second.Plan.EffectiveRecipe.VideoSampleEntry)
+	}
+	if second.Plan.RequestedMediaFileID != file.ID || second.Plan.EffectiveMediaFileID != file.ID {
+		t.Fatalf("fallback changed source: requested=%d effective=%d", second.Plan.RequestedMediaFileID, second.Plan.EffectiveMediaFileID)
+	}
+}
+
+func TestPlanAttemptKeyV3SeparatesBrowserSampleEntries(t *testing.T) {
+	plan := PlanV3{PlanID: "plan:sample-entry", Delivery: DeliveryRemuxHLSV3, Stream: StreamV3{Protocol: StreamHLSV3, Container: "hls"}, EffectiveRecipe: EffectiveRecipeV3{VideoCodec: "hevc", VideoSampleEntry: VideoSampleEntryHEV1V3}}
+	hev1 := PlanAttemptKeyV3(plan, "route-1", nil)
+	plan.EffectiveRecipe.VideoSampleEntry = VideoSampleEntryHVC1V3
+	hvc1 := PlanAttemptKeyV3(plan, "route-1", nil)
+	if hev1 == hvc1 {
+		t.Fatalf("browser-specific sample entries shared attempt key %q", hev1)
 	}
 }
 
@@ -1176,15 +1322,104 @@ func TestPlanPlaybackV3Profile8CompatibleBaseLayerStripsToHDR10(t *testing.T) {
 	file := detailedFixtureFileV3()
 	file.VideoTracks[0].DVProfile = 8
 	file.VideoTracks[0].DVBLCompatID = 1
+	file.VideoTracks[0].ColorTransfer = "smpte2084"
 	file.VideoTracks[0].VideoRange = "DolbyVision"
 	file.VideoTracks[0].VideoRangeType = "DOVI"
 	req := validStartRequestV3()
 	req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
 	req.Capabilities.HDRDetails = &HDRCapabilitiesV3{HDR10: true}
-	registry := NewTransformationRegistryV3([]TransformationSpecV3{{Name: "server_dv7_to_hdr10", Available: true}})
+	registry := NewTransformationRegistryV3([]TransformationSpecV3{{Name: TransformationServerDV8BaseV3, Available: true}})
 	result := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: registry})
-	if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxProgressiveV3 || result.Plan.EffectiveRecipe.DynamicRange != "hdr10" || len(result.Plan.Transformations) != 1 || result.Plan.Transformations[0].Name != "server_dv7_to_hdr10" {
+	if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxProgressiveV3 || result.Plan.EffectiveRecipe.DynamicRange != "hdr10" || len(result.Plan.Transformations) != 1 || result.Plan.Transformations[0].Name != TransformationServerDV8BaseV3 {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestPlanPlaybackV3DolbyVisionSafariCompatibilityMatrix(t *testing.T) {
+	tests := []struct {
+		name               string
+		profile            int
+		compatID           int
+		nativeProfiles     []int
+		nativeCompatIDs    []int
+		hdr10              bool
+		hlg                bool
+		colorTransfer      string
+		wantRange          string
+		wantTransformation string
+		wantNativeDV       bool
+		wantTerminal       bool
+	}{
+		{name: "profile 5 exact stays native Dolby Vision", profile: 5, nativeProfiles: []int{5}, wantRange: DynamicRangeDolbyVisionV3, wantNativeDV: true},
+		{name: "profile 5 never masquerades as HDR10", profile: 5, hdr10: true, wantTerminal: true},
+		{name: "profile 7 isolates clean HDR10 base layer", profile: 7, compatID: 6, hdr10: true, wantRange: DynamicRangeHDR10V3, wantTransformation: TransformationServerDV7HDR10V3},
+		{name: "profile 8.1 exact stays native Dolby Vision", profile: 8, compatID: 1, nativeProfiles: []int{8}, nativeCompatIDs: []int{1}, wantRange: DynamicRangeDolbyVisionV3, wantNativeDV: true},
+		{name: "profile 8.1 unsupported falls back to HDR10", profile: 8, compatID: 1, hdr10: true, wantRange: DynamicRangeHDR10V3, wantTransformation: TransformationServerDV8BaseV3},
+		{name: "profile 8.6 unsupported falls back to HDR10", profile: 8, compatID: 6, nativeProfiles: []int{8}, nativeCompatIDs: []int{1}, hdr10: true, wantRange: DynamicRangeHDR10V3, wantTransformation: TransformationServerDV8BaseV3},
+		{name: "profile 8.4 falls back to HLG", profile: 8, compatID: 4, hlg: true, wantRange: DynamicRangeHLGV3, wantTransformation: TransformationServerDV8BaseV3},
+		{name: "profile 8.2 falls back to SDR", profile: 8, compatID: 2, wantRange: DynamicRangeSDRV3, wantTransformation: TransformationServerDV8BaseV3},
+		{name: "profile 8.4 is not mislabeled HDR10", profile: 8, compatID: 4, hdr10: true, wantTerminal: true},
+		{name: "profile 8.4 with conflicting transfer is not called HLG", profile: 8, compatID: 4, colorTransfer: "bt2020-10", hlg: true, wantTerminal: true},
+		{name: "unknown profile 8 base layer is not guessed", profile: 8, compatID: 0, hdr10: true, hlg: true, wantTerminal: true},
+		{name: "unknown Dolby Vision profile is not guessed", profile: 9, compatID: 2, hdr10: true, hlg: true, wantTerminal: true},
+	}
+	registry := NewTransformationRegistryV3([]TransformationSpecV3{
+		{Name: TransformationServerDV7HDR10V3, RecipeVersion: TransformationServerDV7HDR10RecipeVersionV3, Available: true},
+		{Name: TransformationServerDV8BaseV3, RecipeVersion: TransformationServerDV8BaseRecipeVersionV3, Available: true},
+	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file := detailedFixtureFileV3()
+			file.VideoTracks[0].DVProfile = tt.profile
+			file.VideoTracks[0].DVBLCompatID = tt.compatID
+			file.VideoTracks[0].VideoRange = "DolbyVision"
+			file.VideoTracks[0].VideoRangeType = "DOVI"
+			file.VideoTracks[0].ColorTransfer = tt.colorTransfer
+			if file.VideoTracks[0].ColorTransfer == "" {
+				switch tt.compatID {
+				case 1, 6:
+					file.VideoTracks[0].ColorTransfer = "smpte2084"
+				case 2:
+					file.VideoTracks[0].ColorTransfer = "bt709"
+				case 4:
+					file.VideoTracks[0].ColorTransfer = "arib-std-b67"
+				}
+			}
+			if tt.profile == 7 {
+				file.VideoTracks[0].VideoRangeType = "DOVIWithEL"
+				file.VideoTracks[0].DVELPresent = true
+				file.VideoTracks[0].DVEnhancementLayer = "mel"
+			}
+
+			req := validStartRequestV3()
+			req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
+			hdr := &HDRCapabilitiesV3{HDR10: tt.hdr10, HLG: tt.hlg, DolbyVisionProfiles: tt.nativeProfiles}
+			if len(tt.nativeProfiles) > 0 {
+				hdr.DolbyVisionProfileLevels = []DolbyVisionProfileCapabilityV3{{Profile: tt.profile, MaxLevel: 9, BLCompatibilityIDs: tt.nativeCompatIDs}}
+			}
+			req.Capabilities.HDRDetails = hdr
+			req.ClientPlaybackContext.Output.HDRDetails = hdr
+
+			result := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: registry})
+			if tt.wantTerminal {
+				if result.Terminal == nil || result.Plan != nil {
+					t.Fatalf("result = %s", ExplainPlannerResultV3(result))
+				}
+				return
+			}
+			if result.Plan == nil || result.Plan.EffectiveRecipe.DynamicRange != tt.wantRange || result.Plan.Claims.Video.DolbyVision != tt.wantNativeDV {
+				t.Fatalf("result = %s", ExplainPlannerResultV3(result))
+			}
+			if tt.wantTransformation == "" {
+				if len(result.Plan.Transformations) != 0 {
+					t.Fatalf("native route transformations = %#v", result.Plan.Transformations)
+				}
+				return
+			}
+			if len(result.Plan.Transformations) != 1 || result.Plan.Transformations[0].Name != tt.wantTransformation {
+				t.Fatalf("transformations = %#v", result.Plan.Transformations)
+			}
+		})
 	}
 }
 
@@ -1853,6 +2088,7 @@ func testTransformationRegistryV3() *TransformationRegistryV3 {
 		{Name: "audio_to_aac", Available: true},
 		{Name: "video_to_h264", Available: true},
 		{Name: "server_dv7_to_hdr10", Available: true},
+		{Name: TransformationServerDV8BaseV3, Available: true},
 	})
 }
 

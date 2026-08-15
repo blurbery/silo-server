@@ -27,9 +27,10 @@ const (
 	ClientDV7ToHDR10V3            = "client_dv7_to_hdr10"
 	ClientDVTransformVersionV3    = "1"
 	ClientDV8HDR10PlusSanitizerV3 = "client_dv8_hdr10plus_sanitizer_v1"
+	ClientNativeHLSPlaybackV3     = "native_hls_playback_v1"
 	ClientPostResumeRecoveryV3    = "client_post_resume_video_recovery_v1"
 	ClientSurfaceRecoveryV3       = "client_surface_recovery_v1"
-	DeviceQuirkRegistryRevisionV3 = "2026-07-13.1"
+	DeviceQuirkRegistryRevisionV3 = "2026-08-15.1"
 )
 
 // ServerFeaturesV3 returns the complete feature set advertised by protocol-v3
@@ -132,8 +133,14 @@ const (
 	TransformationAudioToAACV3     = "audio_to_aac"
 	TransformationVideoToH264V3    = "video_to_h264"
 	TransformationServerDV7HDR10V3 = "server_dv7_to_hdr10"
+	TransformationServerDV8BaseV3  = "server_dv8_to_compatible_base"
 
-	TransformationVideoToH264RecipeVersionV3 = "2"
+	TransformationVideoToH264RecipeVersionV3    = "2"
+	TransformationServerDV7HDR10RecipeVersionV3 = "3"
+	TransformationServerDV8BaseRecipeVersionV3  = "2"
+	VideoSampleEntryHEV1V3                      = "hev1"
+	VideoSampleEntryHVC1V3                      = "hvc1"
+	VideoSampleEntryDVH1V3                      = "dvh1"
 )
 
 // Transformation executors: who runs the transformation. A "server"
@@ -151,6 +158,8 @@ const (
 	ClaimH264DecodeV3                 = "h264_decode"
 	ClaimDolbyVisionMetadataRemovedV3 = "dolby_vision_metadata_removed"
 	ClaimHDR10BaseLayerPreservedV3    = "hdr10_base_layer_preserved"
+	ClaimHLGBaseLayerPreservedV3      = "hlg_base_layer_preserved"
+	ClaimSDRBaseLayerPreservedV3      = "sdr_base_layer_preserved"
 	ClaimEnhancementLayerDiscardedV3  = "enhancement_layer_discarded"
 )
 
@@ -158,6 +167,17 @@ const (
 // asserts. A fresh slice keeps callers from mutating the shared contract.
 func DV7ToHDR10ClaimsV3() []string {
 	return []string{ClaimDolbyVisionMetadataRemovedV3, ClaimHDR10BaseLayerPreservedV3, ClaimEnhancementLayerDiscardedV3}
+}
+
+// DV8ToBaseLayerClaimsV3 returns the byte-level claims for a single-layer
+// Profile 8 fallback. The base-layer range itself is selected from the
+// source's explicit compatibility ID and appended by the planner.
+func DV8ToBaseLayerClaimsV3(rangeClaim string) []string {
+	claims := []string{ClaimDolbyVisionMetadataRemovedV3}
+	if rangeClaim != "" {
+		claims = append(claims, rangeClaim)
+	}
+	return claims
 }
 
 // Terminal reasons reported when a required conversion toolchain is absent.
@@ -527,15 +547,16 @@ type TimelineV3 struct {
 }
 
 type EffectiveRecipeV3 struct {
-	VideoCodec    string   `json:"video_codec,omitempty"`
-	AudioCodec    string   `json:"audio_codec,omitempty"`
-	Width         *int     `json:"width,omitempty"`
-	Height        *int     `json:"height,omitempty"`
-	FrameRate     *float64 `json:"frame_rate,omitempty"`
-	BitrateKbps   *int     `json:"bitrate_kbps,omitempty"`
-	DynamicRange  string   `json:"dynamic_range,omitempty"`
-	AudioChannels *int     `json:"audio_channels,omitempty"`
-	AudioLayout   string   `json:"audio_layout,omitempty"`
+	VideoCodec       string   `json:"video_codec,omitempty"`
+	VideoSampleEntry string   `json:"video_sample_entry,omitempty"`
+	AudioCodec       string   `json:"audio_codec,omitempty"`
+	Width            *int     `json:"width,omitempty"`
+	Height           *int     `json:"height,omitempty"`
+	FrameRate        *float64 `json:"frame_rate,omitempty"`
+	BitrateKbps      *int     `json:"bitrate_kbps,omitempty"`
+	DynamicRange     string   `json:"dynamic_range,omitempty"`
+	AudioChannels    *int     `json:"audio_channels,omitempty"`
+	AudioLayout      string   `json:"audio_layout,omitempty"`
 }
 
 type SourceDescriptorV3 struct {
@@ -557,6 +578,7 @@ type SourceDescriptorV3 struct {
 	VideoLevel         int                `json:"video_level,omitempty"`
 	BitDepth           int                `json:"bit_depth,omitempty"`
 	ColorRange         string             `json:"color_range,omitempty"`
+	ColorTransfer      string             `json:"color_transfer,omitempty"`
 	Width              int                `json:"width,omitempty"`
 	Height             int                `json:"height,omitempty"`
 	FrameRate          float64            `json:"frame_rate,omitempty"`

@@ -94,6 +94,30 @@ func TestLoadFromDBPolicyEditorEnabledDefaultsFalse(t *testing.T) {
 	}
 }
 
+func TestLoadFromDBPolicyEvalTimeoutUsesResilientBoundedDefault(t *testing.T) {
+	cfg, err := LoadFromDB(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Policy.EvalTimeoutMS != defaultPolicyEvalTimeoutMS {
+		t.Fatalf("Policy.EvalTimeoutMS = %d, want %d", cfg.Policy.EvalTimeoutMS, defaultPolicyEvalTimeoutMS)
+	}
+
+	cfg, err = LoadFromDB(map[string]string{policyEvalTimeoutSettingKey: "750"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Policy.EvalTimeoutMS != 750 {
+		t.Fatalf("configured Policy.EvalTimeoutMS = %d, want 750", cfg.Policy.EvalTimeoutMS)
+	}
+
+	for _, value := range []string{"9", "5001"} {
+		if _, err := LoadFromDB(map[string]string{policyEvalTimeoutSettingKey: value}); err == nil {
+			t.Fatalf("LoadFromDB accepted out-of-range %s=%s", policyEvalTimeoutSettingKey, value)
+		}
+	}
+}
+
 func TestLoadFromDBAudiobookshelfCompatFlagGatesCompatListener(t *testing.T) {
 	cfg, err := LoadFromDB(map[string]string{})
 	if err != nil {

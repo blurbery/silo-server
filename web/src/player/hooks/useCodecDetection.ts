@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
-import { detectHLSSupport, type WebCapabilityProbe } from "../client-context-v3";
+import {
+  detectHLSSupport,
+  detectNativeHLSSupport,
+  type WebCapabilityProbe,
+} from "../client-context-v3";
 
 /** Maps our codec names to the MIME declarations browsers expose for them. */
 const VIDEO_CODEC_MAP: Record<string, string> = {
@@ -15,16 +19,20 @@ const VIDEO_CODEC_MAP: Record<string, string> = {
 // shape: a browser that recognizes only dvhe could accept a claim here and
 // then reject the dvh1 file the remux delivers, so a dvhe-only answer earns no
 // claim and that browser keeps the validated HDR10 fallback instead.
-// Level 6 covers the 2160p24 source class involved in the web regression.
+// Each profile is tested from its highest supported level down so the planner
+// can enforce the browser's real bound without excluding compatible sources.
 const DOLBY_VISION_PROFILE_PROBES: Record<
   number,
-  { mime: string; maxLevel: number; blCompatibilityIds?: number[] }
+  { levels: number[]; blCompatibilityIds?: number[] }
 > = {
-  5: { mime: 'video/mp4; codecs="dvh1.05.06"', maxLevel: 6 },
+  // Apple's HLS authoring specification supports Profile 5 through level 7.
+  // Probe the highest level first and publish only the best exact answer.
+  5: { levels: [7, 6] },
   // The MIME codec string identifies Profile 8 but not its base-layer
   // compatibility ID. Conservatively claim only the Profile 8.1 shape that
-  // this regression and Safari's progressive remux path exercise.
-  8: { mime: 'video/mp4; codecs="dvh1.08.06"', maxLevel: 6, blCompatibilityIds: [1] },
+  // Safari's progressive remux path exercises. Exact level probes avoid
+  // forcing a compatible high-level source down to its HDR10 fallback.
+  8: { levels: [9, 8, 7, 6], blCompatibilityIds: [1] },
 };
 
 // Silo's Profile 7 fallback strips Dolby Vision metadata into a progressive
@@ -46,6 +54,49 @@ const HDR10_PROGRESSIVE_CONFIGURATION = {
     colorGamut: "rec2020",
     transferFunction: "pq",
     hdrMetadataType: "smpteSt2086",
+  },
+} satisfies MediaDecodingConfiguration;
+
+// hls.js feeds FFmpeg's default `hev1` fMP4 samples through MediaSource. Keep
+// this evidence separate from the media-element `hvc1` probe above: Firefox on
+// macOS can accept one route and reject the other even when a generic HEVC
+// query says both are available.
+const HDR10_HLS_CONFIGURATION = {
+  type: "media-source",
+  video: {
+    contentType: 'video/mp4; codecs="hev1.2.4.L153.B0"',
+    width: 3840,
+    height: 2160,
+    bitrate: 80_000_000,
+    framerate: 24,
+    colorGamut: "rec2020",
+    transferFunction: "pq",
+    hdrMetadataType: "smpteSt2086",
+  },
+} satisfies MediaDecodingConfiguration;
+
+// Profile 8.4 has an HLG-compatible base layer. Silo removes its Dolby Vision
+// metadata before fallback delivery and emits hvc1, so probe that exact 4K HLG
+// shape independently from Dolby Vision and HDR10.
+const HLG_PROGRESSIVE_CONFIGURATION = {
+  type: "file",
+  video: {
+    contentType: 'video/mp4; codecs="hvc1.2.4.L153.B0"',
+    width: 3840,
+    height: 2160,
+    bitrate: 80_000_000,
+    framerate: 24,
+    colorGamut: "rec2020",
+    transferFunction: "hlg",
+  },
+} satisfies MediaDecodingConfiguration;
+
+const HLG_HLS_CONFIGURATION = {
+  ...HDR10_HLS_CONFIGURATION,
+  video: {
+    ...HDR10_HLS_CONFIGURATION.video,
+    transferFunction: "hlg",
+    hdrMetadataType: undefined,
   },
 } satisfies MediaDecodingConfiguration;
 
@@ -116,6 +167,54 @@ export async function probeHDR10PlaybackSupport(): Promise<boolean> {
   }
 }
 
+/** Probes the exact `hev1` HDR10 fMP4 shape consumed by hls.js. */
+export async function probeHLSHDR10PlaybackSupport(): Promise<boolean> {
+  if (
+    typeof navigator === "undefined" ||
+    !navigator.mediaCapabilities ||
+    typeof MediaSource === "undefined"
+  ) {
+    return false;
+  }
+  try {
+    if (!MediaSource.isTypeSupported(HDR10_HLS_CONFIGURATION.video.contentType)) return false;
+    const result = await navigator.mediaCapabilities.decodingInfo(HDR10_HLS_CONFIGURATION);
+    return result.supported && result.smooth;
+  } catch {
+    return false;
+  }
+}
+
+/** Probes the exact clean HLG base-layer shape emitted for Profile 8.4. */
+export async function probeHLGPlaybackSupport(): Promise<boolean> {
+  if (typeof navigator === "undefined" || !navigator.mediaCapabilities) return false;
+
+  try {
+    const result = await navigator.mediaCapabilities.decodingInfo(HLG_PROGRESSIVE_CONFIGURATION);
+    return result.supported && result.smooth;
+  } catch {
+    return false;
+  }
+}
+
+/** Probes the exact clean HLG base-layer shape consumed by hls.js. */
+export async function probeHLSHLGPlaybackSupport(): Promise<boolean> {
+  if (
+    typeof navigator === "undefined" ||
+    !navigator.mediaCapabilities ||
+    typeof MediaSource === "undefined"
+  ) {
+    return false;
+  }
+  try {
+    if (!MediaSource.isTypeSupported(HLG_HLS_CONFIGURATION.video.contentType)) return false;
+    const result = await navigator.mediaCapabilities.decodingInfo(HLG_HLS_CONFIGURATION);
+    return result.supported && result.smooth;
+  } catch {
+    return false;
+  }
+}
+
 function testMediaType(mime: string): boolean {
   if (typeof MediaSource !== "undefined") {
     try {
@@ -130,6 +229,15 @@ function testMediaType(mime: string): boolean {
     return (
       document.createElement(mime.startsWith("audio/") ? "audio" : "video").canPlayType(mime) !== ""
     );
+  } catch {
+    return false;
+  }
+}
+
+function testMediaSourceType(mime: string): boolean {
+  if (typeof MediaSource === "undefined") return false;
+  try {
+    return MediaSource.isTypeSupported(mime);
   } catch {
     return false;
   }
@@ -159,6 +267,7 @@ function testMediaElementType(mime: string): boolean {
  */
 export function probeWebCapabilities(): WebCapabilityProbe {
   const codecsVideo: string[] = [];
+  const hlsCodecsVideo: string[] = [];
   const codecsAudio: string[] = [];
   const containers: string[] = [];
 
@@ -171,9 +280,11 @@ export function probeWebCapabilities(): WebCapabilityProbe {
 
   // Test video codecs (in mp4 container).
   for (const [name, codec] of Object.entries(VIDEO_CODEC_MAP)) {
-    if (testMediaType(`video/mp4; codecs="${codec}"`)) {
+    const mime = `video/mp4; codecs="${codec}"`;
+    if (testMediaType(mime)) {
       codecsVideo.push(name);
     }
+    if (testMediaSourceType(mime)) hlsCodecsVideo.push(name);
   }
 
   // Test audio codecs.
@@ -208,9 +319,26 @@ export function probeWebCapabilities(): WebCapabilityProbe {
   // evidence must not be discarded because the coarse output query says no, so
   // the sample-entry probes run unconditionally and `hdr` stays a best-effort
   // output signal only.
-  const dolbyVisionProfiles = Object.entries(DOLBY_VISION_PROFILE_PROBES)
-    .filter(([, probe]) => testMediaElementType(probe.mime))
-    .map(([profile]) => Number(profile));
+  const dolbyVisionProfileLevels: Array<{
+    profile: number;
+    max_level: number;
+    bl_compatibility_ids?: number[];
+  }> = [];
+  for (const [profileValue, probe] of Object.entries(DOLBY_VISION_PROFILE_PROBES)) {
+    const profile = Number(profileValue);
+    const maxLevel = probe.levels.find((level) =>
+      testMediaElementType(
+        `video/mp4; codecs="dvh1.${String(profile).padStart(2, "0")}.${String(level).padStart(2, "0")}"`,
+      ),
+    );
+    if (maxLevel === undefined) continue;
+    dolbyVisionProfileLevels.push({
+      profile,
+      max_level: maxLevel,
+      ...(probe.blCompatibilityIds ? { bl_compatibility_ids: probe.blCompatibilityIds } : {}),
+    });
+  }
+  const dolbyVisionProfiles = dolbyVisionProfileLevels.map(({ profile }) => profile);
   const progressiveCodecsVideo = [...codecsVideo];
   if (dolbyVisionProfiles.length > 0 && !progressiveCodecsVideo.includes("hevc")) {
     // Every Dolby Vision profile probed above uses an HEVC base layer. The
@@ -225,28 +353,187 @@ export function probeWebCapabilities(): WebCapabilityProbe {
     hdr10_plus: false,
     hlg: false,
     dolby_vision_profiles: dolbyVisionProfiles,
-    dolby_vision_profile_levels: dolbyVisionProfiles.map((profile) => {
-      const profileProbe = DOLBY_VISION_PROFILE_PROBES[profile]!;
-      return {
-        profile,
-        max_level: profileProbe.maxLevel,
-        ...(profileProbe.blCompatibilityIds
-          ? { bl_compatibility_ids: profileProbe.blCompatibilityIds }
-          : {}),
-      };
-    }),
+    dolby_vision_profile_levels: dolbyVisionProfileLevels,
+  };
+  const hlsHDRDetails = {
+    hdr10: false,
+    hdr10_plus: false,
+    hlg: false,
+    dolby_vision_profiles: [] as number[],
+    dolby_vision_profile_levels: [],
   };
 
   return {
     containers,
     codecsVideo,
     progressiveCodecsVideo,
+    hlsCodecsVideo,
     codecsAudio,
     maxResolution,
     hdr,
     hdrDetails,
+    hlsHDRDetails,
     hls: detectHLSSupport(),
+    nativeHls: detectNativeHLSSupport(),
   };
+}
+
+export interface WebCapabilityDetection {
+  probe: WebCapabilityProbe;
+  settled: boolean;
+}
+
+interface ExactWebCapabilityProbe {
+  hdr10: boolean;
+  hlg: boolean;
+  hlsHDR10: boolean;
+  hlsHLG: boolean;
+}
+
+const CAPABILITY_PROBE_TIMEOUT_MS = 250;
+const CAPABILITY_CACHE_KEY = "silo.playback.exact-web-capabilities.v1";
+const capabilityCacheEnabled = import.meta.env.MODE !== "test";
+let exactCapabilityCache: ExactWebCapabilityProbe | null = null;
+let exactCapabilityPromise: Promise<ExactWebCapabilityProbe> | null = null;
+let exactCapabilityGeneration = 0;
+
+function boundedCapabilityProbe(probe: Promise<boolean>): Promise<boolean> {
+  return new Promise((resolve) => {
+    let complete = false;
+    const timeout = window.setTimeout(() => {
+      if (complete) return;
+      complete = true;
+      resolve(false);
+    }, CAPABILITY_PROBE_TIMEOUT_MS);
+    void probe.then(
+      (supported) => {
+        if (complete) return;
+        complete = true;
+        window.clearTimeout(timeout);
+        resolve(supported);
+      },
+      () => {
+        if (complete) return;
+        complete = true;
+        window.clearTimeout(timeout);
+        resolve(false);
+      },
+    );
+  });
+}
+
+function readExactCapabilityCache(): ExactWebCapabilityProbe | null {
+  if (exactCapabilityCache) return exactCapabilityCache;
+  if (!capabilityCacheEnabled || typeof sessionStorage === "undefined") return null;
+  try {
+    const value = JSON.parse(
+      sessionStorage.getItem(CAPABILITY_CACHE_KEY) ?? "null",
+    ) as Partial<ExactWebCapabilityProbe> | null;
+    if (
+      value &&
+      typeof value.hdr10 === "boolean" &&
+      typeof value.hlg === "boolean" &&
+      typeof value.hlsHDR10 === "boolean" &&
+      typeof value.hlsHLG === "boolean"
+    ) {
+      exactCapabilityCache = value as ExactWebCapabilityProbe;
+      return exactCapabilityCache;
+    }
+  } catch {
+    // A disabled or corrupted session cache is only a performance miss.
+  }
+  return null;
+}
+
+function probeExactWebCapabilities(): Promise<ExactWebCapabilityProbe> {
+  const cached = readExactCapabilityCache();
+  if (cached) return Promise.resolve(cached);
+  if (capabilityCacheEnabled && exactCapabilityPromise) return exactCapabilityPromise;
+
+  const generation = exactCapabilityGeneration;
+  const pending = Promise.all([
+    boundedCapabilityProbe(probeHDR10PlaybackSupport()),
+    boundedCapabilityProbe(probeHLGPlaybackSupport()),
+    boundedCapabilityProbe(probeHLSHDR10PlaybackSupport()),
+    boundedCapabilityProbe(probeHLSHLGPlaybackSupport()),
+  ]).then(([hdr10, hlg, hlsHDR10, hlsHLG]) => {
+    const result = { hdr10, hlg, hlsHDR10, hlsHLG };
+    if (capabilityCacheEnabled && generation === exactCapabilityGeneration) {
+      exactCapabilityCache = result;
+      try {
+        sessionStorage.setItem(CAPABILITY_CACHE_KEY, JSON.stringify(result));
+      } catch {
+        // Playback still uses the in-memory result when storage is disabled.
+      }
+    }
+    return result;
+  });
+  if (capabilityCacheEnabled) exactCapabilityPromise = pending;
+  return pending;
+}
+
+function invalidateExactCapabilityCache(): void {
+  exactCapabilityGeneration += 1;
+  exactCapabilityCache = null;
+  exactCapabilityPromise = null;
+  if (!capabilityCacheEnabled || typeof sessionStorage === "undefined") return;
+  try {
+    sessionStorage.removeItem(CAPABILITY_CACHE_KEY);
+  } catch {
+    // A disabled session cache does not affect the live probe.
+  }
+}
+
+function applyExactWebCapabilities(
+  next: WebCapabilityProbe,
+  { hdr10, hlg, hlsHDR10, hlsHLG }: ExactWebCapabilityProbe,
+): WebCapabilityProbe {
+  const progressiveCodecsVideo =
+    (hdr10 || hlg) && !next.progressiveCodecsVideo.includes("hevc")
+      ? [...next.progressiveCodecsVideo, "hevc"]
+      : next.progressiveCodecsVideo;
+  const hlsCodecsVideo =
+    (hlsHDR10 || hlsHLG) && !next.hlsCodecsVideo.includes("hevc")
+      ? [...next.hlsCodecsVideo, "hevc"]
+      : next.hlsCodecsVideo;
+  return {
+    ...next,
+    progressiveCodecsVideo,
+    hlsCodecsVideo,
+    hdrDetails: {
+      ...next.hdrDetails,
+      ...(hdr10
+        ? {
+            hdr10: true,
+            hdr10_max_width: 3840,
+            hdr10_max_height: 2160,
+            hdr10_max_frame_rate: 24,
+            hdr10_max_bitrate_kbps: 80_000,
+          }
+        : {}),
+      ...(hlg ? { hlg: true } : {}),
+    },
+    hlsHDRDetails: {
+      ...next.hlsHDRDetails,
+      ...(hlsHDR10
+        ? {
+            hdr10: true,
+            hdr10_max_width: 3840,
+            hdr10_max_height: 2160,
+            hdr10_max_frame_rate: 24,
+            hdr10_max_bitrate_kbps: 80_000,
+          }
+        : {}),
+      ...(hlsHLG ? { hlg: true } : {}),
+    },
+  };
+}
+
+// The web-player module loads before a viewer opens playback. Start the
+// bounded decoder probes immediately so an initial play or resume normally
+// consumes a ready result instead of paying probe latency at click time.
+if (capabilityCacheEnabled && typeof window !== "undefined") {
+  void probeExactWebCapabilities();
 }
 
 /**
@@ -254,57 +541,76 @@ export function probeWebCapabilities(): WebCapabilityProbe {
  * Moving a window between SDR and HDR displays can change the media-query
  * result without remounting the player, so refresh when either query changes.
  */
-export function useCodecDetection(): WebCapabilityProbe {
-  const [capabilities, setCapabilities] = useState(probeWebCapabilities);
+export function useCodecDetectionState(): WebCapabilityDetection {
+  const [detection, setDetection] = useState<WebCapabilityDetection>(() => {
+    const probe = probeWebCapabilities();
+    const cached = readExactCapabilityCache();
+    return cached
+      ? { probe: applyExactWebCapabilities(probe, cached), settled: true }
+      : { probe, settled: false };
+  });
 
   useEffect(() => {
-    if (typeof matchMedia === "undefined") return;
     let disposed = false;
     let probeGeneration = 0;
-    const queries = [
-      matchMedia("(dynamic-range: high)"),
-      matchMedia("(video-dynamic-range: high)"),
-    ];
+    const queries =
+      typeof matchMedia === "undefined"
+        ? []
+        : [matchMedia("(dynamic-range: high)"), matchMedia("(video-dynamic-range: high)")];
     const refresh = () => {
       const generation = ++probeGeneration;
       const next = probeWebCapabilities();
-      setCapabilities(next);
 
-      void probeHDR10PlaybackSupport().then((hdr10) => {
-        if (disposed || generation !== probeGeneration || !hdr10) return;
-        setCapabilities((current) => ({
-          ...current,
-          // The exact HDR10 query proves the HEVC Main10 base codec for the
-          // progressive MP4 route even when the separate generic HEVC probe was
-          // rejected. Keep that evidence scoped away from original and HLS.
-          progressiveCodecsVideo: current.progressiveCodecsVideo.includes("hevc")
-            ? current.progressiveCodecsVideo
-            : [...current.progressiveCodecsVideo, "hevc"],
-          hdrDetails: {
-            ...current.hdrDetails,
-            hdr10: true,
-            hdr10_max_width: 3840,
-            hdr10_max_height: 2160,
-            hdr10_max_frame_rate: 24,
-            hdr10_max_bitrate_kbps: 80_000,
-          },
-        }));
+      const cached = readExactCapabilityCache();
+      if (cached) {
+        setDetection({ probe: applyExactWebCapabilities(next, cached), settled: true });
+        return;
+      }
+
+      // Keep the last verified capability bytes while exposing that a newer
+      // output probe is pending. Publishing `next` here would reintroduce the
+      // transient no-HDR route that caused fallback and resume races.
+      setDetection((current) => (current.settled ? { ...current, settled: false } : current));
+
+      // Publish only the settled snapshot. An intermediate "no HDR" state
+      // used to open a 1080p fallback, then replace it milliseconds later when
+      // the async probe completed. If that replacement failed, the original
+      // resume anchor was lost. A bounded probe keeps startup finite without
+      // leaking transient capability state into an active session.
+      void probeExactWebCapabilities().then((exact) => {
+        if (disposed || generation !== probeGeneration) return;
+        setDetection({
+          settled: true,
+          probe: applyExactWebCapabilities(next, exact),
+        });
       });
     };
     refresh();
+    const refreshForOutputChange = () => {
+      // Media Capabilities can change when macOS moves a window to another
+      // display. Keep navigation/resume fast with the cache, but never reuse
+      // it across an actual output transition.
+      invalidateExactCapabilityCache();
+      refresh();
+    };
     for (const query of queries) {
-      if (typeof query.addEventListener === "function") query.addEventListener("change", refresh);
-      else query.addListener?.(refresh);
+      if (typeof query.addEventListener === "function")
+        query.addEventListener("change", refreshForOutputChange);
+      else query.addListener?.(refreshForOutputChange);
     }
     return () => {
       disposed = true;
       for (const query of queries) {
         if (typeof query.removeEventListener === "function")
-          query.removeEventListener("change", refresh);
-        else query.removeListener?.(refresh);
+          query.removeEventListener("change", refreshForOutputChange);
+        else query.removeListener?.(refreshForOutputChange);
       }
     };
   }, []);
 
-  return capabilities;
+  return detection;
+}
+
+export function useCodecDetection(): WebCapabilityProbe {
+  return useCodecDetectionState().probe;
 }

@@ -8,6 +8,10 @@ import (
 )
 
 const (
+	// QueryParameter carries an integrated-server playback capability. Keeping
+	// the name here lets the API auth middleware and serve handlers agree without
+	// either package depending on the other.
+	QueryParameter = "st"
 	// PlayMethodDownload identifies a token minted only after the API has
 	// authorized a file download. Proxy download routes reject playback tokens.
 	PlayMethodDownload = "download"
@@ -36,13 +40,16 @@ type Claims struct {
 	AudioChannels        int    `json:"ach,omitempty"`
 	AudioTrackIndex      int    `json:"ati,omitempty"`
 	AudioOnly            bool   `json:"ao,omitempty"`
-	// DVProfile is the file's Dolby Vision profile (0 = none); remux nodes
-	// use it to strip dangling profile 7 RPUs. Absent in older tokens, which
-	// decodes as 0 (no strip — the pre-existing behavior).
+	// DVProfile is the file's Dolby Vision profile (0 = none); remux nodes use
+	// it with the frozen mode to preserve Dolby Vision or isolate a compatible
+	// base layer. Absent in older tokens, which decodes as 0 (legacy behavior).
 	DVProfile int `json:"dvp,omitempty"`
-	// RemuxDVMode freezes whether a Profile 7 remux preserves or strips DV
-	// metadata. Empty is the legacy auto behavior for old tokens.
+	// RemuxDVMode freezes whether a remux preserves Dolby Vision or removes it
+	// for a validated HDR10/HLG/SDR base layer. Empty is legacy auto behavior.
 	RemuxDVMode string `json:"dvm,omitempty"`
+	// DropInitialLeadingPictures enables the bounded HEVC open-GOP resume
+	// normalization selected by the signed server-side playback recipe.
+	DropInitialLeadingPictures bool `json:"dilp,omitempty"`
 
 	// Ownership / authorization lookup keys (re-resolved at reconstruct).
 	// Not trust assertions.
@@ -68,6 +75,7 @@ type Claims struct {
 	SourceVideoBitDepth    int     `json:"svb,omitempty"`
 	SoftwareVideoDecode    bool    `json:"svd,omitempty"`
 	VideoBitstreamFilter   string  `json:"vbsf,omitempty"`
+	VideoSampleEntry       string  `json:"vse,omitempty"`
 	OutputSubdir           string  `json:"osd,omitempty"`
 	SeekSeconds            float64 `json:"seek,omitempty"`
 	StreamOriginSeconds    float64 `json:"origin,omitempty"`
@@ -93,6 +101,9 @@ type Claims struct {
 
 // Sign creates a signed JWT string from the given claims.
 func Sign(c Claims, secret string, ttl time.Duration) (string, error) {
+	if secret == "" {
+		return "", fmt.Errorf("stream token secret is empty")
+	}
 	now := time.Now()
 	c.RegisteredClaims = jwt.RegisteredClaims{
 		ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
@@ -104,8 +115,11 @@ func Sign(c Claims, secret string, ttl time.Duration) (string, error) {
 
 // Verify parses and validates a stream token JWT string.
 func Verify(tokenString, secret string) (*Claims, error) {
+	if secret == "" {
+		return nil, fmt.Errorf("stream token secret is empty")
+	}
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (any, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+		if token.Method != jwt.SigningMethodHS256 {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return []byte(secret), nil

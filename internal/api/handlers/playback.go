@@ -392,7 +392,7 @@ func (h *PlaybackHandler) ensurePlaybackProbe(ctx context.Context, file *models.
 // and the transcode manifest rewriter already appends the request RawQuery to
 // every segment URI, so segment requests inherit the token for free. The
 // proxy/node path keeps the token in the URL path (see the proxy server).
-const streamTokenParam = "st"
+const streamTokenParam = streamtoken.QueryParameter
 
 // signSessionToken mints a stream token carrying the session's full
 // reconstruction recipe. Returns "" when no signing secret is configured
@@ -423,7 +423,15 @@ func (h *PlaybackHandler) signStreamClaims(claims streamtoken.Claims) string {
 // no token (the result is simply nil); the recipe is consumed only on
 // reconstruct.
 func (h *PlaybackHandler) streamCardFromQuery(r *http.Request, sessionID string) *playback.RecipeCard {
-	return streamCardFromToken(r.URL.Query().Get(streamTokenParam), sessionID, h.JWTSecret)
+	return streamCardFromRequest(r, sessionID, h.JWTSecret)
+}
+
+func streamCardFromRequest(r *http.Request, sessionID, secret string) *playback.RecipeCard {
+	if claims := apimw.GetTransportStreamClaims(r.Context()); claims != nil && claims.SessionID == sessionID {
+		card := playback.RecipeCardFromClaims(claims)
+		return &card
+	}
+	return streamCardFromToken(r.URL.Query().Get(streamTokenParam), sessionID, secret)
 }
 
 // loadTranscodeServeSession resolves the playback Session for the transcode
@@ -445,6 +453,9 @@ func (h *PlaybackHandler) loadTranscodeServeSession(r *http.Request, sessionID s
 		if requestUserID != 0 && session.UserID != requestUserID {
 			return nil, playback.SessionForbidden, nil
 		}
+		if !transportStreamClaimsMatchSession(r.Context(), session) {
+			return nil, playback.SessionForbidden, nil
+		}
 		return session, playback.SessionLoaded, nil
 	}
 	if !errors.Is(err, playback.ErrSessionNotFound) {
@@ -455,6 +466,38 @@ func (h *PlaybackHandler) loadTranscodeServeSession(r *http.Request, sessionID s
 	card := h.streamCardFromQuery(r, sessionID)
 	session, status := h.tm.LoadOrReconstructSession(r.Context(), h.sessionMgr.GetSession, sessionID, requestUserID, card)
 	return session, status, card
+}
+
+// transportStreamClaimsMatchSession fences a signed transport capability to
+// the live recipe it was minted for. This matters after an in-place replan:
+// the playback session id stays stable, but an older URL must not authorize a
+// different media file or delivery method that later occupied that session.
+func transportStreamClaimsMatchSession(ctx context.Context, session *playback.Session) bool {
+	return transportStreamClaimsMatchLiveSession(apimw.GetTransportStreamClaims(ctx), session)
+}
+
+func transportStreamClaimsMatchLiveSession(claims *streamtoken.Claims, session *playback.Session) bool {
+	if claims == nil {
+		return true
+	}
+	if session == nil || claims.SessionID != session.ID || claims.UserID != session.UserID || claims.MediaFileID != session.MediaFileID || claims.ProfileID != session.ProfileID {
+		return false
+	}
+	method := playback.PlayMethod(claims.PlayMethod)
+	if method == "" {
+		method = playback.PlayTranscode
+	}
+	// HLS remuxes are classified as remux sessions for admission and activity,
+	// but their segmented transport is reconstructed from the same full recipe
+	// card as an encoded HLS transcode. Its signed capability therefore carries
+	// PlayTranscode. SegmentDuration identifies that HLS serve path and keeps a
+	// progressive remux capability from being accepted after an in-place HLS
+	// replan.
+	expectedMethod := session.PlayMethod
+	if session.SegmentDuration > 0 {
+		expectedMethod = playback.PlayTranscode
+	}
+	return method == expectedMethod
 }
 
 // streamCardFromToken verifies a stream token and decodes its reconstruction
@@ -509,6 +552,7 @@ func identityRecipeCard(s *playback.Session) playback.RecipeCard {
 	switch s.PlayMethod {
 	case playback.PlayRemux:
 		card := playback.NewRemuxRecipeCard(s.ID, s.UserID, s.ProfileID, s.MediaFileID, s.TranscodeAudio, s.AudioTrackIndex, s.RemuxDVMode)
+		card.DropInitialLeadingPictures = s.DropInitialLeadingPictures
 		card.TargetCodecAudio = s.TargetAudioCodec
 		card.TargetAudioChannels = s.TargetAudioChannels
 		card.TargetAudioBitrateKbps = s.TargetAudioBitrateKbps

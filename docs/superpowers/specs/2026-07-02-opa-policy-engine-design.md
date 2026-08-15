@@ -165,7 +165,7 @@ Three typed methods on a `PDP` struct (not a generic `map[string]any`
 `CheckAction(ctx, ActionInput) (ActionDecision, Meta, error)`. Each builds
 the input document, evaluates the corresponding prepared query
 (`data.silo.scope.decision`, `data.silo.permission.decision`,
-`data.silo.action.decision`) under a `context.WithTimeout` (default 25 ms,
+`data.silo.action.decision`) under a `context.WithTimeout` (default 250 ms,
 setting `policy.eval_timeout_ms`), fires an async decision-log write, and
 returns a typed result. Callers translate errors into their surface's
 fail-closed outcome.
@@ -234,8 +234,9 @@ A future surface = one new Rego package + one input struct + one PDP method.
 2. Compile-check before persist: `POST .../versions` compiles the candidate
    layered over vendor + other active documents; failures return structured
    `{row, col, message}` errors and nothing is persisted as activatable.
-3. Eval timeout: 25 ms default per decision (measured eval is ~14 µs; the
-   timeout is a circuit breaker for pathological comprehensions).
+3. Eval timeout: 250 ms default per decision (measured eval is ~14 µs; the
+   timeout is a wall-clock circuit breaker for pathological comprehensions and
+   must also tolerate scheduler delay while scans or stream delivery are busy).
 4. Editor reachable only through `requireActingAdmin`.
 
 ## Input/output document contracts
@@ -418,7 +419,7 @@ Direct replacement, staged per surface, gated by dual-execution parity tests:
   switch, and vendor behavior as the guaranteed floor when the custom document
   is disabled.
 - **Eval-timeout DoS surface:** a pathological custom policy costs up to
-  25 ms per decision server-wide until rolled back. Accepted for v1 (editor is
+  250 ms per decision server-wide until rolled back. Accepted for v1 (editor is
   acting-admin-only); a repeated-timeout circuit breaker is a follow-up
   candidate.
 - **Hand-rolled Rego highlighting** will lag full Rego syntax; accepted (it

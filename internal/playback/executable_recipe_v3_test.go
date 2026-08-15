@@ -8,7 +8,7 @@ import (
 func TestExecutableRecipeV3RoundTripPreservesOperationalFields(t *testing.T) {
 	plan := &PlanV3{PlanID: "plan:frozen", Delivery: DeliveryRemuxHLSV3}
 	want := PlannerResultV3{
-		Plan: plan, PlayMethod: PlayRemux, TranscodeAudio: true,
+		Plan: plan, PlayMethod: PlayRemux, TranscodeAudio: true, DropInitialLeadingPictures: true,
 		TargetVideoCodec: "copy", TargetAudioCodec: "aac", TargetAudioChannels: 6, TargetAudioBitrateKbps: 320,
 		TargetResolution: "1080p", TargetBitrateKbps: 18_000,
 		FrozenSourceMetadata: &SourceExecutionMetadataV3{VideoCodec: "h264", SoftwareVideoDecode: true, DurationSeconds: 7_201},
@@ -28,7 +28,7 @@ func TestExecutableRecipeV3RoundTripPreservesOperationalFields(t *testing.T) {
 		t.Fatal("stale frozen recipe matched a newer plan")
 	}
 	got := recipe.PlannerResult(plan)
-	if got.Plan != plan || got.PlayMethod != want.PlayMethod || got.TranscodeAudio != want.TranscodeAudio ||
+	if got.Plan != plan || got.PlayMethod != want.PlayMethod || got.TranscodeAudio != want.TranscodeAudio || got.DropInitialLeadingPictures != want.DropInitialLeadingPictures ||
 		got.TargetVideoCodec != want.TargetVideoCodec || got.TargetAudioCodec != want.TargetAudioCodec ||
 		got.TargetAudioChannels != want.TargetAudioChannels || got.TargetAudioBitrateKbps != want.TargetAudioBitrateKbps || got.TargetResolution != want.TargetResolution ||
 		got.TargetBitrateKbps != want.TargetBitrateKbps || got.SubtitleTrackIndex != want.SubtitleTrackIndex ||
@@ -42,7 +42,7 @@ func TestExecutableRecipeV3RoundTripPreservesOperationalFields(t *testing.T) {
 func TestExecutableRecipeV3SurvivesJSONRoundTrip(t *testing.T) {
 	plan := &PlanV3{PlanID: "plan:frozen"}
 	recipe := FreezeExecutableRecipeV3(PlannerResultV3{
-		Plan: plan, PlayMethod: PlayRemux,
+		Plan: plan, PlayMethod: PlayRemux, DropInitialLeadingPictures: true,
 		FrozenSourceMetadata: &SourceExecutionMetadataV3{VideoCodec: "h264", SoftwareVideoDecode: true, DurationSeconds: 7_201},
 		SubtitleTrackIndex:   -1, SubtitleTransportTrackIndex: 0,
 	})

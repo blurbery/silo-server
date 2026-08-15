@@ -2013,7 +2013,38 @@ func NewRouter(deps Dependencies) chi.Router {
 			})
 		}
 
-		// All remaining routes require auth.
+		// Playback byte delivery uses a route-scoped signed stream capability,
+		// falling back to ordinary account auth for older clients. Keep these hot
+		// paths outside viewer-scope resolution: the playback plan was already
+		// authorized, and each handler fences the capability to the live session.
+		// Re-running profile DB reads and OPA for every 4 MiB range or HLS segment
+		// adds no authorization check used by the handler and can interrupt media
+		// when the host is under scan load.
+		if authMiddleware != nil && (playbackHandler != nil || streamHandler != nil) {
+			streamSecret := ""
+			if deps.Config != nil {
+				streamSecret = deps.Config.Auth.JWTSecret
+			}
+			r.Group(func(r chi.Router) {
+				r.Use(authMiddleware.RequireTransportAuth(streamSecret))
+				if deps.RateLimitMW != nil {
+					r.Use(deps.RateLimitMW.Handler)
+				}
+				if playbackHandler != nil {
+					r.Get("/playback/transcode/{session_id}/master.m3u8", playbackHandler.HandleGetTranscodeManifest)
+					r.Get("/playback/transcode/{session_id}/segment/{name}", playbackHandler.HandleGetTranscodeSegment)
+				}
+				if streamHandler != nil {
+					r.Get("/stream/{session_id}", streamHandler.HandleStream)
+					r.Head("/stream/{session_id}", streamHandler.HandleStream)
+					r.Get("/stream/{session_id}/subtitles/{track}", streamHandler.HandleSubtitle)
+					r.Head("/stream/{session_id}/subtitles/{track}", streamHandler.HandleSubtitle)
+					r.Get("/stream/{session_id}/subtitles/{track}/fonts", streamHandler.HandleSubtitleFonts)
+				}
+			})
+		}
+
+		// All remaining routes require auth and viewer-scope resolution.
 		if authMiddleware != nil {
 			r.Group(func(r chi.Router) {
 				r.Use(authMiddleware.RequireAuth)
@@ -2634,11 +2665,6 @@ func NewRouter(deps Dependencies) chi.Router {
 
 					r.Route("/playback", func(r chi.Router) {
 						r.Get("/capability", playbackHandler.HandlePlaybackCapabilityV3)
-						// HLS transcode delivery — no profile auth needed;
-						// session ID (UUID) serves as the access token, same
-						// pattern as /stream/{session_id}.
-						r.Get("/transcode/{session_id}/master.m3u8", playbackHandler.HandleGetTranscodeManifest)
-						r.Get("/transcode/{session_id}/segment/{name}", playbackHandler.HandleGetTranscodeSegment)
 
 						// Playback realtime control socket — needs auth but not profile.
 						r.Get("/sessions/{session_id}/control/ws", playbackHandler.HandleSessionWebSocket)
@@ -2674,15 +2700,6 @@ func NewRouter(deps Dependencies) chi.Router {
 							r.Post("/rooms/{room_id}/suggestions/promote", watchTogetherHandler.HandlePromoteSuggestion)
 						})
 					})
-				}
-
-				// Stream routes.
-				if streamHandler != nil {
-					r.Get("/stream/{session_id}", streamHandler.HandleStream)
-					r.Head("/stream/{session_id}", streamHandler.HandleStream)
-					r.Get("/stream/{session_id}/subtitles/{track}", streamHandler.HandleSubtitle)
-					r.Head("/stream/{session_id}/subtitles/{track}", streamHandler.HandleSubtitle)
-					r.Get("/stream/{session_id}/subtitles/{track}/fonts", streamHandler.HandleSubtitleFonts)
 				}
 
 				// Download routes.
