@@ -1377,6 +1377,13 @@ export function VideoPlayer({
     let destroyed = false;
     let autoplayStarted = false;
     let nativeHLSMetadataHandler: (() => void) | null = null;
+    let progressiveResumeMetadataHandler: (() => void) | null = null;
+    let progressiveResumeSeekedHandler: (() => void) | null = null;
+    const deferFirefoxProgressiveResume =
+      isFirefoxBrowser &&
+      plan.delivery === "server_remux_progressive" &&
+      effectiveInitialPosition > 0;
+    let progressiveResumePending = deferFirefoxProgressiveResume;
 
     mediaRecoveryAttemptsRef.current = 0;
     setError(null);
@@ -1390,14 +1397,18 @@ export function VideoPlayer({
         video.removeEventListener("loadedmetadata", nativeHLSMetadataHandler);
         nativeHLSMetadataHandler = null;
       }
+      if (progressiveResumeMetadataHandler) {
+        video.removeEventListener("loadedmetadata", progressiveResumeMetadataHandler);
+        progressiveResumeMetadataHandler = null;
+      }
+      if (progressiveResumeSeekedHandler) {
+        video.removeEventListener("seeked", progressiveResumeSeekedHandler);
+        progressiveResumeSeekedHandler = null;
+      }
     };
 
-    const attemptAutoplayWhenReady = () => {
+    const completeStartup = () => {
       if (destroyed || autoplayStarted || hlsStartupGuardRef.current?.hasFailed()) return;
-      // HAVE_FUTURE_DATA means the browser has enough media to advance beyond
-      // the current frame. Starting earlier can produce a visible first-frame
-      // freeze where audio advances before video begins moving.
-      if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) return;
       autoplayStarted = true;
       cleanupStartupListeners();
       if (!shouldAutoPlay) {
@@ -1406,7 +1417,18 @@ export function VideoPlayer({
         setPlaying(false);
         return;
       }
-      video.play().catch(() => setPlaying(false));
+      video.play().catch(() => {
+        if (!destroyed) setPlaying(false);
+      });
+    };
+
+    const attemptAutoplayWhenReady = () => {
+      if (progressiveResumePending) return;
+      // HAVE_FUTURE_DATA means the browser has enough media to advance beyond
+      // the current frame. Starting HLS earlier can produce a visible first-
+      // frame freeze where audio advances before video begins moving.
+      if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) return;
+      completeStartup();
     };
 
     video.addEventListener("loadeddata", attemptAutoplayWhenReady);
@@ -1552,10 +1574,35 @@ export function VideoPlayer({
           }
         }
       } else {
-        // Direct play — set video src directly.
+        // Firefox can reject a resumed fragmented MP4 when source attachment,
+        // a non-zero seek, and play all race during decoder initialization.
+        // Keep its known-fast zero-start path (and every other browser) as-is;
+        // only a resumed progressive remux waits for metadata and its initial
+        // seek before the shared readiness gate issues one autoplay request.
+        if (deferFirefoxProgressiveResume) {
+          progressiveResumeMetadataHandler = () => {
+            progressiveResumeMetadataHandler = null;
+            progressiveResumeSeekedHandler = () => {
+              progressiveResumeSeekedHandler = null;
+              progressiveResumePending = false;
+              // play() owns any final buffering from here. Starting as soon as
+              // the resume seek settles avoids adding a second startup delay.
+              completeStartup();
+            };
+            video.addEventListener("seeked", progressiveResumeSeekedHandler, { once: true });
+            video.currentTime = effectiveInitialPosition;
+          };
+          video.addEventListener("loadedmetadata", progressiveResumeMetadataHandler, {
+            once: true,
+          });
+        }
         video.src = effectiveStreamUrl;
-        video.currentTime = effectiveInitialPosition;
-        if (shouldAutoPlay) video.play().catch(() => setPlaying(false));
+        if (!deferFirefoxProgressiveResume) {
+          video.currentTime = effectiveInitialPosition;
+          if (shouldAutoPlay) {
+            completeStartup();
+          }
+        }
       }
     }
 
@@ -1581,8 +1628,10 @@ export function VideoPlayer({
   }, [
     effectiveStreamUrl,
     effectiveInitialPosition,
+    isFirefoxBrowser,
     isHlsStream,
     isPlayerReady,
+    plan.delivery,
     planRevision,
     plannedBitrateKbps,
     reportCurrentPlanFailure,
