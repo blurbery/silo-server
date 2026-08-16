@@ -199,18 +199,18 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		dvFallbackLocal = dolbyVisionBaseLayerFallbackV3Result{}
 		dvFallback = dolbyVisionBaseLayerFallbackV3Result{}
 	}
-	// Keep HLS preference browser-only. Silo Apple uses original_http for
-	// Matroska as the signal to launch its client-side loopback remuxer; that path
-	// also installs AVDisplayCriteria so tvOS Match Frame Rate and Match Dynamic
-	// Range can follow the source. Forcing server HLS bypasses that client policy.
 	// Safari's native HLS consumes the explicitly probed hvc1/dvh1 recipe, so it
 	// remains the preferred web Dolby route. Browsers using hls.js (including
 	// Firefox) stay progressive-first: that direct remux is their proven fast
 	// path and avoids moving an otherwise playable 4K source through MediaSource.
-	// HLS remains available as a recovery route if the progressive delivery fails.
-	// Require the complete copy recipe here so a missing server toolchain never
-	// takes away a working progressive fallback.
-	preferServerHLS := prefersWebHLSForMKVDolbyV3(source, input.Request) &&
+	// Silo's iOS and tvOS clients also prefer server HLS for Matroska Profile 7:
+	// their original_http route launches a client-side loopback remuxer, whereas
+	// the server can provide the validated HDR10 base layer and HLS-safe audio
+	// directly. Other Apple-native sources retain the existing client policy,
+	// including its AVDisplayCriteria handling. Require the complete copy recipe
+	// here so a missing server toolchain never takes away a working fallback.
+	preferServerHLS := (prefersWebHLSForMKVDolbyV3(source, input.Request) ||
+		prefersAppleNativeHLSForMKVProfile7V3(source, input.Request)) &&
 		videoOK && !source.VideoCopyUnsafe && hlsRemuxSubtitleOK &&
 		(rangeOK || dvStripEligible) &&
 		hlsAudioRouteExecutableV3(source, input)
@@ -551,7 +551,7 @@ func hlsVideoSampleEntryV3(source SourceDescriptorV3, request StartRequestV3, dv
 	if !strings.EqualFold(source.VideoCodec, "hevc") {
 		return ""
 	}
-	if !deliverySupportsFeatureV3(request, DeliveryClassHLSV3, ClientNativeHLSPlaybackV3) {
+	if !deliverySupportsAppleHLSPlaybackV3(request) {
 		return VideoSampleEntryHEV1V3
 	}
 	if !dvStrip && (source.DVProfile == 5 || source.DVProfile == 8) {
@@ -867,6 +867,24 @@ func prefersWebHLSForMKVDolbyV3(source SourceDescriptorV3, request StartRequestV
 	// the HLS delivery and can be selected after a genuine progressive failure.
 	return deliveryAvailableV3(request, DeliveryClassHLSV3) &&
 		deliverySupportsFeatureV3(request, DeliveryClassHLSV3, ClientNativeHLSPlaybackV3)
+}
+
+func prefersAppleNativeHLSForMKVProfile7V3(source SourceDescriptorV3, request StartRequestV3) bool {
+	if source.DVProfile != 7 ||
+		(!strings.EqualFold(source.Container, "mkv") && !strings.EqualFold(source.Container, "matroska")) {
+		return false
+	}
+	platform := strings.TrimSpace(request.ClientPlaybackContext.Device.Platform)
+	if !strings.EqualFold(platform, "ios") && !strings.EqualFold(platform, "tvos") {
+		return false
+	}
+	return deliveryAvailableV3(request, DeliveryClassHLSV3) &&
+		deliverySupportsFeatureV3(request, DeliveryClassHLSV3, ClientAppleAVPlayerHLSV3)
+}
+
+func deliverySupportsAppleHLSPlaybackV3(request StartRequestV3) bool {
+	return deliverySupportsFeatureV3(request, DeliveryClassHLSV3, ClientNativeHLSPlaybackV3) ||
+		deliverySupportsFeatureV3(request, DeliveryClassHLSV3, ClientAppleAVPlayerHLSV3)
 }
 
 func hlsAudioRouteExecutableV3(source SourceDescriptorV3, input PlannerInputV3) bool {

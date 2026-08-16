@@ -28,6 +28,7 @@ const (
 	ClientDVTransformVersionV3    = "1"
 	ClientDV8HDR10PlusSanitizerV3 = "client_dv8_hdr10plus_sanitizer_v1"
 	ClientNativeHLSPlaybackV3     = "native_hls_playback_v1"
+	ClientAppleAVPlayerHLSV3      = "apple_avplayer_hls"
 	ClientPostResumeRecoveryV3    = "client_post_resume_video_recovery_v1"
 	ClientSurfaceRecoveryV3       = "client_surface_recovery_v1"
 	DeviceQuirkRegistryRevisionV3 = "2026-08-15.1"

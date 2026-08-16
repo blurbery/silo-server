@@ -771,6 +771,62 @@ func TestPlanPlaybackV3WebNativeHLSAvoidsProgressiveProfile7Fallback(t *testing.
 	}
 }
 
+func TestPlanPlaybackV3AppleNativeHLSAvoidsOriginalHTTPForProfile7(t *testing.T) {
+	for _, platform := range []string{"tvos", "ios"} {
+		t.Run(platform, func(t *testing.T) {
+			file := detailedFixtureFileV3()
+			file.CodecAudio = "truehd"
+			file.AudioChannels = 8
+			file.AudioTracks[0] = models.AudioTrack{Codec: "truehd", Channels: 8, Layout: "7.1", Default: true}
+			file.VideoTracks[0].DVProfile = 7
+			file.VideoTracks[0].DVBLCompatID = 6
+			file.VideoTracks[0].VideoRange = "DolbyVision"
+			file.VideoTracks[0].VideoRangeType = "DOVIWithEL"
+
+			req := validStartRequestV3()
+			req.ClientFeatures = append(req.ClientFeatures, FeatureClientVideoTransforms)
+			req.ClientPlaybackContext.Device.Platform = platform
+			req.ClientPlaybackContext.Device.Manufacturer = "Apple"
+			req.Capabilities.CodecsAudio = append(req.Capabilities.CodecsAudio, "truehd")
+			req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
+			hdr := &HDRCapabilitiesV3{HDR10: true, DolbyVisionProfiles: []int{8}}
+			req.Capabilities.HDRDetails = hdr
+			req.ClientPlaybackContext.Output.HDRDetails = hdr
+
+			direct := req.ClientPlaybackContext.Deliveries[DeliveryClassOriginalHTTPV3]
+			direct.Transformations = []TransformationV3{{Name: ClientDV7ToDV81V3, Executor: ExecutorClientV3, RecipeVersion: ClientDVTransformVersionV3}}
+			req.ClientPlaybackContext.Deliveries[DeliveryClassOriginalHTTPV3] = direct
+
+			maxChannels := 8
+			hls := req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3]
+			hls.VideoCodecs = []string{"hevc"}
+			hls.AudioDecodeCodecs = []string{"aac"}
+			hls.MaxChannels = &maxChannels
+			hls.HDRDetails = &HDRCapabilitiesV3{HDR10: true}
+			hls.Features = []string{ClientAppleAVPlayerHLSV3}
+			req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3] = hls
+
+			result := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: testTransformationRegistryV3()})
+			if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxHLSV3 || result.Plan.EffectiveRecipe.DynamicRange != DynamicRangeHDR10V3 {
+				t.Fatalf("result = %s", ExplainPlannerResultV3(result))
+			}
+			if result.TargetVideoCodec != "copy" || result.TargetAudioCodec != "aac" || result.TargetAudioChannels != 6 || !result.TranscodeAudio {
+				t.Fatalf("execution = video %q audio %q channels=%d transcodeAudio=%v", result.TargetVideoCodec, result.TargetAudioCodec, result.TargetAudioChannels, result.TranscodeAudio)
+			}
+			if result.Plan.EffectiveRecipe.VideoSampleEntry != VideoSampleEntryHVC1V3 {
+				t.Fatalf("Apple HLS sample entry = %q, want hvc1", result.Plan.EffectiveRecipe.VideoSampleEntry)
+			}
+
+			hls.Features = nil
+			req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3] = hls
+			withoutAppleHLS := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: testTransformationRegistryV3()})
+			if withoutAppleHLS.Plan == nil || withoutAppleHLS.Plan.Delivery != DeliveryOriginalHTTPV3 || withoutAppleHLS.Plan.DecisionReason != "client_dv7_to_dv81" {
+				t.Fatalf("route without Apple HLS feature = %s", ExplainPlannerResultV3(withoutAppleHLS))
+			}
+		})
+	}
+}
+
 func TestPlanPlaybackV3WebNativeHLSPreservesCompatibleDolbyVisionAsDVH1(t *testing.T) {
 	file := detailedFixtureFileV3()
 	file.VideoTracks[0].DVProfile = 8
