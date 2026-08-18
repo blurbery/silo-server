@@ -13,7 +13,7 @@ import (
 const (
 	cacheMetadataImagesIntervalMs = int64(60 * 1000)
 	cacheMetadataImagesBatchSize  = 1000
-	cacheMetadataImagesWorkers    = 12
+	cacheMetadataImagesWorkers    = 2
 	cacheMetadataImagesMaxRuntime = 10 * time.Minute
 )
 

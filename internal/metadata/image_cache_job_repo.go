@@ -123,6 +123,32 @@ func imageCacheFailureRetryDelay(attempt int, errText string) time.Duration {
 	return imageCacheRetryDelay(attempt)
 }
 
+type imageCacheFailureDisposition struct {
+	status      string
+	attempt     int
+	retryDelay time.Duration
+}
+
+func classifyImageCacheFailure(attemptCount int, errText string) imageCacheFailureDisposition {
+	nextAttempt := attemptCount + 1
+	if strings.Contains(errText, "image resolver returned empty URL") {
+		return imageCacheFailureDisposition{
+			status:  ImageCacheStatusFailed,
+			attempt: max(nextAttempt, imageCacheMaxAttempts),
+		}
+	}
+
+	status := ImageCacheStatusQueued
+	if nextAttempt >= imageCacheMaxAttempts {
+		status = ImageCacheStatusFailed
+	}
+	return imageCacheFailureDisposition{
+		status:      status,
+		attempt:     nextAttempt,
+		retryDelay: imageCacheFailureRetryDelay(nextAttempt, errText),
+	}
+}
+
 func isStableProviderImageFailure(errText string) bool {
 	return strings.Contains(errText, "unexpected status 403") ||
 		strings.Contains(errText, "unexpected status 404") ||
@@ -239,9 +265,6 @@ func (r *ImageCacheJobRepository) enqueueBatchChunk(ctx context.Context, inputs 
 			status = CASE
 				WHEN metadata_image_cache_jobs.source_path IS DISTINCT FROM EXCLUDED.source_path
 					THEN 'queued'
-				WHEN metadata_image_cache_jobs.status = 'failed'
-					AND metadata_image_cache_jobs.next_attempt_at <= NOW()
-					THEN 'queued'
 				WHEN $%d::boolean
 					AND metadata_image_cache_jobs.status = 'succeeded'
 					THEN 'queued'
@@ -252,9 +275,6 @@ func (r *ImageCacheJobRepository) enqueueBatchChunk(ctx context.Context, inputs 
 			attempt_count = CASE
 				WHEN metadata_image_cache_jobs.source_path IS DISTINCT FROM EXCLUDED.source_path
 					THEN 0
-				WHEN metadata_image_cache_jobs.status = 'failed'
-					AND metadata_image_cache_jobs.next_attempt_at <= NOW()
-					THEN 0
 				WHEN $%d::boolean
 					AND metadata_image_cache_jobs.status = 'succeeded'
 					THEN 0
@@ -262,9 +282,6 @@ func (r *ImageCacheJobRepository) enqueueBatchChunk(ctx context.Context, inputs 
 			END,
 			next_attempt_at = CASE
 				WHEN metadata_image_cache_jobs.source_path IS DISTINCT FROM EXCLUDED.source_path
-					THEN NOW()
-				WHEN metadata_image_cache_jobs.status = 'failed'
-					AND metadata_image_cache_jobs.next_attempt_at <= NOW()
 					THEN NOW()
 				WHEN $%d::boolean
 					AND metadata_image_cache_jobs.status = 'succeeded'
@@ -274,9 +291,6 @@ func (r *ImageCacheJobRepository) enqueueBatchChunk(ctx context.Context, inputs 
 			locked_at = CASE
 				WHEN metadata_image_cache_jobs.source_path IS DISTINCT FROM EXCLUDED.source_path
 					THEN NULL
-				WHEN metadata_image_cache_jobs.status = 'failed'
-					AND metadata_image_cache_jobs.next_attempt_at <= NOW()
-					THEN NULL
 				WHEN $%d::boolean
 					AND metadata_image_cache_jobs.status = 'succeeded'
 					THEN NULL
@@ -284,9 +298,6 @@ func (r *ImageCacheJobRepository) enqueueBatchChunk(ctx context.Context, inputs 
 			END,
 			locked_by = CASE
 				WHEN metadata_image_cache_jobs.source_path IS DISTINCT FROM EXCLUDED.source_path
-					THEN ''
-				WHEN metadata_image_cache_jobs.status = 'failed'
-					AND metadata_image_cache_jobs.next_attempt_at <= NOW()
 					THEN ''
 				WHEN $%d::boolean
 					AND metadata_image_cache_jobs.status = 'succeeded'
@@ -296,9 +307,6 @@ func (r *ImageCacheJobRepository) enqueueBatchChunk(ctx context.Context, inputs 
 			last_error = CASE
 				WHEN metadata_image_cache_jobs.source_path IS DISTINCT FROM EXCLUDED.source_path
 					THEN ''
-				WHEN metadata_image_cache_jobs.status = 'failed'
-					AND metadata_image_cache_jobs.next_attempt_at <= NOW()
-					THEN ''
 				WHEN $%d::boolean
 					AND metadata_image_cache_jobs.status = 'succeeded'
 					THEN ''
@@ -306,9 +314,6 @@ func (r *ImageCacheJobRepository) enqueueBatchChunk(ctx context.Context, inputs 
 			END,
 			completed_at = CASE
 				WHEN metadata_image_cache_jobs.source_path IS DISTINCT FROM EXCLUDED.source_path
-					THEN NULL
-				WHEN metadata_image_cache_jobs.status = 'failed'
-					AND metadata_image_cache_jobs.next_attempt_at <= NOW()
 					THEN NULL
 				WHEN $%d::boolean
 					AND metadata_image_cache_jobs.status = 'succeeded'
@@ -318,10 +323,6 @@ func (r *ImageCacheJobRepository) enqueueBatchChunk(ctx context.Context, inputs 
 			updated_at = NOW()
 		WHERE metadata_image_cache_jobs.source_path IS DISTINCT FROM EXCLUDED.source_path
 		   OR metadata_image_cache_jobs.status IN ('queued', 'running')
-		   OR (
-			   metadata_image_cache_jobs.status = 'failed'
-			   AND metadata_image_cache_jobs.next_attempt_at <= NOW()
-		   )
 		   OR (
 			   $%d::boolean
 			   AND metadata_image_cache_jobs.status = 'succeeded'
@@ -453,12 +454,7 @@ func (r *ImageCacheJobRepository) MarkSucceeded(ctx context.Context, id int64, l
 // MarkFailed records a failed attempt with backoff, guarded by lease ownership
 // for the same reason as MarkSucceeded.
 func (r *ImageCacheJobRepository) MarkFailed(ctx context.Context, id int64, attemptCount int, lockedBy string, errText string) error {
-	nextAttempt := attemptCount + 1
-	status := ImageCacheStatusQueued
-	if nextAttempt >= imageCacheMaxAttempts {
-		status = ImageCacheStatusFailed
-	}
-	delay := imageCacheFailureRetryDelay(nextAttempt, errText)
+	disposition := classifyImageCacheFailure(attemptCount, errText)
 
 	_, err := r.pool.Exec(ctx, `
 		UPDATE metadata_image_cache_jobs
@@ -472,7 +468,7 @@ func (r *ImageCacheJobRepository) MarkFailed(ctx context.Context, id int64, atte
 		WHERE id = $1
 		  AND status = 'running'
 		  AND locked_by = $6
-	`, id, status, nextAttempt, intervalLiteral(delay), errText, lockedBy)
+	`, id, disposition.status, disposition.attempt, intervalLiteral(disposition.retryDelay), errText, lockedBy)
 	if err != nil {
 		return fmt.Errorf("marking metadata image cache job failed: %w", err)
 	}
@@ -833,10 +829,6 @@ func (r *ImageCacheJobRepository) EnqueueExistingProviderArtwork(ctx context.Con
 			WHERE j.id IS NULL
 			   OR j.source_path IS DISTINCT FROM ac.source_path
 			   OR j.status = 'succeeded'
-			   OR (
-				   j.status = 'failed'
-				   AND j.next_attempt_at <= NOW()
-			   )
 			ORDER BY ac.target_type, ac.target_content_id, ac.target_language, ac.image_type
 			LIMIT $1
 		)
