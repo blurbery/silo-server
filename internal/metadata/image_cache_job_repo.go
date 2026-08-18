@@ -124,8 +124,8 @@ func imageCacheFailureRetryDelay(attempt int, errText string) time.Duration {
 }
 
 type imageCacheFailureDisposition struct {
-	status      string
-	attempt     int
+	status     string
+	attempt    int
 	retryDelay time.Duration
 }
 
@@ -143,8 +143,8 @@ func classifyImageCacheFailure(attemptCount int, errText string) imageCacheFailu
 		status = ImageCacheStatusFailed
 	}
 	return imageCacheFailureDisposition{
-		status:      status,
-		attempt:     nextAttempt,
+		status:     status,
+		attempt:    nextAttempt,
 		retryDelay: imageCacheFailureRetryDelay(nextAttempt, errText),
 	}
 }
