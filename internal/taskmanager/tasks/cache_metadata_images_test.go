@@ -83,11 +83,11 @@ func TestCacheMetadataImagesTaskReportsStats(t *testing.T) {
 	if runner.claimLimit != 1000 {
 		t.Fatalf("claimLimit = %d, want 1000", runner.claimLimit)
 	}
-	if runner.concurrency != 12 {
-		t.Fatalf("concurrency = %d, want 12", runner.concurrency)
+	if runner.concurrency != 2 {
+		t.Fatalf("concurrency = %d, want 2", runner.concurrency)
 	}
-	if runner.maxRuntime != 60*time.Minute {
-		t.Fatalf("maxRuntime = %s, want 60m", runner.maxRuntime)
+	if runner.maxRuntime != 10*time.Minute {
+		t.Fatalf("maxRuntime = %s, want 10m", runner.maxRuntime)
 	}
 	if len(progress.messages) != 3 {
 		t.Fatalf("progress reports = %d, want 3", len(progress.messages))

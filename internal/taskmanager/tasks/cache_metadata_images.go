@@ -13,8 +13,8 @@ import (
 const (
 	cacheMetadataImagesIntervalMs = int64(60 * 1000)
 	cacheMetadataImagesBatchSize  = 1000
-	cacheMetadataImagesWorkers    = 12
-	cacheMetadataImagesMaxRuntime = 60 * time.Minute
+	cacheMetadataImagesWorkers    = 2
+	cacheMetadataImagesMaxRuntime = 10 * time.Minute
 )
 
 type MetadataImageCacheRunner interface {
