@@ -55,8 +55,54 @@ type ImageCacheJobRepository struct {
 	pool *pgxpool.Pool
 }
 
+// ImageCacheQueueProgress is a point-in-time summary of the durable image
+// cache queue. Succeeded and failed are terminal states; queued and running are
+// still outstanding.
+type ImageCacheQueueProgress struct {
+	Known     bool
+	Total     int64
+	Succeeded int64
+	Failed    int64
+	Queued    int64
+	Running   int64
+}
+
+func (p ImageCacheQueueProgress) Completed() int64 {
+	return p.Succeeded + p.Failed
+}
+
 func NewImageCacheJobRepository(pool *pgxpool.Pool) *ImageCacheJobRepository {
 	return &ImageCacheJobRepository{pool: pool}
+}
+
+// GetQueueProgress returns exact global counts for task progress reporting.
+// Keeping this query on the repository ensures callers do not duplicate queue
+// status semantics or reach around the data layer.
+func (r *ImageCacheJobRepository) GetQueueProgress(ctx context.Context) (ImageCacheQueueProgress, error) {
+	var progress ImageCacheQueueProgress
+	if r == nil || r.pool == nil {
+		return progress, nil
+	}
+	err := r.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*),
+			COUNT(*) FILTER (WHERE status = 'succeeded'),
+			COUNT(*) FILTER (WHERE status = 'failed'),
+			COUNT(*) FILTER (WHERE status = 'queued'),
+			COUNT(*) FILTER (WHERE status = 'running')
+		FROM metadata_image_cache_jobs
+	`).Scan(
+		&progress.Total,
+		&progress.Succeeded,
+		&progress.Failed,
+		&progress.Queued,
+		&progress.Running,
+	)
+	if err != nil {
+		return ImageCacheQueueProgress{}, fmt.Errorf("counting metadata image cache jobs: %w", err)
+	}
+	progress.Known = true
+	return progress, nil
 }
 
 func imageCacheRetryDelay(attempt int) time.Duration {

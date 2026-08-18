@@ -63,7 +63,7 @@ func (t *CacheMetadataImagesTask) Execute(ctx context.Context, progress taskmana
 		cacheMetadataImagesWorkers,
 		cacheMetadataImagesMaxRuntime,
 		func(update metadata.ImageCacheRunStats) {
-			progress.Report(0, formatCacheMetadataImagesProgress(update))
+			progress.Report(cacheMetadataImagesPercent(update.Queue), formatCacheMetadataImagesProgress(update))
 		},
 	)
 	if err != nil {
@@ -90,12 +90,42 @@ func (t *CacheMetadataImagesTask) Execute(ctx context.Context, progress taskmana
 
 func formatCacheMetadataImagesProgress(stats metadata.ImageCacheRunStats) string {
 	processed := stats.Succeeded + stats.Failed + stats.Skipped
-	return fmt.Sprintf(
-		"Processed %d images across %d batches (%d cached, %d failed, %d skipped)",
+	message := fmt.Sprintf(
+		"Processed %d images across %d batches (%d cached, %d failed attempts, %d skipped)",
 		processed,
 		stats.Batches,
 		stats.Succeeded,
 		stats.Failed,
 		stats.Skipped,
 	)
+	if stats.Queue.Known && stats.Queue.Total > 0 {
+		failureLabel := "terminal failures"
+		if stats.Queue.Failed == 1 {
+			failureLabel = "terminal failure"
+		}
+		message += fmt.Sprintf(
+			" · Overall %d/%d complete (%d %s)",
+			stats.Queue.Completed(),
+			stats.Queue.Total,
+			stats.Queue.Failed,
+			failureLabel,
+		)
+	}
+	return message
+}
+
+func cacheMetadataImagesPercent(queue metadata.ImageCacheQueueProgress) float64 {
+	if !queue.Known || queue.Total <= 0 {
+		return 0
+	}
+	percent := float64(queue.Completed()) * 100 / float64(queue.Total)
+	// Execute reports the authoritative 100% after the runner returns. Keep a
+	// still-running task below 100% while it may be performing discovery.
+	if percent >= 100 {
+		return 99.9
+	}
+	if percent < 0 {
+		return 0
+	}
+	return percent
 }

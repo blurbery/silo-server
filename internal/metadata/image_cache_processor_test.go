@@ -60,6 +60,11 @@ type loopingImageCacheJobs struct {
 	succeededIDs   []int64
 	enqueueCalls   int
 	claimCalls     int
+	queueProgress  ImageCacheQueueProgress
+}
+
+func (f *loopingImageCacheJobs) GetQueueProgress(context.Context) (ImageCacheQueueProgress, error) {
+	return f.queueProgress, nil
 }
 
 func (f *loopingImageCacheJobs) EnqueueExistingProviderArtwork(context.Context, int) (int, error) {
@@ -483,6 +488,9 @@ func TestImageCacheProcessorRunUntilIdleDrainsNewWorkAddedDuringRun(t *testing.T
 	// the queue empty and sweep again (enqueues 0 -> idle).
 	jobs := &loopingImageCacheJobs{
 		enqueueResults: []int{1, 0},
+		queueProgress: ImageCacheQueueProgress{
+			Known: true, Total: 10, Succeeded: 7, Failed: 1, Queued: 2,
+		},
 		claimedResults: [][]*models.MetadataImageCacheJob{
 			{job1},
 			{},
@@ -526,6 +534,9 @@ func TestImageCacheProcessorRunUntilIdleDrainsNewWorkAddedDuringRun(t *testing.T
 	}
 	if len(progressUpdates) == 0 {
 		t.Fatal("RunUntilIdle() did not report progress")
+	}
+	if got := progressUpdates[0].Queue; got != jobs.queueProgress {
+		t.Fatalf("initial queue progress = %+v, want %+v", got, jobs.queueProgress)
 	}
 	if got := progressUpdates[len(progressUpdates)-1]; got != stats {
 		t.Fatalf("last progress update = %+v, want final stats %+v", got, stats)

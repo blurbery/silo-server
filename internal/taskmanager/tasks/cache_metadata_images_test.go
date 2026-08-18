@@ -61,6 +61,9 @@ func TestCacheMetadataImagesTaskReportsStats(t *testing.T) {
 			Claimed:   3,
 			Succeeded: 2,
 			Failed:    1,
+			Queue: metadata.ImageCacheQueueProgress{
+				Known: true, Total: 10, Succeeded: 6, Failed: 1, Queued: 2, Running: 1,
+			},
 		}},
 		stats: metadata.ImageCacheRunStats{
 			Batches:          3,
@@ -92,10 +95,29 @@ func TestCacheMetadataImagesTaskReportsStats(t *testing.T) {
 	if progress.messages[0] != "Starting metadata image cache" || progress.percents[0] != 0 {
 		t.Fatalf("initial progress = %g %q", progress.percents[0], progress.messages[0])
 	}
-	if progress.messages[1] != "Processed 3 images across 2 batches (2 cached, 1 failed, 0 skipped)" || progress.percents[1] != 0 {
+	if progress.messages[1] != "Processed 3 images across 2 batches (2 cached, 1 failed attempts, 0 skipped) · Overall 7/10 complete (1 terminal failure)" || progress.percents[1] != 70 {
 		t.Fatalf("live progress = %g %q", progress.percents[1], progress.messages[1])
 	}
 	if progress.messages[2] != "Batches 3, enqueued 5 existing, claimed 4, cached 3, failed 1, skipped 0, uploaded 7 variants, found 2 existing variants, deleted 0 old successes" || progress.percents[2] != 100 {
 		t.Fatalf("final progress = %g %q", progress.percents[2], progress.messages[2])
+	}
+}
+
+func TestCacheMetadataImagesPercent(t *testing.T) {
+	tests := []struct {
+		name  string
+		queue metadata.ImageCacheQueueProgress
+		want  float64
+	}{
+		{name: "unknown", queue: metadata.ImageCacheQueueProgress{}, want: 0},
+		{name: "partial", queue: metadata.ImageCacheQueueProgress{Known: true, Total: 8, Succeeded: 5, Failed: 1}, want: 75},
+		{name: "running completion is capped", queue: metadata.ImageCacheQueueProgress{Known: true, Total: 8, Succeeded: 7, Failed: 1}, want: 99.9},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cacheMetadataImagesPercent(tt.queue); got != tt.want {
+				t.Fatalf("cacheMetadataImagesPercent() = %g, want %g", got, tt.want)
+			}
+		})
 	}
 }

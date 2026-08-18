@@ -17,6 +17,7 @@ import {
   compareActivityMethods,
 } from "@/pages/adminActivityPresentation";
 import { cn } from "@/lib/utils";
+import { clampTaskProgress, formatTaskProgress } from "@/lib/taskProgress";
 
 const CONNECTION_PROBLEM_INDICATOR_DELAY_MS = 4_000;
 const MAX_ACTIVITY_SCAN_ROWS = 25;
@@ -339,7 +340,7 @@ function TaskRow({ task }: { task: TaskInfo }) {
         <span className="truncate text-[12px] font-medium">{task.name}</span>
         {hasDeterminateProgress ? (
           <span className="text-muted-foreground ml-2 shrink-0 text-[10px] font-semibold tabular-nums">
-            {Math.min(100, Math.max(1, Math.round(task.progress)))}%
+            {formatTaskProgress(task.progress)}
           </span>
         ) : (
           <span className="text-primary ml-2 flex shrink-0 items-center gap-1 text-[10px] font-semibold">
@@ -352,7 +353,7 @@ function TaskRow({ task }: { task: TaskInfo }) {
         <div className="bg-muted h-1.5 overflow-hidden rounded-full">
           <div
             className="bg-primary h-full rounded-full transition-[width] duration-300 ease-out"
-            style={{ width: `${Math.min(100, task.progress)}%` }}
+            style={{ width: `${clampTaskProgress(task.progress)}%` }}
           />
         </div>
       )}
