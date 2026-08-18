@@ -9,7 +9,7 @@
 package settingskeys
 
 // Revision is the manifest revision these bindings were generated from.
-const Revision = 6
+const Revision = 7
 
 // Setting keys, one constant per definition.
 const (
@@ -41,6 +41,8 @@ const (
 	PlaybackAutoSkipIntro = "playback.auto_skip_intro"
 	// Auto-skip recaps
 	PlaybackAutoSkipRecap = "playback.auto_skip_recap"
+	// Skip intros
+	PlaybackIntroSkipMode = "playback.intro_skip_mode"
 	// Maximum bitrate
 	PlaybackMaxBitrateKbps = "playback.max_bitrate_kbps"
 	// Next up prompt
@@ -133,6 +135,7 @@ var Remote = []string{
 	PlaybackAutoSkipCredits,
 	PlaybackAutoSkipIntro,
 	PlaybackAutoSkipRecap,
+	PlaybackIntroSkipMode,
 	PlaybackMaxBitrateKbps,
 	PlaybackNextUpPromptSeconds,
 	PlaybackPreferredQuality,
@@ -180,4 +183,13 @@ var ClientLocal = []string{
 	PlayerPictureInPictureEnabled,
 	PlayerResumeRewindSeconds,
 	SubtitleMatchesDevice,
+}
+
+// Deprecated lists keys another definition has superseded. They still resolve
+// and still have to be readable — shipped clients write them — but a client
+// must not offer one as a second control beside its replacement: the server
+// mirrors the pair at write time, so editing either would silently rewrite the
+// other.
+var Deprecated = []string{
+	PlaybackAutoSkipIntro,
 }

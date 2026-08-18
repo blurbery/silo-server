@@ -131,6 +131,62 @@ Content-Type: application/json
 Stored-value responses include `client_family` when the source or explicit row
 is at `profile_client`.
 
+### Superseded keys and the write mirror
+
+A definition may be marked `deprecated: true` in the manifest. It is still
+served, still readable and still writable — old clients depend on it — but new
+clients should read and write its replacement. The generated bindings carry the
+flag (`deprecated` on the TypeScript `SettingDefinition`, a `Deprecated` /
+`DEPRECATED` list in the Go, Kotlin and Swift bindings), so a client can hide a
+superseded control without a hand-kept list of key names. A client that offers
+both spellings as separate controls gives one preference two homes, and the
+mirror below means editing either silently rewrites the other.
+
+Revision 7 deprecates `playback.auto_skip_intro` in favor of
+`playback.intro_skip_mode`, whose three members say what the boolean could not:
+`never` (no prompt at all), `ask` (offer a Skip Intro button, what the boolean's
+`false` always did) and `always` (skip it and offer an undo). The default is
+`ask`, so an untouched profile behaves identically across the cutover.
+
+For one release the server keeps the pair in step, so a preference set on any
+client shows up correctly on the others:
+
+| Request                                | Server also does                                              |
+| -------------------------------------- | ------------------------------------------------------------- |
+| `PUT` of `playback.auto_skip_intro`    | writes `playback.intro_skip_mode` at the same identity: `true → "always"`, `false → "ask"` |
+| `PUT` of `playback.intro_skip_mode`    | writes `playback.auto_skip_intro` at the same identity: `"always" → true`, otherwise `false` |
+| `DELETE` of either                     | removes the other at the same identity                         |
+| `PUT`/`POST /profiles` with `auto_skip_intro` | writes both keys at `profile` scope                     |
+| `PUT`/`DELETE` of the legacy `/settings/{key}` or `/settings/device/{key}` for `playback.auto_skip_intro` | writes or clears both keys at the scope that route owns |
+| `PUT` or `DELETE` of either key at `profile` scope | sets `user_profiles.auto_skip_intro` to what the pair now resolves to — the written value, or the contract default once the row is cleared — so the profile DTO stays truthful for clients that read it |
+
+Everything in that table commits as one transaction — both rows, the legacy
+profile column, and the idempotency receipt when the request carries an
+`X-Silo-Mutation-Id` — on the keyed and unkeyed paths alike, and on `DELETE` as
+well as `PUT`. A request that fails changes nothing, and a replayed mutation id
+re-serves its receipt without writing anything again. The response is always the
+stored value of the key the request addressed; the companion row is not
+reported. Only the addressed key raises a `user_settings.changed` event and an
+audit record.
+
+`DELETE` still answers `404 not_found` when the key it names has no value at
+that scope. If a companion is nonetheless found there — a state only a partial
+failure predating the transactional path could produce — it is cleared anyway,
+because a stray companion goes on resolving as an explicit choice that no retry
+can reach.
+
+Surfaces that count stored overrides — the device list's `changed_count`, the
+admin device summaries' `override_count` — count the pair once. It is one
+preference held in two spellings, so counting rows would both overstate a
+device's customization and drop by one, fleet-wide, on the day the mirror is
+retired.
+
+The boolean direction is lossy on purpose: a client that only understands the
+switch sees `never` as `false` and shows the button. Such a client that then
+flips the switch overwrites `never`, which is accepted for the overlap window
+and is why the mirror is temporary. Once every client reads the enum, a
+follow-up removes the mirror. Design: `docs/design/2026-08-16-intro-skip-mode.md`.
+
 ### Atomic navigation shortcuts
 
 `nav.shortcuts` is a profile-wide catalog shared by TV, mobile, desktop, and
