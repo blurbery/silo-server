@@ -12,25 +12,31 @@ import (
 
 type fakeMetadataImageCacheRunner struct {
 	stats       metadata.ImageCacheRunStats
+	updates     []metadata.ImageCacheRunStats
 	err         error
 	claimLimit  int
 	concurrency int
 	maxRuntime  time.Duration
 }
 
-func (f *fakeMetadataImageCacheRunner) RunUntilIdle(_ context.Context, _ string, claimLimit int, concurrency int, maxRuntime time.Duration) (metadata.ImageCacheRunStats, error) {
+func (f *fakeMetadataImageCacheRunner) RunUntilIdle(_ context.Context, _ string, claimLimit int, concurrency int, maxRuntime time.Duration, reportProgress metadata.ImageCacheRunProgressReporter) (metadata.ImageCacheRunStats, error) {
 	f.claimLimit = claimLimit
 	f.concurrency = concurrency
 	f.maxRuntime = maxRuntime
+	for _, update := range f.updates {
+		reportProgress(update)
+	}
 	return f.stats, f.err
 }
 
 type recordingProgress struct {
-	message string
+	percents []float64
+	messages []string
 }
 
-func (r *recordingProgress) Report(_ float64, message string) {
-	r.message = message
+func (r *recordingProgress) Report(percent float64, message string) {
+	r.percents = append(r.percents, percent)
+	r.messages = append(r.messages, message)
 }
 
 func (r *recordingProgress) SetResultData(json.RawMessage) {}
@@ -50,6 +56,12 @@ func TestCacheMetadataImagesTaskProperties(t *testing.T) {
 
 func TestCacheMetadataImagesTaskReportsStats(t *testing.T) {
 	runner := &fakeMetadataImageCacheRunner{
+		updates: []metadata.ImageCacheRunStats{{
+			Batches:   2,
+			Claimed:   3,
+			Succeeded: 2,
+			Failed:    1,
+		}},
 		stats: metadata.ImageCacheRunStats{
 			Batches:          3,
 			EnqueuedExisting: 5,
@@ -74,7 +86,16 @@ func TestCacheMetadataImagesTaskReportsStats(t *testing.T) {
 	if runner.maxRuntime != 10*time.Minute {
 		t.Fatalf("maxRuntime = %s, want 10m", runner.maxRuntime)
 	}
-	if progress.message != "Batches 3, enqueued 5 existing, claimed 4, cached 3, failed 1, skipped 0, uploaded 7 variants, found 2 existing variants, deleted 0 old successes" {
-		t.Fatalf("progress message = %q", progress.message)
+	if len(progress.messages) != 3 {
+		t.Fatalf("progress reports = %d, want 3", len(progress.messages))
+	}
+	if progress.messages[0] != "Starting metadata image cache" || progress.percents[0] != 0 {
+		t.Fatalf("initial progress = %g %q", progress.percents[0], progress.messages[0])
+	}
+	if progress.messages[1] != "Processed 3 images across 2 batches (2 cached, 1 failed, 0 skipped)" || progress.percents[1] != 0 {
+		t.Fatalf("live progress = %g %q", progress.percents[1], progress.messages[1])
+	}
+	if progress.messages[2] != "Batches 3, enqueued 5 existing, claimed 4, cached 3, failed 1, skipped 0, uploaded 7 variants, found 2 existing variants, deleted 0 old successes" || progress.percents[2] != 100 {
+		t.Fatalf("final progress = %g %q", progress.percents[2], progress.messages[2])
 	}
 }

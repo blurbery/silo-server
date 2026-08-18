@@ -194,6 +194,11 @@ type ImageCacheRunStats struct {
 	RuntimeLimited   bool
 }
 
+// ImageCacheRunProgressReporter receives cumulative stats after each queue or
+// discovery batch. Callers can surface useful live activity without pretending
+// the open-ended cache queue has a determinate completion percentage.
+type ImageCacheRunProgressReporter func(ImageCacheRunStats)
+
 func (s *ImageCacheRunStats) add(other ImageCacheRunStats) {
 	s.EnqueuedExisting += other.EnqueuedExisting
 	s.Claimed += other.Claimed
@@ -284,7 +289,7 @@ loop:
 	return stats, nil
 }
 
-func (p *ImageCacheProcessor) RunUntilIdle(ctx context.Context, workerID string, claimLimit int, concurrency int, maxRuntime time.Duration) (ImageCacheRunStats, error) {
+func (p *ImageCacheProcessor) RunUntilIdle(ctx context.Context, workerID string, claimLimit int, concurrency int, maxRuntime time.Duration, reportProgress ImageCacheRunProgressReporter) (ImageCacheRunStats, error) {
 	var total ImageCacheRunStats
 	if p == nil || p.jobs == nil || p.cacher == nil || !p.enabled.Load() {
 		return total, nil
@@ -299,6 +304,9 @@ func (p *ImageCacheProcessor) RunUntilIdle(ctx context.Context, workerID string,
 		stats, err := p.RunOnce(ctx, workerID, claimLimit, concurrency)
 		total.add(stats)
 		total.Batches = 1
+		if reportProgress != nil {
+			reportProgress(total)
+		}
 		return total, err
 	}
 
@@ -319,6 +327,9 @@ func (p *ImageCacheProcessor) RunUntilIdle(ctx context.Context, workerID string,
 		stats, err := p.RunOnce(ctx, workerID, claimLimit, concurrency)
 		total.Batches++
 		total.add(stats)
+		if reportProgress != nil {
+			reportProgress(total)
+		}
 		if err != nil {
 			return total, err
 		}
@@ -334,6 +345,9 @@ func (p *ImageCacheProcessor) RunUntilIdle(ctx context.Context, workerID string,
 			return total, err
 		}
 		total.EnqueuedExisting += enqueued
+		if reportProgress != nil {
+			reportProgress(total)
+		}
 		if enqueued == 0 {
 			// Catalog fully swept; throttle the next sweep.
 			p.markDiscovered()

@@ -18,7 +18,7 @@ const (
 )
 
 type MetadataImageCacheRunner interface {
-	RunUntilIdle(ctx context.Context, workerID string, claimLimit int, concurrency int, maxRuntime time.Duration) (metadata.ImageCacheRunStats, error)
+	RunUntilIdle(ctx context.Context, workerID string, claimLimit int, concurrency int, maxRuntime time.Duration, reportProgress metadata.ImageCacheRunProgressReporter) (metadata.ImageCacheRunStats, error)
 }
 
 type CacheMetadataImagesTask struct {
@@ -55,7 +55,17 @@ func (t *CacheMetadataImagesTask) Execute(ctx context.Context, progress taskmana
 	if hostname == "" {
 		hostname = "silo"
 	}
-	stats, err := t.runner.RunUntilIdle(ctx, hostname, cacheMetadataImagesBatchSize, cacheMetadataImagesWorkers, cacheMetadataImagesMaxRuntime)
+	progress.Report(0, "Starting metadata image cache")
+	stats, err := t.runner.RunUntilIdle(
+		ctx,
+		hostname,
+		cacheMetadataImagesBatchSize,
+		cacheMetadataImagesWorkers,
+		cacheMetadataImagesMaxRuntime,
+		func(update metadata.ImageCacheRunStats) {
+			progress.Report(0, formatCacheMetadataImagesProgress(update))
+		},
+	)
 	if err != nil {
 		return fmt.Errorf("caching metadata images: %w", err)
 	}
@@ -76,4 +86,16 @@ func (t *CacheMetadataImagesTask) Execute(ctx context.Context, progress taskmana
 	}
 	progress.Report(100, message)
 	return nil
+}
+
+func formatCacheMetadataImagesProgress(stats metadata.ImageCacheRunStats) string {
+	processed := stats.Succeeded + stats.Failed + stats.Skipped
+	return fmt.Sprintf(
+		"Processed %d images across %d batches (%d cached, %d failed, %d skipped)",
+		processed,
+		stats.Batches,
+		stats.Succeeded,
+		stats.Failed,
+		stats.Skipped,
+	)
 }

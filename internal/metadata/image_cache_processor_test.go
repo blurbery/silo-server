@@ -498,7 +498,17 @@ func TestImageCacheProcessorRunUntilIdleDrainsNewWorkAddedDuringRun(t *testing.T
 	episodes := &fakeEpisodeStillUpdater{updated: true}
 
 	processor := NewImageCacheProcessor(jobs, cacher, resolver, nil, episodes)
-	stats, err := processor.RunUntilIdle(context.Background(), "test-worker", 1000, 2, time.Minute)
+	var progressUpdates []ImageCacheRunStats
+	stats, err := processor.RunUntilIdle(
+		context.Background(),
+		"test-worker",
+		1000,
+		2,
+		time.Minute,
+		func(update ImageCacheRunStats) {
+			progressUpdates = append(progressUpdates, update)
+		},
+	)
 	if err != nil {
 		t.Fatalf("RunUntilIdle() error = %v", err)
 	}
@@ -513,6 +523,12 @@ func TestImageCacheProcessorRunUntilIdleDrainsNewWorkAddedDuringRun(t *testing.T
 	}
 	if len(jobs.succeededIDs) != 2 || jobs.succeededIDs[0] != 10 || jobs.succeededIDs[1] != 11 {
 		t.Fatalf("succeededIDs = %#v, want [10 11]", jobs.succeededIDs)
+	}
+	if len(progressUpdates) == 0 {
+		t.Fatal("RunUntilIdle() did not report progress")
+	}
+	if got := progressUpdates[len(progressUpdates)-1]; got != stats {
+		t.Fatalf("last progress update = %+v, want final stats %+v", got, stats)
 	}
 }
 
