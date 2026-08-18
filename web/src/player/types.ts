@@ -6,6 +6,9 @@
 /** Subtitle display mode. */
 export type SubtitleMode = "off" | "auto" | "always";
 
+/** What the player does when it enters a detected intro. */
+export type IntroSkipMode = "never" | "ask" | "always";
+
 /** A file version available for playback. */
 export interface PlayerFileVersion {
   file_id: number;
@@ -249,7 +252,8 @@ export interface WatchPageProps {
   showForcedSubtitles?: boolean;
   profileLanguage?: string | null;
   intro: PlayerTimeRange | null;
-  autoSkipIntro?: boolean;
+  /** null while the connected server's answer is still unknown; see VideoPlayer. */
+  introSkipMode?: IntroSkipMode | null;
   credits: PlayerTimeRange | null;
   recap?: PlayerTimeRange | null;
   preview?: PlayerTimeRange | null;

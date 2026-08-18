@@ -132,7 +132,7 @@ const navigationShortcutAtomicUpdateMessage = "Use PUT /settings/values/nav.shor
 var (
 	errMutationIDConflict           = errors.New("setting mutation id conflict")
 	errMutationReplayRollback       = errors.New("setting mutation replay requires rollback")
-	errMutationTransactionRequired  = errors.New("settings store does not support atomic idempotent mutations")
+	errMutationTransactionRequired  = errors.New("settings store does not support atomic canonical mutations")
 	errShortcutMutationContention   = errors.New("navigation shortcuts changed too quickly")
 	errShortcutMutationInvalidValue = errors.New("invalid navigation shortcut value")
 )
@@ -514,7 +514,7 @@ func (h *SettingValuesHandler) HandleSetNavigationShortcut(w http.ResponseWriter
 			r.Context(), shortcutStore, def, identity, item, *body.Present)
 	} else {
 		var outcome idempotentSettingMutationOutcome
-		outcome, err = runIdempotentSettingMutation(
+		outcome, err = runSettingMutation(
 			r.Context(), store, mutationID, requestHash,
 			func(writer userstore.SettingMutationWriter) (*userstore.SettingValue, bool, error) {
 				return mutateNavigationShortcut(r.Context(), writer, def, identity, item, *body.Present)
@@ -702,7 +702,18 @@ func mutateNavigationShortcut(
 	return nil, false, errShortcutMutationContention
 }
 
-func runIdempotentSettingMutation(
+// runSettingMutation applies one canonical mutation inside a store
+// transaction, and records its idempotency receipt in that same transaction
+// when the caller supplied a mutation id.
+//
+// Every canonical write goes through here, keyed or not. A mutation is rarely
+// one row any more — a mirrored pair writes two, and a profile-scope intro-skip
+// choice also moves the legacy column GET /profiles serves — and a caller
+// without an idempotency key has exactly the same claim to those landing
+// together as one with. Worse, it has less recourse: a keyed write that half
+// fails is repaired by the retry, while two unkeyed writes to one preference
+// can interleave and leave the pair permanently disagreeing.
+func runSettingMutation(
 	ctx context.Context,
 	store userstore.UserStore,
 	mutationID string,
@@ -717,6 +728,16 @@ func runIdempotentSettingMutation(
 	var outcome idempotentSettingMutationOutcome
 	err := transactioner.WithSettingMutationTransaction(ctx, mutationID,
 		func(writer userstore.SettingMutationWriter) error {
+			if mutationID == "" {
+				stored, changed, err := mutate(writer)
+				if err != nil {
+					return err
+				}
+				outcome.stored = stored
+				outcome.changed = changed
+				return nil
+			}
+
 			prior, err := writer.GetSettingMutation(ctx, mutationID)
 			if err != nil {
 				return fmt.Errorf("checking setting mutation: %w", err)
@@ -813,37 +834,49 @@ func (h *SettingValuesHandler) setValueAt(
 		return
 	}
 
+	// A deprecated key and its replacement are one preference stored twice
+	// while old clients are in the field, so a write to either lands on both.
+	// The value is already normalized, so a conversion failure here is a defect
+	// in the pairing rather than bad input — refuse the request rather than
+	// store half of it.
+	mirror, hasMirror, err := settingscontract.MirrorWrite(identity.Key, normalized)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "settings mirror could not convert a normalized value",
+			"component", "api", "key", identity.Key, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to store the setting")
+		return
+	}
+	mirrorIdentity := identity
+	mirrorIdentity.Key = mirror.Key
+
+	// GET /profiles still serves auto_skip_intro from the legacy column, so a
+	// profile-scope choice made through either half of the pair has to reach it
+	// or the profile DTO keeps reporting the preference the household abandoned.
+	columnValue := legacyIntroSkipColumnWrite(identity.Key, normalized, mirror, hasMirror)
+
 	// Idempotency: a client that retries a write after a dropped response must
 	// not double-apply it, and must be able to tell "already done" from "that
-	// id means something else".
+	// id means something else". The mutation itself is transactional either way
+	// — see runSettingMutation.
 	mutationID := strings.TrimSpace(r.Header.Get(mutationIDHeader))
-	var stored *userstore.SettingValue
-	var idempotentResult json.RawMessage
-	if mutationID == "" {
-		stored, err = store.UpsertSettingValue(r.Context(), identity, normalized)
-	} else {
-		outcome, mutationErr := runIdempotentSettingMutation(
-			r.Context(), store, mutationID, hashMutationRequest(identity, normalized),
-			func(writer userstore.SettingMutationWriter) (*userstore.SettingValue, bool, error) {
-				value, err := writer.UpsertSettingValue(r.Context(), identity, normalized)
-				return value, true, err
-			},
-		)
-		if errors.Is(mutationErr, errMutationIDConflict) {
-			writeError(w, http.StatusConflict, "mutation_id_conflict",
-				"This mutation id was used for a different write")
-			return
-		}
-		if mutationErr != nil {
-			err = mutationErr
-		} else if outcome.replay {
-			w.Header().Set("X-Silo-Idempotent-Replay", "true")
-			writeRawJSON(w, http.StatusOK, outcome.result)
-			return
-		} else {
-			stored = outcome.stored
-			idempotentResult = outcome.result
-		}
+	outcome, err := runSettingMutation(
+		r.Context(), store, mutationID, hashMutationRequest(identity, normalized),
+		func(writer userstore.SettingMutationWriter) (*userstore.SettingValue, bool, error) {
+			value, err := upsertMirroredPair(
+				r.Context(), writer, identity, normalized, mirrorIdentity, mirror, hasMirror)
+			if err != nil {
+				return nil, false, err
+			}
+			if err := writeLegacyIntroSkipColumn(r.Context(), writer, identity, columnValue); err != nil {
+				return nil, false, err
+			}
+			return value, true, nil
+		},
+	)
+	if errors.Is(err, errMutationIDConflict) {
+		writeError(w, http.StatusConflict, "mutation_id_conflict",
+			"This mutation id was used for a different write")
+		return
 	}
 	if err != nil {
 		if errors.Is(err, userstore.ErrInvalidSettingIdentity) ||
@@ -851,9 +884,18 @@ func (h *SettingValuesHandler) setValueAt(
 			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
 		}
+		slog.ErrorContext(r.Context(), "failed to store a canonical setting",
+			"component", "api", "key", identity.Key, "scope", string(identity.Scope), "error", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to store the setting")
 		return
 	}
+	if outcome.replay {
+		w.Header().Set("X-Silo-Idempotent-Replay", "true")
+		writeRawJSON(w, http.StatusOK, outcome.result)
+		return
+	}
+	stored := outcome.stored
+	idempotentResult := outcome.result
 
 	response := settingValueToResponse(*stored)
 	acting := actingProfileID(r.Context())
@@ -889,6 +931,140 @@ func (h *SettingValuesHandler) setValueAt(
 	} else {
 		writeJSON(w, http.StatusOK, response)
 	}
+}
+
+// upsertMirroredPair writes the addressed row and, when the key has one, its
+// companion, returning the row the caller addressed.
+//
+// The two rows are written in key order rather than caller order, and that is
+// the whole point of the function. Two requests naming opposite halves of the
+// pair would otherwise take each other's row locks in opposite orders and
+// deadlock; in one order the second transaction simply waits for the first and
+// then overwrites both rows with its own answer, which is the last-write-wins
+// the contract promises rather than a pair left holding one value from each.
+func upsertMirroredPair(
+	ctx context.Context,
+	writer userstore.SettingMutationWriter,
+	identity userstore.SettingIdentity,
+	value json.RawMessage,
+	mirrorIdentity userstore.SettingIdentity,
+	mirror settingscontract.MirroredWrite,
+	hasMirror bool,
+) (*userstore.SettingValue, error) {
+	if !hasMirror {
+		return writer.UpsertSettingValue(ctx, identity, value)
+	}
+
+	first, firstValue := identity, value
+	second, secondValue := mirrorIdentity, mirror.Value
+	if second.Key < first.Key {
+		first, firstValue, second, secondValue = second, secondValue, first, firstValue
+	}
+	firstStored, err := writer.UpsertSettingValue(ctx, first, firstValue)
+	if err != nil {
+		return nil, err
+	}
+	secondStored, err := writer.UpsertSettingValue(ctx, second, secondValue)
+	if err != nil {
+		return nil, err
+	}
+	if first.Key == identity.Key {
+		return firstStored, nil
+	}
+	return secondStored, nil
+}
+
+// legacyIntroSkipColumnWrite is the playback.auto_skip_intro value a canonical
+// write implies, or nil when the write is not part of the intro-skip pair.
+//
+// Either half answers, because the mirror has already made them one preference:
+// the boolean is its own answer, and the enum's is the companion just computed
+// for it. Both have to answer, or the column would be movable in one direction
+// only — an enum write could set it and the boolean write that followed could
+// not correct it.
+func legacyIntroSkipColumnWrite(
+	key string,
+	normalized json.RawMessage,
+	mirror settingscontract.MirroredWrite,
+	hasMirror bool,
+) json.RawMessage {
+	if !hasMirror {
+		return nil
+	}
+	switch key {
+	case settingskeys.PlaybackAutoSkipIntro:
+		return normalized
+	case settingskeys.PlaybackIntroSkipMode:
+		return mirror.Value
+	default:
+		return nil
+	}
+}
+
+// legacyIntroSkipColumnCleared is the playback.auto_skip_intro value a cleared
+// profile-scope row leaves behind, or nil when the cleared key is not part of
+// the intro-skip pair.
+//
+// Clearing the profile-scope row is how a household says "inherit again", so
+// what the column must now hold is what the key resolves to with no explicit
+// value: the contract default. It is read from the manifest rather than spelled
+// here so a changed default cannot leave the column behind.
+func (h *SettingValuesHandler) legacyIntroSkipColumnCleared(key string) json.RawMessage {
+	switch key {
+	case settingskeys.PlaybackAutoSkipIntro, settingskeys.PlaybackIntroSkipMode:
+	default:
+		return nil
+	}
+	def, ok := h.contract.Lookup(settingskeys.PlaybackAutoSkipIntro)
+	if !ok || len(def.DefaultValue) == 0 {
+		return nil
+	}
+	return def.DefaultValue
+}
+
+// writeLegacyIntroSkipColumn writes the intro-skip preference through to
+// user_profiles.auto_skip_intro inside the caller's transaction. A nil value
+// means this request has nothing to say about the column.
+//
+// GET /profiles still serves auto_skip_intro from its column — the profile
+// DTO's shape is pinned by shipped clients — so the column is a third copy of
+// one preference and has to track every canonical profile-scope change to
+// either half of the pair, set or clear alike. A column that only the enum
+// write could move would end up contradicting the very row the caller stored:
+// an enum write sets it true, and a later boolean write, or a DELETE that goes
+// back to inheriting, leaves the DTO reporting a choice nobody holds.
+//
+// Device scope is none of its business: the column is profile-wide, and one
+// television's override is not the household's choice. The canonical write path
+// touches no other legacy preference column — the cutover direction is that the
+// profile DTO stops reading them, which it already has for the language and
+// subtitle fields — so this stays the narrow repair for the one field still
+// served from its column.
+//
+// It runs inside the mutation's transaction, not after it. Outside, a failure
+// here would leave the rows committed and the column stale — and on the
+// idempotent path unrepairable, because the receipt is already recorded and a
+// retry replays it instead of trying the column again.
+func writeLegacyIntroSkipColumn(
+	ctx context.Context,
+	writer userstore.SettingMutationWriter,
+	identity userstore.SettingIdentity,
+	value json.RawMessage,
+) error {
+	if value == nil || identity.Scope != settingscontract.ScopeProfile {
+		return nil
+	}
+
+	var enabled bool
+	if err := json.Unmarshal(value, &enabled); err != nil {
+		return fmt.Errorf("%s produced a non-boolean auto_skip_intro (%s): %w",
+			identity.Key, value, err)
+	}
+	if err := writer.UpdateProfile(ctx, identity.ProfileID,
+		userstore.UpdateProfileInput{AutoSkipIntro: &enabled}); err != nil {
+		return fmt.Errorf("updating auto_skip_intro on profile %s: %w", identity.ProfileID, err)
+	}
+	return nil
 }
 
 // registerWritingDevice refreshes the device registry from the request's
@@ -956,12 +1132,65 @@ func (h *SettingValuesHandler) deleteValueAt(
 	eventUserID int,
 	identity userstore.SettingIdentity,
 ) {
-	removed, err := store.DeleteSettingValue(r.Context(), identity)
+	// One transaction for the whole clear. Clearing one half of a mirrored pair
+	// clears both — a surviving companion row would go on resolving as an
+	// explicit choice at a scope the caller just said it wanted to inherit at —
+	// and a profile-scope clear also returns the legacy column to the contract
+	// default, so GET /profiles stops serving the value this request cleared.
+	// Committing those separately is what leaves a client retrying against a 404
+	// while the companion it could not see keeps resolving.
+	transactioner, ok := store.(userstore.SettingMutationTransactioner)
+	if !ok {
+		slog.ErrorContext(r.Context(), "settings store cannot clear a value atomically",
+			"component", "api", "key", identity.Key)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to clear the setting")
+		return
+	}
+	mirrorKey, hasMirror := settingscontract.MirrorKey(identity.Key)
+	clearedColumn := h.legacyIntroSkipColumnCleared(identity.Key)
+
+	var removed, mirrorRemoved bool
+	err := transactioner.WithSettingMutationTransaction(r.Context(), "",
+		func(writer userstore.SettingMutationWriter) error {
+			var err error
+			if removed, err = writer.DeleteSettingValue(r.Context(), identity); err != nil {
+				return err
+			}
+			if hasMirror {
+				mirrorIdentity := identity
+				mirrorIdentity.Key = mirrorKey
+				// Cleared even when the addressed row was already absent. That
+				// state is only reachable through a partial failure from before
+				// this path was transactional, and leaving the survivor behind
+				// would make it permanent: every retry answers 404 without ever
+				// looking at the row that is still resolving.
+				if mirrorRemoved, err = writer.DeleteSettingValue(r.Context(), mirrorIdentity); err != nil {
+					return err
+				}
+			}
+			if !removed && !mirrorRemoved {
+				return nil // nothing was stored here, so nothing to reconcile
+			}
+			return writeLegacyIntroSkipColumn(r.Context(), writer, identity, clearedColumn)
+		})
 	if err != nil {
+		slog.ErrorContext(r.Context(), "failed to clear a canonical setting",
+			"component", "api", "key", identity.Key, "scope", string(identity.Scope), "error", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to clear the setting")
 		return
 	}
 	if !removed {
+		// 404 stays the answer for "no value is set at this scope", which is
+		// what the caller addressed. A stray companion that was swept up on the
+		// way is a repair, not a result, so it is logged and published rather
+		// than turned into a success the caller did not ask for.
+		if mirrorRemoved {
+			slog.WarnContext(r.Context(), "cleared a mirrored setting whose addressed half was already gone",
+				"component", "api", "key", identity.Key, "mirror_key", mirrorKey,
+				"scope", string(identity.Scope))
+			publishUserSettingsEvent(r.Context(), h.EventsHub,
+				eventUserID, identity.ProfileID, mirrorKey, string(identity.Scope))
+		}
 		writeError(w, http.StatusNotFound, "not_found", "No value is set at this scope")
 		return
 	}

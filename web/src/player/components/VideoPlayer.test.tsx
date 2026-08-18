@@ -344,6 +344,102 @@ describe("VideoPlayer plan failure recovery", () => {
   });
 });
 
+describe("VideoPlayer intro skip prompt", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  async function enterIntro(mode: "never" | "ask" | "always") {
+    const rendered = renderPlayer({
+      intro: { start: 10, end: 20 },
+      introSkipMode: mode,
+    });
+    const video = rendered.container.querySelector("video");
+    if (!video) throw new Error("expected video element");
+
+    video.currentTime = 12;
+    fireEvent.timeUpdate(video);
+    await act(async () => Promise.resolve());
+    return rendered;
+  }
+
+  it("renders the ask pill and consumes Escape", async () => {
+    await enterIntro("ask");
+    expect(await screen.findByRole("button", { name: "Skip Intro" })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Skip Intro" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("renders the undo action after an automatic skip", async () => {
+    await enterIntro("always");
+    const undo = await screen.findByRole("button", {
+      name: "Watch Intro",
+    });
+
+    fireEvent.click(undo);
+
+    await waitFor(() => expect(undo).not.toBeInTheDocument());
+  });
+
+  it("renders no intro action in never mode", async () => {
+    await enterIntro("never");
+
+    expect(screen.queryByRole("button", { name: /Intro/ })).not.toBeInTheDocument();
+  });
+
+  it("prompts for nothing while the intro mode is still unknown", async () => {
+    const rendered = renderPlayer({ intro: { start: 10, end: 20 }, introSkipMode: null });
+    const video = rendered.container.querySelector("video");
+    if (!video) throw new Error("expected video element");
+
+    video.currentTime = 12;
+    fireEvent.timeUpdate(video);
+    await act(async () => Promise.resolve());
+
+    expect(screen.queryByRole("button", { name: /Intro/ })).not.toBeInTheDocument();
+    // Nothing was skipped either: an unknown mode must not act like "always".
+    expect(video.currentTime).toBe(12);
+  });
+
+  // Space belongs to whatever control has focus. Consuming it at the document
+  // both skipped the intro and swallowed the press meant for Play/Pause.
+  it("leaves Select to the focused transport control", async () => {
+    const rendered = await enterIntro("ask");
+    const prompt = await screen.findByRole("button", { name: "Skip Intro" });
+
+    const transport = document.createElement("button");
+    transport.textContent = "Play";
+    rendered.container.firstElementChild?.appendChild(transport);
+    transport.focus();
+
+    const notPrevented = fireEvent.keyDown(transport, { key: " " });
+
+    expect(notPrevented).toBe(true);
+    expect(prompt).toBeInTheDocument();
+  });
+
+  it("acts on Select while the pill itself is focused", async () => {
+    await enterIntro("ask");
+    const prompt = await screen.findByRole("button", { name: "Skip Intro" });
+    prompt.focus();
+
+    fireEvent.keyDown(prompt, { key: " " });
+
+    await waitFor(() => expect(prompt).not.toBeInTheDocument());
+  });
+});
+
 describe("VideoPlayer native HLS timeline", () => {
   beforeEach(() => {
     realtimeOptions.current = null;
