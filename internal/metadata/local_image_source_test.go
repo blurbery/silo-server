@@ -91,6 +91,7 @@ func TestApplyBestImagesLocalCandidateAlwaysApplies(t *testing.T) {
 	item := &models.MediaItem{PosterPath: "tmdb/movies/550/poster/original.webp"}
 	applyBestImages(item, []RemoteImage{
 		{ProviderID: "nfo", URL: "file:///media/movies/Film/poster.jpg", Type: ImagePoster, Rating: 0},
+		{ProviderID: "tmdb", URL: "https://image.tmdb.org/text.jpg", Type: ImagePoster, Language: "en", Rating: 10},
 	}, MergeFillEmpty, "en")
 	if item.PosterPath != "file:///media/movies/Film/poster.jpg" {
 		t.Fatalf("PosterPath = %q, want local candidate to apply over existing art", item.PosterPath)
@@ -121,6 +122,94 @@ func TestApplyBestImagesRemoteSelectionUnchanged(t *testing.T) {
 	}, MergeFillEmpty, "en")
 	if empty.PosterPath != "https://image.tmdb.org/zero.jpg" {
 		t.Fatalf("PosterPath = %q, rating-0 remote must still fill empty art", empty.PosterPath)
+	}
+}
+
+func TestApplyBestImagesPrefersTextPostersByLanguage(t *testing.T) {
+	tests := []struct {
+		name          string
+		preferredLang string
+		images        []RemoteImage
+		wantPoster    string
+	}{
+		{
+			name:          "preferred language beats higher rated textless poster",
+			preferredLang: "en",
+			images: []RemoteImage{
+				{ProviderID: "tmdb", URL: "textless", Type: ImagePoster, Rating: 10},
+				{ProviderID: "tmdb", URL: "english", Type: ImagePoster, Language: "en", Rating: 7},
+			},
+			wantPoster: "english",
+		},
+		{
+			name:          "preferred language beats higher rated English poster",
+			preferredLang: "fr",
+			images: []RemoteImage{
+				{ProviderID: "tmdb", URL: "french", Type: ImagePoster, Language: "fr", Rating: 6},
+				{ProviderID: "tmdb", URL: "english", Type: ImagePoster, Language: "en", Rating: 9},
+			},
+			wantPoster: "french",
+		},
+		{
+			name:          "English beats higher rated other language when preferred is unavailable",
+			preferredLang: "fr",
+			images: []RemoteImage{
+				{ProviderID: "tmdb", URL: "english", Type: ImagePoster, Language: "en", Rating: 6},
+				{ProviderID: "tmdb", URL: "german", Type: ImagePoster, Language: "de", Rating: 9},
+			},
+			wantPoster: "english",
+		},
+		{
+			name:          "highest rated other language beats textless fallback",
+			preferredLang: "fr",
+			images: []RemoteImage{
+				{ProviderID: "tmdb", URL: "textless", Type: ImagePoster, Rating: 10},
+				{ProviderID: "tmdb", URL: "spanish", Type: ImagePoster, Language: "es", Rating: 6},
+				{ProviderID: "tmdb", URL: "german", Type: ImagePoster, Language: "de", Rating: 8},
+			},
+			wantPoster: "german",
+		},
+		{
+			name:          "textless remains the final fallback",
+			preferredLang: "en",
+			images: []RemoteImage{
+				{ProviderID: "tmdb", URL: "textless-low", Type: ImagePoster, Rating: 4},
+				{ProviderID: "tmdb", URL: "textless-high", Type: ImagePoster, Rating: 8},
+			},
+			wantPoster: "textless-high",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item := &models.MediaItem{}
+			applyBestImages(item, tt.images, MergeFillEmpty, tt.preferredLang)
+			if item.PosterPath != tt.wantPoster {
+				t.Fatalf("PosterPath = %q, want %q", item.PosterPath, tt.wantPoster)
+			}
+		})
+	}
+}
+
+func TestApplyBestImagesTextPreferenceOnlyAffectsPosters(t *testing.T) {
+	item := &models.MediaItem{}
+	applyBestImages(item, []RemoteImage{
+		{ProviderID: "tmdb", URL: "poster-textless", Type: ImagePoster, Rating: 10},
+		{ProviderID: "tmdb", URL: "poster-english", Type: ImagePoster, Language: "en", Rating: 7},
+		{ProviderID: "tmdb", URL: "backdrop-textless", Type: ImageBackdrop, Rating: 10},
+		{ProviderID: "tmdb", URL: "backdrop-english", Type: ImageBackdrop, Language: "en", Rating: 7},
+		{ProviderID: "tmdb", URL: "logo-textless", Type: ImageLogo, Rating: 10},
+		{ProviderID: "tmdb", URL: "logo-english", Type: ImageLogo, Language: "en", Rating: 7},
+	}, MergeFillEmpty, "en")
+
+	if item.PosterPath != "poster-english" {
+		t.Fatalf("PosterPath = %q, want text poster", item.PosterPath)
+	}
+	if item.BackdropPath != "backdrop-textless" {
+		t.Fatalf("BackdropPath = %q, want unchanged textless selection", item.BackdropPath)
+	}
+	if item.LogoPath != "logo-textless" {
+		t.Fatalf("LogoPath = %q, want unchanged textless selection", item.LogoPath)
 	}
 }
 
