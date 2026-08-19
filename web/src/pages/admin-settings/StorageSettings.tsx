@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { ConnectionCheckResponse } from "@/api/types";
 import { ConnectionCheckAction } from "@/components/admin/ConnectionCheckAction";
@@ -10,6 +10,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 
 const PUBLIC_S3_KEYS = [
   "s3.public_endpoint",
@@ -85,6 +86,67 @@ function KeyPrefixField({
   );
 }
 
+function S3CredentialField({
+  label,
+  value,
+  configured,
+  editing,
+  onChange,
+  onReplace,
+  onKeep,
+}: {
+  label: string;
+  value: string;
+  configured: boolean;
+  editing: boolean;
+  onChange: (value: string) => void;
+  onReplace: () => void;
+  onKeep: () => void;
+}) {
+  if (configured && !editing) {
+    return (
+      <div className="space-y-1 py-2">
+        <Label className="text-sm font-medium">{label}</Label>
+        <div className="flex max-w-md items-center justify-between gap-3 rounded-md border px-3 py-1.5">
+          <span className="text-muted-foreground text-sm">configured</span>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            aria-label={`Replace ${label}`}
+            onClick={onReplace}
+          >
+            Replace
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <SettingField
+        label={label}
+        type="password"
+        value={value}
+        onChange={onChange}
+        hint={configured ? "Enter a replacement value." : undefined}
+      />
+      {configured && (
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          aria-label={`Keep saved ${label}`}
+          onClick={onKeep}
+        >
+          Keep saved value
+        </Button>
+      )}
+    </div>
+  );
+}
+
 export default function StorageSettings() {
   const form = useSettingsForm({ keys: useMemo(() => KEYS, []) });
   const publicCheckConnection = useCheckAdminSettingsConnection();
@@ -93,37 +155,127 @@ export default function StorageSettings() {
     useState<ConnectionCheckResponse | null>(null);
   const [privateConnectionResult, setPrivateConnectionResult] =
     useState<ConnectionCheckResponse | null>(null);
+  const [editingSensitiveKeys, setEditingSensitiveKeys] = useState<Set<string>>(new Set());
+  const publicDraftVersion = useRef(0);
+  const privateDraftVersion = useRef(0);
+
+  function setPublicValue(key: (typeof PUBLIC_S3_KEYS)[number], value: string) {
+    publicDraftVersion.current += 1;
+    setPublicConnectionResult(null);
+    form.setValue(key, value);
+  }
+
+  function setPrivateValue(key: (typeof PRIVATE_S3_KEYS)[number], value: string) {
+    privateDraftVersion.current += 1;
+    setPrivateConnectionResult(null);
+    form.setValue(key, value);
+  }
+
+  function beginCredentialReplacement(key: string, kind: "public" | "private") {
+    if (kind === "public") {
+      publicDraftVersion.current += 1;
+      setPublicConnectionResult(null);
+    } else {
+      privateDraftVersion.current += 1;
+      setPrivateConnectionResult(null);
+    }
+    setEditingSensitiveKeys((current) => new Set(current).add(key));
+  }
+
+  function keepSavedCredential(key: string, kind: "public" | "private") {
+    form.resetValue(key);
+    if (kind === "public") {
+      publicDraftVersion.current += 1;
+      setPublicConnectionResult(null);
+    } else {
+      privateDraftVersion.current += 1;
+      setPrivateConnectionResult(null);
+    }
+    setEditingSensitiveKeys((current) => {
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
+  }
 
   async function handleCheckPublicConnection() {
+    const checkedVersion = publicDraftVersion.current;
     try {
-      setPublicConnectionResult(
-        await publicCheckConnection.mutateAsync({
-          kind: "s3_public",
-          body: form.buildConnectionCheckRequest([...PUBLIC_S3_KEYS]),
-        }),
-      );
-    } catch (error) {
-      setPublicConnectionResult({
-        success: false,
-        message: error instanceof Error ? error.message : "Connection check failed.",
+      const result = await publicCheckConnection.mutateAsync({
+        kind: "s3_public",
+        body: form.buildConnectionCheckRequest([...PUBLIC_S3_KEYS]),
       });
+      if (publicDraftVersion.current === checkedVersion) setPublicConnectionResult(result);
+    } catch (error) {
+      if (publicDraftVersion.current === checkedVersion) {
+        setPublicConnectionResult({
+          success: false,
+          message: error instanceof Error ? error.message : "Connection check failed.",
+        });
+      }
     }
   }
 
   async function handleCheckPrivateConnection() {
+    const checkedVersion = privateDraftVersion.current;
     try {
-      setPrivateConnectionResult(
-        await privateCheckConnection.mutateAsync({
-          kind: "s3_private",
-          body: form.buildConnectionCheckRequest([...PRIVATE_S3_KEYS]),
-        }),
-      );
+      const result = await privateCheckConnection.mutateAsync({
+        kind: "s3_private",
+        body: form.buildConnectionCheckRequest([...PRIVATE_S3_KEYS]),
+      });
+      if (privateDraftVersion.current === checkedVersion) setPrivateConnectionResult(result);
     } catch (error) {
+      if (privateDraftVersion.current === checkedVersion) {
+        setPrivateConnectionResult({
+          success: false,
+          message: error instanceof Error ? error.message : "Connection check failed.",
+        });
+      }
+    }
+  }
+
+  async function handleSave() {
+    const publicStorageDisabled =
+      form.getValue("s3.public_endpoint").trim() === "" &&
+      form.getValue("s3.public_bucket").trim() === "";
+    const privateStorageDisabled =
+      form.getValue("s3.private_endpoint").trim() === "" &&
+      form.getValue("s3.private_bucket").trim() === "";
+
+    if (
+      !publicStorageDisabled &&
+      PUBLIC_S3_KEYS.some((key) => form.isDirty(key)) &&
+      !publicConnectionResult?.success
+    ) {
+      setPublicConnectionResult({
+        success: false,
+        message: "Check the Public Assets connection before saving these changes.",
+      });
+      return;
+    }
+    if (
+      !privateStorageDisabled &&
+      PRIVATE_S3_KEYS.some((key) => form.isDirty(key)) &&
+      !privateConnectionResult?.success
+    ) {
       setPrivateConnectionResult({
         success: false,
-        message: error instanceof Error ? error.message : "Connection check failed.",
+        message: "Check the Private Internal connection before saving these changes.",
       });
+      return;
     }
+
+    await form.save();
+    setEditingSensitiveKeys(new Set());
+  }
+
+  function handleDiscard() {
+    form.discard();
+    publicDraftVersion.current += 1;
+    privateDraftVersion.current += 1;
+    setPublicConnectionResult(null);
+    setPrivateConnectionResult(null);
+    setEditingSensitiveKeys(new Set());
   }
 
   if (form.isLoading)
@@ -176,28 +328,28 @@ export default function StorageSettings() {
             <SettingField
               label="Endpoint"
               value={form.getValue("s3.public_endpoint")}
-              onChange={(v) => form.setValue("s3.public_endpoint", v)}
+              onChange={(v) => setPublicValue("s3.public_endpoint", v)}
             />
             <SettingField
               label="Region"
               value={form.getValue("s3.public_region")}
-              onChange={(v) => form.setValue("s3.public_region", v)}
+              onChange={(v) => setPublicValue("s3.public_region", v)}
             />
             <SettingField
               label="Path Style"
               type="toggle"
               value={form.getValue("s3.public_path_style")}
-              onChange={(v) => form.setValue("s3.public_path_style", v)}
+              onChange={(v) => setPublicValue("s3.public_path_style", v)}
             />
             <SettingField
               label="Bucket"
               value={form.getValue("s3.public_bucket")}
-              onChange={(v) => form.setValue("s3.public_bucket", v)}
+              onChange={(v) => setPublicValue("s3.public_bucket", v)}
             />
             <KeyPrefixField
               id="s3-public-key-prefix"
               value={form.getValue("s3.public_key_prefix")}
-              onChange={(v) => form.setValue("s3.public_key_prefix", v)}
+              onChange={(v) => setPublicValue("s3.public_key_prefix", v)}
             />
             {PUBLIC_S3_IDENTITY_KEYS.some((key) => form.isDirty(key)) && (
               <div className="my-3 flex items-start gap-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
@@ -213,19 +365,23 @@ export default function StorageSettings() {
                 </div>
               </div>
             )}
-            <SettingField
+            <S3CredentialField
               label="Access Key"
-              type="password"
               value={form.getValue("s3.public_access_key")}
-              onChange={(v) => form.setValue("s3.public_access_key", v)}
-              sensitiveConfigured={form.sensitiveConfigured.includes("s3.public_access_key")}
+              onChange={(v) => setPublicValue("s3.public_access_key", v)}
+              configured={form.sensitiveConfigured.includes("s3.public_access_key")}
+              editing={editingSensitiveKeys.has("s3.public_access_key")}
+              onReplace={() => beginCredentialReplacement("s3.public_access_key", "public")}
+              onKeep={() => keepSavedCredential("s3.public_access_key", "public")}
             />
-            <SettingField
+            <S3CredentialField
               label="Secret Key"
-              type="password"
               value={form.getValue("s3.public_secret_key")}
-              onChange={(v) => form.setValue("s3.public_secret_key", v)}
-              sensitiveConfigured={form.sensitiveConfigured.includes("s3.public_secret_key")}
+              onChange={(v) => setPublicValue("s3.public_secret_key", v)}
+              configured={form.sensitiveConfigured.includes("s3.public_secret_key")}
+              editing={editingSensitiveKeys.has("s3.public_secret_key")}
+              onReplace={() => beginCredentialReplacement("s3.public_secret_key", "public")}
+              onKeep={() => keepSavedCredential("s3.public_secret_key", "public")}
             />
 
             <ConnectionCheckAction
@@ -245,7 +401,7 @@ export default function StorageSettings() {
                 label="URL Auth Method"
                 type="select"
                 value={publicURLAuth}
-                onChange={(v) => form.setValue("s3.public_url_auth", v)}
+                onChange={(v) => setPublicValue("s3.public_url_auth", v)}
                 options={[
                   { value: "presigned", label: "S3 Presigned URLs (Recommended)" },
                   { value: "public", label: "Public (no auth)" },
@@ -256,7 +412,7 @@ export default function StorageSettings() {
                 <SettingField
                   label="Read Endpoint"
                   value={form.getValue("s3.public_read_endpoint")}
-                  onChange={(v) => form.setValue("s3.public_read_endpoint", v)}
+                  onChange={(v) => setPublicValue("s3.public_read_endpoint", v)}
                   hint="https://cdn.example.com"
                 />
               )}
@@ -266,7 +422,7 @@ export default function StorageSettings() {
                     label="Token Secret"
                     type="password"
                     value={form.getValue("s3.public_token_secret")}
-                    onChange={(v) => form.setValue("s3.public_token_secret", v)}
+                    onChange={(v) => setPublicValue("s3.public_token_secret", v)}
                     sensitiveConfigured={form.sensitiveConfigured.includes(
                       "s3.public_token_secret",
                     )}
@@ -274,14 +430,14 @@ export default function StorageSettings() {
                   <SettingField
                     label="Token Param"
                     value={form.getValue("s3.public_token_param") || "verify"}
-                    onChange={(v) => form.setValue("s3.public_token_param", v)}
+                    onChange={(v) => setPublicValue("s3.public_token_param", v)}
                     hint="verify"
                   />
                   <SettingField
                     label="Token TTL (seconds)"
                     type="number"
                     value={form.getValue("s3.public_token_ttl") || "10800"}
-                    onChange={(v) => form.setValue("s3.public_token_ttl", v)}
+                    onChange={(v) => setPublicValue("s3.public_token_ttl", v)}
                   />
                 </>
               )}
@@ -295,42 +451,46 @@ export default function StorageSettings() {
             <SettingField
               label="Endpoint"
               value={form.getValue("s3.private_endpoint")}
-              onChange={(v) => form.setValue("s3.private_endpoint", v)}
+              onChange={(v) => setPrivateValue("s3.private_endpoint", v)}
             />
             <SettingField
               label="Region"
               value={form.getValue("s3.private_region")}
-              onChange={(v) => form.setValue("s3.private_region", v)}
+              onChange={(v) => setPrivateValue("s3.private_region", v)}
             />
             <SettingField
               label="Path Style"
               type="toggle"
               value={form.getValue("s3.private_path_style")}
-              onChange={(v) => form.setValue("s3.private_path_style", v)}
+              onChange={(v) => setPrivateValue("s3.private_path_style", v)}
             />
             <SettingField
               label="Bucket"
               value={form.getValue("s3.private_bucket")}
-              onChange={(v) => form.setValue("s3.private_bucket", v)}
+              onChange={(v) => setPrivateValue("s3.private_bucket", v)}
             />
             <KeyPrefixField
               id="s3-private-key-prefix"
               value={form.getValue("s3.private_key_prefix")}
-              onChange={(v) => form.setValue("s3.private_key_prefix", v)}
+              onChange={(v) => setPrivateValue("s3.private_key_prefix", v)}
             />
-            <SettingField
+            <S3CredentialField
               label="Access Key"
-              type="password"
               value={form.getValue("s3.private_access_key")}
-              onChange={(v) => form.setValue("s3.private_access_key", v)}
-              sensitiveConfigured={form.sensitiveConfigured.includes("s3.private_access_key")}
+              onChange={(v) => setPrivateValue("s3.private_access_key", v)}
+              configured={form.sensitiveConfigured.includes("s3.private_access_key")}
+              editing={editingSensitiveKeys.has("s3.private_access_key")}
+              onReplace={() => beginCredentialReplacement("s3.private_access_key", "private")}
+              onKeep={() => keepSavedCredential("s3.private_access_key", "private")}
             />
-            <SettingField
+            <S3CredentialField
               label="Secret Key"
-              type="password"
               value={form.getValue("s3.private_secret_key")}
-              onChange={(v) => form.setValue("s3.private_secret_key", v)}
-              sensitiveConfigured={form.sensitiveConfigured.includes("s3.private_secret_key")}
+              onChange={(v) => setPrivateValue("s3.private_secret_key", v)}
+              configured={form.sensitiveConfigured.includes("s3.private_secret_key")}
+              editing={editingSensitiveKeys.has("s3.private_secret_key")}
+              onReplace={() => beginCredentialReplacement("s3.private_secret_key", "private")}
+              onKeep={() => keepSavedCredential("s3.private_secret_key", "private")}
             />
 
             <ConnectionCheckAction
@@ -392,8 +552,8 @@ export default function StorageSettings() {
 
       <SaveBar
         dirtyCount={form.dirtyCount}
-        onSave={form.save}
-        onDiscard={form.discard}
+        onSave={handleSave}
+        onDiscard={handleDiscard}
         isSaving={form.isSaving}
         restartRequired={form.restartRequired}
       />

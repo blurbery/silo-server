@@ -1,3 +1,5 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -72,5 +74,96 @@ describe("StorageSettings", () => {
 
     expect(markup).toContain("Storage location change");
     expect(markup).toContain("re-caches anything missing");
+  });
+
+  it("requires an explicit action before replacing a configured S3 credential", async () => {
+    const resetValue = vi.fn();
+    useCheckAdminSettingsConnectionMock.mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    });
+    useSettingsFormMock.mockReturnValue({
+      isLoading: false,
+      getValue: (key: string) => (key === "s3.public_url_auth" ? "presigned" : ""),
+      setValue: vi.fn(),
+      resetValue,
+      dirtyCount: 0,
+      save: vi.fn(),
+      discard: vi.fn(),
+      isSaving: false,
+      restartRequired: false,
+      sensitiveConfigured: ["s3.public_access_key", "s3.public_secret_key"],
+      buildConnectionCheckRequest: vi.fn(),
+      isDirty: () => false,
+    });
+
+    render(<StorageSettings />);
+
+    expect(screen.queryByLabelText("Access Key")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Replace Access Key" }));
+    expect(screen.getByLabelText("Access Key")).toHaveAttribute("type", "password");
+
+    await userEvent.click(screen.getByRole("button", { name: "Keep saved Access Key" }));
+    expect(resetValue).toHaveBeenCalledWith("s3.public_access_key");
+    expect(screen.queryByLabelText("Access Key")).not.toBeInTheDocument();
+  });
+
+  it("blocks a changed S3 save until the current draft passes a connection check", async () => {
+    const values: Record<string, string> = {
+      "s3.public_endpoint": "https://s3.example.test",
+      "s3.public_bucket": "bucket",
+      "s3.public_url_auth": "presigned",
+    };
+    const dirty = new Set<string>(["s3.public_bucket"]);
+    const save = vi.fn();
+    const check = vi.fn().mockResolvedValue({ success: true, message: "Connection verified" });
+    useCheckAdminSettingsConnectionMock.mockReturnValue({
+      isPending: false,
+      mutateAsync: check,
+    });
+    useSettingsFormMock.mockImplementation(() => ({
+      isLoading: false,
+      getValue: (key: string) => values[key] ?? "",
+      setValue: (key: string, value: string) => {
+        values[key] = value;
+        dirty.add(key);
+      },
+      resetValue: vi.fn(),
+      dirtyCount: dirty.size,
+      dirtyKeys: Array.from(dirty),
+      save,
+      discard: vi.fn(),
+      isSaving: false,
+      restartRequired: false,
+      sensitiveConfigured: [],
+      buildConnectionCheckRequest: vi.fn(() => ({ values, dirty_keys: Array.from(dirty) })),
+      isDirty: (key: string) => dirty.has(key),
+    }));
+
+    render(<StorageSettings />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    expect(save).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Check the Public Assets connection before saving these changes.",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Check Connection" }));
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("Connection verified"),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    expect(save).toHaveBeenCalledOnce();
+    save.mockClear();
+
+    fireEvent.change(screen.getByLabelText("Bucket"), { target: { value: "changed-bucket" } });
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    expect(save).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Check the Public Assets connection before saving these changes.",
+    );
   });
 });
