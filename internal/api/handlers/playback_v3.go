@@ -2211,7 +2211,7 @@ func streamCapabilityFromPlanURLV3(streamURL *url.URL) string {
 			continue
 		}
 		switch segments[index+1] {
-		case "direct", "remux", "transcode":
+		case string(playback.PlayDirect), string(playback.PlayRemux), string(playback.PlayTranscode):
 			return segments[index+2]
 		}
 	}

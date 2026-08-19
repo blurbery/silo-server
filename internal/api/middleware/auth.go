@@ -13,6 +13,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/activitylog"
 	"github.com/Silo-Server/silo-server/internal/auth"
 	"github.com/Silo-Server/silo-server/internal/models"
+	"github.com/Silo-Server/silo-server/internal/playback"
 	"github.com/Silo-Server/silo-server/internal/streamtoken"
 )
 
@@ -195,7 +196,7 @@ func validTransportStreamClaims(claims *streamtoken.Claims, sessionID string) bo
 		return false
 	}
 	switch claims.PlayMethod {
-	case "", "direct", "remux", "transcode":
+	case "", string(playback.PlayDirect), string(playback.PlayRemux), string(playback.PlayTranscode):
 		return true
 	default:
 		return false

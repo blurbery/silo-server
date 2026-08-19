@@ -20,7 +20,7 @@ jobs:
           script: |
             const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
             if (!webhookUrl) {
-              core.setFailed("DISCORD_WEBHOOK_URL is not configured.");
+              core.info("DISCORD_WEBHOOK_URL is not configured; skipping notification.");
               return;
             }
 
