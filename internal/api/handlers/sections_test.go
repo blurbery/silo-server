@@ -27,6 +27,29 @@ func (s *stubSectionEpisodeFetcher) FetchEpisodesByContentIDs(_ context.Context,
 	return nil, s.meta, nil
 }
 
+func TestShouldLogOverlaySummaryError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "request canceled", err: context.Canceled, want: false},
+		{name: "wrapped request canceled", err: fmt.Errorf("fetch summaries: %w", context.Canceled), want: false},
+		{name: "deadline exceeded", err: context.DeadlineExceeded, want: false},
+		{name: "wrapped deadline exceeded", err: fmt.Errorf("fetch summaries: %w", context.DeadlineExceeded), want: false},
+		{name: "unexpected failure", err: fmt.Errorf("query failed"), want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldLogOverlaySummaryError(tt.err); got != tt.want {
+				t.Fatalf("shouldLogOverlaySummaryError(%v) = %t, want %t", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSectionBackdropPathUsesExpectedVariants(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -1208,6 +1208,12 @@ type sectionItemImageURLs struct {
 	logoURL     string
 }
 
+func shouldLogOverlaySummaryError(err error) bool {
+	return err != nil &&
+		!errors.Is(err, context.Canceled) &&
+		!errors.Is(err, context.DeadlineExceeded)
+}
+
 func (h *SectionHandler) buildSectionsResponse(r *http.Request, withItems []sections.SectionWithItems) homeSectionsResponse {
 	overlaySummaries := make(map[string]*models.OverlaySummary)
 	contentIDs := make([]string, 0)
@@ -1226,9 +1232,10 @@ func (h *SectionHandler) buildSectionsResponse(r *http.Request, withItems []sect
 	}
 	if len(contentIDs) > 0 && h.fetcher != nil {
 		summaries, err := h.fetcher.ListOverlaySummaries(r.Context(), contentIDs, requestAccessFilter(r))
-		if err != nil {
+		if shouldLogOverlaySummaryError(err) {
 			slog.ErrorContext(r.Context(), "loading overlay summaries", "component", "api", "error", err)
-		} else {
+		}
+		if err == nil {
 			overlaySummaries = summaries
 		}
 	}
