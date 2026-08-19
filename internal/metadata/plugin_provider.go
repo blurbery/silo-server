@@ -379,10 +379,29 @@ func (p *PluginProvider) GetImages(ctx context.Context, req ImageRequest) ([]Rem
 			if v, ok := md.GetFields()["rating"]; ok {
 				ri.Rating = v.GetNumberValue()
 			}
+			ri.IncludesText = imageMetadataBool(md, "includes_text", "includesText")
 		}
 		images = append(images, ri)
 	}
 	return images, nil
+}
+
+func imageMetadataBool(md *structpb.Struct, keys ...string) *bool {
+	if md == nil {
+		return nil
+	}
+	for _, key := range keys {
+		value, ok := md.GetFields()[key]
+		if !ok || value == nil {
+			continue
+		}
+		if _, ok := value.GetKind().(*structpb.Value_BoolValue); !ok {
+			continue
+		}
+		result := value.GetBoolValue()
+		return &result
+	}
+	return nil
 }
 
 func (p *PluginProvider) GetSeasons(ctx context.Context, req SeasonsRequest) ([]SeasonResult, error) {
