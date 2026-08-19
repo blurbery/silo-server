@@ -20,22 +20,25 @@ type fakeImageCacheJobs struct {
 	currentSource *string // when set, overrides CurrentTargetSourcePath
 }
 
-type immediateImageCacheJobs struct {
+type targetImageCacheJobs struct {
 	fakeImageCacheJobs
-	preparedTarget string
+	retriedTarget  string
+	retryCalls     int
 	claimedTarget  string
 	targetClaims   [][]*models.MetadataImageCacheJob
 	targetCalls    int
 	runningResults []bool
 	runningCalls   int
+	alwaysRunning  bool
 }
 
-func (f *immediateImageCacheJobs) PrepareTargetForImmediateCache(_ context.Context, targetContentID string) error {
-	f.preparedTarget = targetContentID
+func (f *targetImageCacheJobs) retryTargetNow(_ context.Context, targetContentID string) error {
+	f.retriedTarget = targetContentID
+	f.retryCalls++
 	return nil
 }
 
-func (f *immediateImageCacheJobs) ClaimDueForTarget(_ context.Context, _ string, targetContentID string, _ int) ([]*models.MetadataImageCacheJob, error) {
+func (f *targetImageCacheJobs) claimDueForTarget(_ context.Context, _ string, targetContentID string, _ int) ([]*models.MetadataImageCacheJob, error) {
 	f.claimedTarget = targetContentID
 	var jobs []*models.MetadataImageCacheJob
 	if f.targetCalls < len(f.targetClaims) {
@@ -45,8 +48,8 @@ func (f *immediateImageCacheJobs) ClaimDueForTarget(_ context.Context, _ string,
 	return jobs, nil
 }
 
-func (f *immediateImageCacheJobs) TargetHasRunningImageCacheJobs(_ context.Context, _ string) (bool, error) {
-	running := false
+func (f *targetImageCacheJobs) targetHasRunningJobs(_ context.Context, _ string) (bool, error) {
+	running := f.alwaysRunning
 	if f.runningCalls < len(f.runningResults) {
 		running = f.runningResults[f.runningCalls]
 	}
@@ -95,11 +98,13 @@ type loopingImageCacheJobs struct {
 	succeededIDs   []int64
 	enqueueCalls   int
 	claimCalls     int
-	queueProgress  ImageCacheQueueProgress
+	backlog        ImageCacheBacklog
+	backlogCalls   int
 }
 
-func (f *loopingImageCacheJobs) GetQueueProgress(context.Context) (ImageCacheQueueProgress, error) {
-	return f.queueProgress, nil
+func (f *loopingImageCacheJobs) GetBacklog(context.Context) (ImageCacheBacklog, error) {
+	f.backlogCalls++
+	return f.backlog, nil
 }
 
 func (f *loopingImageCacheJobs) EnqueueExistingProviderArtwork(context.Context, int) (int, error) {
@@ -321,7 +326,7 @@ func TestImageCacheProcessorCachesOnlyManuallyRefreshedTargetImmediately(t *test
 		ContentType:       "series",
 		ImageType:         ImageCacheImagePoster,
 	}
-	jobs := &immediateImageCacheJobs{
+	jobs := &targetImageCacheJobs{
 		targetClaims: [][]*models.MetadataImageCacheJob{{job}, nil},
 	}
 	cacher := &fakeImageCacher{result: &CacheImageResult{
@@ -338,11 +343,15 @@ func TestImageCacheProcessorCachesOnlyManuallyRefreshedTargetImmediately(t *test
 	if err := processor.CacheTargetArtwork(context.Background(), "series-1"); err != nil {
 		t.Fatalf("CacheTargetArtwork() error = %v", err)
 	}
-	if jobs.preparedTarget != "series-1" || jobs.claimedTarget != "series-1" {
-		t.Fatalf("target preparation/claim = %q/%q, want series-1", jobs.preparedTarget, jobs.claimedTarget)
+	if jobs.retriedTarget != "series-1" || jobs.claimedTarget != "series-1" {
+		t.Fatalf("target retry/claim = %q/%q, want series-1", jobs.retriedTarget, jobs.claimedTarget)
 	}
 	if jobs.targetCalls != 2 {
 		t.Fatalf("target claim calls = %d, want 2", jobs.targetCalls)
+	}
+	// The retry-now reset runs once per refresh, not once per poll.
+	if jobs.retryCalls != 1 {
+		t.Fatalf("target retry calls = %d, want 1", jobs.retryCalls)
 	}
 	if jobs.succeededID != 23 {
 		t.Fatalf("succeededID = %d, want 23", jobs.succeededID)
@@ -363,7 +372,7 @@ func TestImageCacheProcessorReportsImmediateTargetFailure(t *testing.T) {
 		ContentType:       "series",
 		ImageType:         ImageCacheImagePoster,
 	}
-	jobs := &immediateImageCacheJobs{
+	jobs := &targetImageCacheJobs{
 		targetClaims: [][]*models.MetadataImageCacheJob{{job}, nil},
 	}
 	processor := NewImageCacheProcessorWithTargets(
@@ -379,6 +388,65 @@ func TestImageCacheProcessorReportsImmediateTargetFailure(t *testing.T) {
 	}
 	if jobs.failedID != 24 {
 		t.Fatalf("failedID = %d, want 24", jobs.failedID)
+	}
+}
+
+func TestImageCacheProcessorRetriesTargetAfterConcurrentWorkerFinishes(t *testing.T) {
+	job := &models.MetadataImageCacheJob{
+		ID:                25,
+		TargetType:        ImageCacheTargetItem,
+		TargetContentID:   "series-1",
+		SourcePath:        "tmdb://poster/series.jpg",
+		ProviderID:        "tmdb",
+		ProviderContentID: "1396",
+		ContentType:       "series",
+		ImageType:         ImageCacheImagePoster,
+	}
+	jobs := &targetImageCacheJobs{
+		targetClaims:   [][]*models.MetadataImageCacheJob{nil, {job}, nil},
+		runningResults: []bool{true, false},
+	}
+	processor := NewImageCacheProcessorWithTargets(
+		jobs,
+		&fakeImageCacher{result: &CacheImageResult{BasePath: "tmdb/series/1396/poster", Ext: ".webp"}},
+		&fakeImageResolver{url: "https://image.tmdb.org/t/p/original/poster.jpg"},
+		ImageCacheProcessorTargets{Items: &fakeItemArtworkUpdater{updated: true}},
+	)
+
+	if err := processor.CacheTargetArtwork(context.Background(), "series-1"); err != nil {
+		t.Fatalf("CacheTargetArtwork() error = %v", err)
+	}
+	if jobs.retryCalls != 1 {
+		t.Fatalf("target retry calls = %d, want 1", jobs.retryCalls)
+	}
+	if jobs.succeededID != 25 {
+		t.Fatalf("succeededID = %d, want 25", jobs.succeededID)
+	}
+}
+
+func TestImageCacheProcessorStopsWaitingOnStuckBackgroundWorker(t *testing.T) {
+	// A worker that claimed the job and died holds its lease for
+	// imageCacheLeaseDuration. The interactive refresh must not block that
+	// long: it gives up and reports the artwork as still pending.
+	jobs := &targetImageCacheJobs{alwaysRunning: true}
+	processor := NewImageCacheProcessorWithTargets(
+		jobs,
+		&fakeImageCacher{},
+		&fakeImageResolver{},
+		ImageCacheProcessorTargets{Items: &fakeItemArtworkUpdater{}},
+	)
+	processor.idleWaitTimeout = 20 * time.Millisecond
+
+	err := processor.CacheTargetArtwork(context.Background(), "series-1")
+	if !errors.Is(err, ErrTargetArtworkPending) {
+		t.Fatalf("CacheTargetArtwork() error = %v, want ErrTargetArtworkPending", err)
+	}
+	if jobs.retryCalls != 1 {
+		t.Fatalf("target retry calls = %d, want 1", jobs.retryCalls)
+	}
+	// A hot 10 Hz poll would issue far more probes than this in 20ms.
+	if jobs.runningCalls > 4 {
+		t.Fatalf("running probes = %d, want a backed-off poll", jobs.runningCalls)
 	}
 }
 
@@ -595,9 +663,7 @@ func TestImageCacheProcessorRunUntilIdleDrainsNewWorkAddedDuringRun(t *testing.T
 	// the queue empty and sweep again (enqueues 0 -> idle).
 	jobs := &loopingImageCacheJobs{
 		enqueueResults: []int{1, 0},
-		queueProgress: ImageCacheQueueProgress{
-			Known: true, Total: 10, Succeeded: 7, Failed: 1, Queued: 2,
-		},
+		backlog:        ImageCacheBacklog{Known: true, Queued: 2, Running: 1},
 		claimedResults: [][]*models.MetadataImageCacheJob{
 			{job1},
 			{},
@@ -642,8 +708,14 @@ func TestImageCacheProcessorRunUntilIdleDrainsNewWorkAddedDuringRun(t *testing.T
 	if len(progressUpdates) == 0 {
 		t.Fatal("RunUntilIdle() did not report progress")
 	}
-	if got := progressUpdates[0].Queue; got != jobs.queueProgress {
-		t.Fatalf("initial queue progress = %+v, want %+v", got, jobs.queueProgress)
+	if got := progressUpdates[0].Backlog; got != jobs.backlog {
+		t.Fatalf("initial backlog = %+v, want %+v", got, jobs.backlog)
+	}
+	if progressUpdates[0].Processed() != 0 {
+		t.Fatalf("initial processed = %d, want 0", progressUpdates[0].Processed())
+	}
+	if jobs.backlogCalls != 1 {
+		t.Fatalf("GetBacklog calls = %d, want exactly 1 per run", jobs.backlogCalls)
 	}
 	if got := progressUpdates[len(progressUpdates)-1]; got != stats {
 		t.Fatalf("last progress update = %+v, want final stats %+v", got, stats)

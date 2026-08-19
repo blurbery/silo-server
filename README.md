@@ -83,8 +83,9 @@ the canonical public history of shipped changes, with categorized notes,
 contributors, and a full comparison for every version.
 
 > [!IMPORTANT]
-> Until the maintainers select and publish Silo's first release, builds remain
-> identified by their commit SHA. No version is implied by this documentation.
+> Until the maintainers select and publish Silo's first release, newly published
+> container builds are identified by an ordered `build-N` and their commit SHA.
+> Build numbers make updates comparable but do not imply a release version.
 
 For every release, review the notes for configuration, compatibility, and
 upgrade information before updating. See
@@ -367,7 +368,6 @@ If you prefer running Silo without Docker:
 | [Release versioning](docs/release-versioning.md) | Version selection, GitHub release notes, prereleases, and maintainer checks |
 | [Development guide](DEVELOPMENT.md) | Local setup, builds, tests, migrations, and repository structure |
 | [Canonical Settings API](docs/settings-api.md) | Client contracts, contextual headers, remote scopes, and effective reads |
-| [Security policy](SECURITY.md) | Supported versions and private vulnerability reporting |
 
 ## Reporting Issues
 
