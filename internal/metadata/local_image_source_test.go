@@ -126,12 +126,31 @@ func TestApplyBestImagesRemoteSelectionUnchanged(t *testing.T) {
 }
 
 func TestApplyBestImagesPrefersTextPostersByLanguage(t *testing.T) {
+	includesText := true
+	textless := false
 	tests := []struct {
 		name          string
 		preferredLang string
 		images        []RemoteImage
 		wantPoster    string
 	}{
+		{
+			name:          "explicit text flag beats a higher rated English-tagged textless poster",
+			preferredLang: "en",
+			images: []RemoteImage{
+				{ProviderID: "tvdb", URL: "textless-english", Type: ImagePoster, Language: "en", Rating: 10, IncludesText: &textless},
+				{ProviderID: "tvdb", URL: "english-with-text", Type: ImagePoster, Language: "en", Rating: 6, IncludesText: &includesText},
+			},
+			wantPoster: "english-with-text",
+		},
+		{
+			name:          "explicit textless poster remains the final fallback",
+			preferredLang: "en",
+			images: []RemoteImage{
+				{ProviderID: "tvdb", URL: "textless-english", Type: ImagePoster, Language: "en", Rating: 10, IncludesText: &textless},
+			},
+			wantPoster: "textless-english",
+		},
 		{
 			name:          "preferred language beats higher rated textless poster",
 			preferredLang: "en",

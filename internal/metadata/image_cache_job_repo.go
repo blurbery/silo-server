@@ -372,6 +372,75 @@ func (r *ImageCacheJobRepository) recoverExpiredRunning(ctx context.Context) err
 }
 
 func (r *ImageCacheJobRepository) ClaimDue(ctx context.Context, workerID string, limit int) ([]*models.MetadataImageCacheJob, error) {
+	return r.claimDue(ctx, workerID, "", limit)
+}
+
+// PrepareTargetForImmediateCache makes failed or backed-off artwork jobs for
+// one explicitly refreshed item eligible to run now. Running jobs keep their
+// lease and are allowed to finish normally.
+func (r *ImageCacheJobRepository) PrepareTargetForImmediateCache(ctx context.Context, targetContentID string) error {
+	if r == nil || r.pool == nil {
+		return nil
+	}
+	targetContentID = strings.TrimSpace(targetContentID)
+	if targetContentID == "" {
+		return nil
+	}
+	_, err := r.pool.Exec(ctx, `
+		UPDATE metadata_image_cache_jobs
+		SET status = 'queued',
+			attempt_count = 0,
+			next_attempt_at = NOW(),
+			locked_at = NULL,
+			locked_by = '',
+			last_error = '',
+			completed_at = NULL,
+			updated_at = NOW()
+		WHERE target_content_id = $1
+		  AND status IN ('queued', 'failed')
+	`, targetContentID)
+	if err != nil {
+		return fmt.Errorf("preparing immediate metadata image cache jobs: %w", err)
+	}
+	return nil
+}
+
+// ClaimDueForTarget claims only artwork belonging to the item being manually
+// refreshed, so an interactive refresh never has to drain the global backlog.
+func (r *ImageCacheJobRepository) ClaimDueForTarget(ctx context.Context, workerID, targetContentID string, limit int) ([]*models.MetadataImageCacheJob, error) {
+	targetContentID = strings.TrimSpace(targetContentID)
+	if targetContentID == "" {
+		return nil, nil
+	}
+	return r.claimDue(ctx, workerID, targetContentID, limit)
+}
+
+// TargetHasRunningImageCacheJobs reports whether another worker still owns
+// artwork for the target. Interactive refreshes wait for that work so they do
+// not report success before the image is available.
+func (r *ImageCacheJobRepository) TargetHasRunningImageCacheJobs(ctx context.Context, targetContentID string) (bool, error) {
+	if r == nil || r.pool == nil {
+		return false, nil
+	}
+	targetContentID = strings.TrimSpace(targetContentID)
+	if targetContentID == "" {
+		return false, nil
+	}
+	var running bool
+	if err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM metadata_image_cache_jobs
+			WHERE target_content_id = $1
+			  AND status = 'running'
+		)
+	`, targetContentID).Scan(&running); err != nil {
+		return false, fmt.Errorf("checking running metadata image cache jobs: %w", err)
+	}
+	return running, nil
+}
+
+func (r *ImageCacheJobRepository) claimDue(ctx context.Context, workerID, targetContentID string, limit int) ([]*models.MetadataImageCacheJob, error) {
 	if r == nil || r.pool == nil || limit <= 0 {
 		return nil, nil
 	}
@@ -384,6 +453,7 @@ func (r *ImageCacheJobRepository) ClaimDue(ctx context.Context, workerID string,
 			FROM metadata_image_cache_jobs
 			WHERE status = 'queued'
 			  AND next_attempt_at <= NOW()
+			  AND ($3 = '' OR target_content_id = $3)
 			ORDER BY next_attempt_at ASC, id ASC
 			LIMIT $1
 			FOR UPDATE SKIP LOCKED
@@ -401,7 +471,7 @@ func (r *ImageCacheJobRepository) ClaimDue(ctx context.Context, workerID string,
 			j.content_type, j.image_type, j.season_number, j.episode_number,
 			j.status, j.attempt_count, j.next_attempt_at, j.locked_at,
 			j.locked_by, j.last_error, j.created_at, j.updated_at, j.completed_at
-	`, limit, workerID)
+	`, limit, workerID, targetContentID)
 	if err != nil {
 		return nil, fmt.Errorf("claiming metadata image cache jobs: %w", err)
 	}

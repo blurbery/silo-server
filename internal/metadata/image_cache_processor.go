@@ -29,6 +29,12 @@ const maxLocalImageSourceBytes = 8 << 20
 // Draining of already-queued jobs is unaffected and stays responsive.
 const imageCacheDiscoveryInterval = 15 * time.Minute
 
+const (
+	immediateImageCacheClaimLimit   = 16
+	immediateImageCacheConcurrency  = 3
+	immediateImageCachePollInterval = 100 * time.Millisecond
+)
+
 type ImageCacheJobClaimer interface {
 	ClaimDue(ctx context.Context, workerID string, limit int) ([]*models.MetadataImageCacheJob, error)
 	MarkSucceeded(ctx context.Context, id int64, lockedBy string) error
@@ -37,6 +43,12 @@ type ImageCacheJobClaimer interface {
 	CurrentTargetSourcePath(ctx context.Context, job *models.MetadataImageCacheJob) (string, error)
 	EnqueueExistingProviderArtwork(ctx context.Context, limit int) (int, error)
 	DeleteSucceededBefore(ctx context.Context, before time.Time, limit int) (int, error)
+}
+
+type immediateImageCacheJobStore interface {
+	PrepareTargetForImmediateCache(ctx context.Context, targetContentID string) error
+	ClaimDueForTarget(ctx context.Context, workerID, targetContentID string, limit int) ([]*models.MetadataImageCacheJob, error)
+	TargetHasRunningImageCacheJobs(ctx context.Context, targetContentID string) (bool, error)
 }
 
 // imageCacheTargetCachedPathReader is optionally implemented by the job store
@@ -235,10 +247,76 @@ func (p *ImageCacheProcessor) RunOnce(ctx context.Context, workerID string, clai
 	if err != nil {
 		return stats, err
 	}
-	stats.Claimed = len(jobs)
 	if len(jobs) == 0 {
 		p.cleanupSucceeded(ctx, &stats)
 		return stats, nil
+	}
+	stats = p.processClaimedJobs(ctx, workerID, jobs, concurrency)
+	p.cleanupSucceeded(ctx, &stats)
+	return stats, nil
+}
+
+// CacheTargetArtwork processes only the artwork queued for a manually
+// refreshed item. It also waits for any already-running jobs for that target,
+// so the interactive refresh does not report success before the cached paths
+// have been updated.
+func (p *ImageCacheProcessor) CacheTargetArtwork(ctx context.Context, targetContentID string) error {
+	if p == nil || p.jobs == nil || p.cacher == nil || !p.enabled.Load() {
+		return nil
+	}
+	targetContentID = strings.TrimSpace(targetContentID)
+	if targetContentID == "" {
+		return fmt.Errorf("target content ID is required")
+	}
+	store, ok := p.jobs.(immediateImageCacheJobStore)
+	if !ok {
+		return fmt.Errorf("metadata image cache does not support targeted processing")
+	}
+	if err := store.PrepareTargetForImmediateCache(ctx, targetContentID); err != nil {
+		return err
+	}
+
+	workerID := fmt.Sprintf("item-refresh-%d", time.Now().UnixNano())
+	failed := 0
+	for {
+		jobs, err := store.ClaimDueForTarget(ctx, workerID, targetContentID, immediateImageCacheClaimLimit)
+		if err != nil {
+			return err
+		}
+		if len(jobs) > 0 {
+			stats := p.processClaimedJobs(ctx, workerID, jobs, immediateImageCacheConcurrency)
+			failed += stats.Failed
+			continue
+		}
+
+		running, err := store.TargetHasRunningImageCacheJobs(ctx, targetContentID)
+		if err != nil {
+			return err
+		}
+		if !running {
+			break
+		}
+		timer := time.NewTimer(immediateImageCachePollInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d refreshed artwork image(s) failed to cache", failed)
+	}
+	return nil
+}
+
+func (p *ImageCacheProcessor) processClaimedJobs(ctx context.Context, workerID string, jobs []*models.MetadataImageCacheJob, concurrency int) ImageCacheRunStats {
+	stats := ImageCacheRunStats{Claimed: len(jobs)}
+	if len(jobs) == 0 {
+		return stats
+	}
+	if concurrency <= 0 {
+		concurrency = 4
 	}
 
 	sem := make(chan struct{}, concurrency)
@@ -288,11 +366,7 @@ loop:
 		cancel()
 	}
 
-	p.cleanupSucceeded(ctx, &stats)
-	if ctxErr := ctx.Err(); ctxErr != nil && stats.Claimed == 0 {
-		return stats, ctxErr
-	}
-	return stats, nil
+	return stats
 }
 
 func (p *ImageCacheProcessor) RunUntilIdle(ctx context.Context, workerID string, claimLimit int, concurrency int, maxRuntime time.Duration, reportProgress ImageCacheRunProgressReporter) (ImageCacheRunStats, error) {
