@@ -191,7 +191,7 @@ func TestApplyBestImagesPrefersTextPostersByLanguage(t *testing.T) {
 	}
 }
 
-func TestApplyBestImagesTextPreferenceOnlyAffectsPosters(t *testing.T) {
+func TestApplyBestImagesUsesLibraryLanguageForArtwork(t *testing.T) {
 	item := &models.MediaItem{}
 	applyBestImages(item, []RemoteImage{
 		{ProviderID: "tmdb", URL: "poster-textless", Type: ImagePoster, Rating: 10},
@@ -206,10 +206,68 @@ func TestApplyBestImagesTextPreferenceOnlyAffectsPosters(t *testing.T) {
 		t.Fatalf("PosterPath = %q, want text poster", item.PosterPath)
 	}
 	if item.BackdropPath != "backdrop-textless" {
-		t.Fatalf("BackdropPath = %q, want unchanged textless selection", item.BackdropPath)
+		t.Fatalf("BackdropPath = %q, want language-neutral background", item.BackdropPath)
 	}
-	if item.LogoPath != "logo-textless" {
-		t.Fatalf("LogoPath = %q, want unchanged textless selection", item.LogoPath)
+	if item.LogoPath != "logo-english" {
+		t.Fatalf("LogoPath = %q, want English logo", item.LogoPath)
+	}
+}
+
+func TestApplyBestImagesLogoLanguageFallbacks(t *testing.T) {
+	tests := []struct {
+		name          string
+		preferredLang string
+		images        []RemoteImage
+		wantLogo      string
+	}{
+		{
+			name:          "preferred language beats higher rated English logo",
+			preferredLang: "fr",
+			images: []RemoteImage{
+				{ProviderID: "tmdb", URL: "french", Type: ImageLogo, Language: "fr", Rating: 6},
+				{ProviderID: "tmdb", URL: "english", Type: ImageLogo, Language: "en", Rating: 9},
+			},
+			wantLogo: "french",
+		},
+		{
+			name:          "English is the cross-language fallback",
+			preferredLang: "fr",
+			images: []RemoteImage{
+				{ProviderID: "tmdb", URL: "english", Type: ImageLogo, Language: "en", Rating: 6},
+				{ProviderID: "tmdb", URL: "neutral", Type: ImageLogo, Rating: 10},
+			},
+			wantLogo: "english",
+		},
+		{
+			name:          "language-neutral beats unrelated language",
+			preferredLang: "en",
+			images: []RemoteImage{
+				{ProviderID: "tmdb", URL: "german", Type: ImageLogo, Language: "de", Rating: 10},
+				{ProviderID: "tmdb", URL: "neutral", Type: ImageLogo, Rating: 6},
+			},
+			wantLogo: "neutral",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item := &models.MediaItem{}
+			applyBestImages(item, tt.images, MergeFillEmpty, tt.preferredLang)
+			if item.LogoPath != tt.wantLogo {
+				t.Fatalf("LogoPath = %q, want %q", item.LogoPath, tt.wantLogo)
+			}
+		})
+	}
+}
+
+func TestApplyBestImagesRejectsLanguageTaggedProviderBackgrounds(t *testing.T) {
+	item := &models.MediaItem{}
+	applyBestImages(item, []RemoteImage{
+		{ProviderID: "tmdb", URL: "english", Type: ImageBackdrop, Language: "en", Rating: 10},
+		{ProviderID: "tmdb", URL: "german", Type: ImageBackdrop, Language: "de", Rating: 9},
+	}, MergeFillEmpty, "en")
+	if item.BackdropPath != "" {
+		t.Fatalf("BackdropPath = %q, want no language-tagged provider background", item.BackdropPath)
 	}
 }
 

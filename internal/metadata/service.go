@@ -6725,11 +6725,7 @@ func metadataResultToItem(r *MetadataResult, contentType string) *models.MediaIt
 
 func applyBestImages(item *models.MediaItem, images []RemoteImage, mode MergeMode, preferredLang string) {
 	// Images arrive in provider-chain order (highest priority first).
-	// For each image type, pick the best image using a fallback chain:
-	//   1. Preferred language or language-neutral
-	//   2. English or language-neutral (if preferred != "en")
-	//   3. Any language
-	// Within each pass, the first provider with a match wins; within
+	// Within each language tier, the first provider with a match wins; within
 	// that provider, pick the highest-rated image.
 	type best struct {
 		url        string
@@ -6737,79 +6733,17 @@ func applyBestImages(item *models.MediaItem, images []RemoteImage, mode MergeMod
 		providerID string
 	}
 
-	filters := []func(string) bool{
-		func(l string) bool { return l == "" || l == preferredLang },
-	}
-	if preferredLang != "en" {
-		filters = append(filters, func(l string) bool { return l == "" || l == "en" })
-	}
-	filters = append(filters, func(string) bool { return true })
-
-	bestByType := map[ImageType]*best{
-		ImagePoster:   {},
-		ImageBackdrop: {},
-		ImageLogo:     {},
-	}
-
-	for _, accept := range filters {
+	selectBest := func(imageType ImageType, filters []func(string) bool) *best {
 		for _, img := range images {
-			if img.URL == "" || !accept(img.Language) {
-				continue
-			}
-			b := bestByType[img.Type]
-			if b == nil {
-				continue
-			}
-			if b.url == "" {
-				b.url = img.URL
-				b.rating = img.Rating
-				b.providerID = img.ProviderID
-			} else if img.ProviderID == b.providerID && img.Rating > b.rating {
-				b.url = img.URL
-				b.rating = img.Rating
+			if img.Type == imageType && img.URL != "" && isLocalImageSourcePath(img.URL) {
+				return &best{url: img.URL, rating: img.Rating, providerID: img.ProviderID}
 			}
 		}
-		// Stop if every type has a candidate.
-		allFilled := true
-		for _, b := range bestByType {
-			if b.url == "" {
-				allFilled = false
-				break
-			}
-		}
-		if allFilled {
-			break
-		}
-	}
 
-	// Posters with language metadata contain text. Prefer them over
-	// language-neutral (textless) posters while keeping the configured provider
-	// order: preferred language first, then English, then any text language.
-	// Local sidecar artwork remains authoritative, and the existing selection
-	// above remains the textless fallback. Backdrops and logos deliberately keep
-	// the original selection behavior.
-	poster := bestByType[ImagePoster]
-	if poster != nil && !isLocalImageSourcePath(poster.url) {
-		preferredLang = strings.TrimSpace(preferredLang)
-		posterFilters := make([]func(string) bool, 0, 3)
-		if preferredLang != "" {
-			posterFilters = append(posterFilters, func(language string) bool {
-				return strings.EqualFold(strings.TrimSpace(language), preferredLang)
-			})
-		}
-		if !strings.EqualFold(preferredLang, "en") {
-			posterFilters = append(posterFilters, func(language string) bool {
-				return strings.EqualFold(strings.TrimSpace(language), "en")
-			})
-		}
-		posterFilters = append(posterFilters, func(language string) bool {
-			return strings.TrimSpace(language) != ""
-		})
-
-		for _, accept := range posterFilters {
+		for _, accept := range filters {
 			candidate := &best{}
 			for _, img := range images {
-				if img.Type != ImagePoster || img.URL == "" || !accept(img.Language) {
+				if img.Type != imageType || img.URL == "" || !accept(img.Language) {
 					continue
 				}
 				if candidate.url == "" {
@@ -6822,10 +6756,54 @@ func applyBestImages(item *models.MediaItem, images []RemoteImage, mode MergeMod
 				}
 			}
 			if candidate.url != "" {
-				*poster = *candidate
-				break
+				return candidate
 			}
 		}
+		return &best{}
+	}
+
+	preferredLang = strings.TrimSpace(preferredLang)
+	languageIs := func(want string) func(string) bool {
+		return func(language string) bool {
+			return strings.EqualFold(strings.TrimSpace(language), want)
+		}
+	}
+	textBearing := func(language string) bool {
+		return strings.TrimSpace(language) != ""
+	}
+	languageNeutral := func(language string) bool {
+		return strings.TrimSpace(language) == ""
+	}
+
+	// Posters should carry a title in the library's metadata language. English
+	// is the cross-language fallback, followed by another text-bearing poster;
+	// textless artwork is used only when no poster with text is available.
+	posterFilters := make([]func(string) bool, 0, 4)
+	if preferredLang != "" {
+		posterFilters = append(posterFilters, languageIs(preferredLang))
+	}
+	if !strings.EqualFold(preferredLang, "en") {
+		posterFilters = append(posterFilters, languageIs("en"))
+	}
+	posterFilters = append(posterFilters, textBearing, languageNeutral)
+
+	// Logos also follow the library language. A language-neutral logo is a safer
+	// fallback than a logo explicitly tagged with an unrelated language.
+	logoFilters := make([]func(string) bool, 0, 4)
+	if preferredLang != "" {
+		logoFilters = append(logoFilters, languageIs(preferredLang))
+	}
+	if !strings.EqualFold(preferredLang, "en") {
+		logoFilters = append(logoFilters, languageIs("en"))
+	}
+	logoFilters = append(logoFilters, languageNeutral, textBearing)
+
+	bestByType := map[ImageType]*best{
+		ImagePoster: selectBest(ImagePoster, posterFilters),
+		// Provider backdrops tagged with a language may contain text. Automatic
+		// scans therefore select only language-neutral backgrounds.
+		ImageBackdrop: selectBest(ImageBackdrop, []func(string) bool{languageNeutral}),
+		ImageLogo:     selectBest(ImageLogo, logoFilters),
 	}
 
 	applyIfBetter := func(current *string, b *best) {
