@@ -26,6 +26,7 @@
   · <a href="docs/wiki/index.md">Documentation</a>
   · <a href="docs/release-versioning.md">Builds &amp; releases</a>
   · <a href="https://discord.com/invite/4RxuUQAEnW">Discord</a>
+  · <a href="#supporting-silo">Support Silo</a>
   · <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
