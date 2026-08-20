@@ -115,7 +115,7 @@ func executeMetadataImages(ctx context.Context, progress taskmanager.ProgressRep
 	if backfill {
 		mode = "backfill"
 		// A manual backfill must either reach the end of discovery or be
-		// explicitly cancelled. A scheduled drain is bounded because its next
+		// explicitly canceled. A scheduled drain is bounded because its next
 		// trigger continues the durable queue; a manual-only task has no such
 		// continuation and must not report a partial sweep as complete.
 		maxRuntime = 0

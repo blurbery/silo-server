@@ -492,7 +492,7 @@ func (p *ImageCacheProcessor) runUntilIdle(ctx context.Context, workerID string,
 
 	// A positive runtime bounds scheduled draining; zero or negative means the
 	// explicit manual backfill keeps going until the catalog is exhausted or its
-	// context is cancelled.
+	// context is canceled.
 	limited := maxRuntime > 0
 	deadline := time.Time{}
 	if limited {
