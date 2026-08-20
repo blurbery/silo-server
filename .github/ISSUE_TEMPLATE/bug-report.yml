@@ -8,7 +8,7 @@ body:
       value: |
         Report behavior you reproduced on a real deployment. Include raw logs rather than AI summaries, and keep observations separate from suspected root cause. Redact credentials, tokens, personal data, and private media details, and mark each redaction.
 
-        Read [CONTRIBUTING.md](https://github.com/Silo-Server/silo-server/blob/main/CONTRIBUTING.md) and the [AI-assisted contribution policy](https://github.com/Silo-Server/silo-server/blob/main/docs/ai-contributions.md) first.
+        Fabricated or AI-hallucinated reports are an immediate block. Read [CONTRIBUTING.md](https://github.com/Silo-Server/silo-server/blob/main/CONTRIBUTING.md) and the [AI-assisted contribution policy](https://github.com/Silo-Server/silo-server/blob/main/docs/ai-contributions.md) first.
   - type: textarea
     id: what-happened
     attributes:
@@ -93,13 +93,6 @@ body:
         - Human-written, AI-reviewed
         - AI-assisted
         - Fully AI-generated, human verified
-    validations:
-      required: true
-  - type: textarea
-    id: adversarial-review
-    attributes:
-      label: Adversarial review
-      description: Summarize independent/adversarial review findings and resolutions. Use "n/a" only when no AI or implementation change was involved.
     validations:
       required: true
   - type: checkboxes

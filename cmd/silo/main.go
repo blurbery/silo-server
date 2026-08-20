@@ -3192,11 +3192,12 @@ func reloadWatchSyncPluginProviders(
 				continue
 			}
 			provider, err := watchsync.NewPluginProvider(watchsync.PluginProviderOptions{
-				InstallationID: installation.ID,
-				ProviderKey:    fmt.Sprintf("plugin:%d:%s", installation.ID, capability.ID),
-				CapabilityID:   capability.ID,
-				DisplayName:    descriptor.GetDisplayName(),
-				Descriptor:     descriptor.GetWatchSyncProvider(),
+				InstallationID:         installation.ID,
+				ProviderKey:            fmt.Sprintf("plugin:%d:%s", installation.ID, capability.ID),
+				CapabilityID:           capability.ID,
+				DisplayName:            descriptor.GetDisplayName(),
+				Descriptor:             descriptor.GetWatchSyncProvider(),
+				ConnectionConfigSchema: descriptor.GetConfigSchema(),
 				ResolveClient: func(callCtx context.Context, installationID int, capabilityID string) (watchsync.WatchSyncPluginClient, error) {
 					return service.WatchSyncProviderClient(callCtx, installationID, capabilityID)
 				},

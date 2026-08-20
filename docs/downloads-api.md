@@ -173,7 +173,7 @@ Response:
 | `season_download`        | Per-season batch downloads are available.                                         |
 | `series_monitoring`      | Auto-download subscriptions are available.                                        |
 | `monitoring_modes`       | Subscription modes the client may request.                                        |
-| `proxy_delivery`         | Proxy-aware download routes are available for opt-in distributed delivery.        |
+| `proxy_delivery`         | Proxy-aware download routes are mounted (§4.11); redirects are per-request.        |
 
 `quality_presets` is always an array — `[]` (never `null`) when downloads are
 disabled or the user lacks download permission — so clients can rely on
@@ -423,9 +423,8 @@ For browser-friendly links, the endpoint accepts the session access token as a
 
 ### 4.11 Distributed proxy delivery
 
-Clients discover distributed delivery through `proxy_delivery` on the download
-capability response. When it is `true`, clients may opt into the proxy-aware
-routes:
+`proxy_delivery` on the capability response reports whether the proxy-aware
+routes exist:
 
 ```http
 GET  /api/v1/downloads/{id}/file-proxy
@@ -434,15 +433,20 @@ GET  /api/v1/direct-download-proxy?file_id={id}
 HEAD /api/v1/direct-download-proxy?file_id={id}
 ```
 
-These routes may return a temporary redirect to a proxy node. The established
-`/file` and `/direct-download` routes keep serving bytes directly and retain
-their existing status-code contract. When a prepared artifact is stored on a
-transcode node, the API performs the authenticated relay for those fallback
-routes.
+`true` means the routes are mounted, not that every request redirects. A
+proxy-aware route returns `307` to a proxy node when one is eligible for that
+file, and otherwise serves bytes directly with the same status-code contract as
+the non-proxy route. Bandwidth-limited downloads (server-wide or per-user) are
+never redirected, and neither are files no proxy node can reach. Clients must
+follow the redirect or accept the direct response; they cannot assume either.
 
-Downloads with a configured server-wide or per-user bandwidth limit remain
-API-local so aggregate limits stay exact. Clients must treat proxy delivery as
-an advertised capability, not infer it from a server version.
+The established `/file` and `/direct-download` routes never redirect. When a
+prepared artifact for `/downloads/{id}/file` lives on a transcode node, the API
+relays it; the client sees an ordinary direct response. `/direct-download`
+serves source files only and has no artifact case.
+
+Treat proxy delivery as an advertised capability, not something inferred from a
+server version.
 
 ---
 

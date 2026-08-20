@@ -95,6 +95,7 @@ function S3CredentialField({
   onChange,
   onReplace,
   onKeep,
+  disabled,
 }: {
   label: string;
   value: string;
@@ -103,6 +104,7 @@ function S3CredentialField({
   onChange: (value: string) => void;
   onReplace: () => void;
   onKeep: () => void;
+  disabled: boolean;
 }) {
   if (configured && !editing) {
     return (
@@ -116,6 +118,7 @@ function S3CredentialField({
             variant="outline"
             aria-label={`Replace ${label}`}
             onClick={onReplace}
+            disabled={disabled}
           >
             Replace
           </Button>
@@ -132,6 +135,7 @@ function S3CredentialField({
         value={value}
         onChange={onChange}
         hint={configured ? "Enter a replacement value." : undefined}
+        disabled={disabled}
       />
       {configured && (
         <Button
@@ -140,6 +144,7 @@ function S3CredentialField({
           variant="ghost"
           aria-label={`Keep saved ${label}`}
           onClick={onKeep}
+          disabled={disabled}
         >
           Keep saved value
         </Button>
@@ -159,39 +164,41 @@ export default function StorageSettings() {
   const [editingSensitiveKeys, setEditingSensitiveKeys] = useState<Set<string>>(new Set());
   const publicDraftVersion = useRef(0);
   const privateDraftVersion = useRef(0);
+  const [credentialSaveInProgress, setCredentialSaveInProgress] = useState(false);
+  const credentialSaveInProgressRef = useRef(false);
+
+  function invalidateConnectionResult(kind: "public" | "private") {
+    if (kind === "public") {
+      publicDraftVersion.current += 1;
+      setPublicConnectionResult(null);
+    } else {
+      privateDraftVersion.current += 1;
+      setPrivateConnectionResult(null);
+    }
+  }
 
   function setPublicValue(key: (typeof PUBLIC_S3_KEYS)[number], value: string) {
-    publicDraftVersion.current += 1;
-    setPublicConnectionResult(null);
+    if (credentialSaveInProgressRef.current) return;
+    invalidateConnectionResult("public");
     form.setValue(key, value);
   }
 
   function setPrivateValue(key: (typeof PRIVATE_S3_KEYS)[number], value: string) {
-    privateDraftVersion.current += 1;
-    setPrivateConnectionResult(null);
+    if (credentialSaveInProgressRef.current) return;
+    invalidateConnectionResult("private");
     form.setValue(key, value);
   }
 
   function beginCredentialReplacement(key: string, kind: "public" | "private") {
-    if (kind === "public") {
-      publicDraftVersion.current += 1;
-      setPublicConnectionResult(null);
-    } else {
-      privateDraftVersion.current += 1;
-      setPrivateConnectionResult(null);
-    }
+    if (credentialSaveInProgressRef.current) return;
+    invalidateConnectionResult(kind);
     setEditingSensitiveKeys((current) => new Set(current).add(key));
   }
 
   function keepSavedCredential(key: string, kind: "public" | "private") {
+    if (credentialSaveInProgressRef.current) return;
     form.resetValue(key);
-    if (kind === "public") {
-      publicDraftVersion.current += 1;
-      setPublicConnectionResult(null);
-    } else {
-      privateDraftVersion.current += 1;
-      setPrivateConnectionResult(null);
-    }
+    invalidateConnectionResult(kind);
     setEditingSensitiveKeys((current) => {
       const next = new Set(current);
       next.delete(key);
@@ -200,6 +207,7 @@ export default function StorageSettings() {
   }
 
   async function handleCheckPublicConnection() {
+    if (credentialSaveInProgressRef.current) return;
     const checkedVersion = publicDraftVersion.current;
     try {
       const result = await publicCheckConnection.mutateAsync({
@@ -218,6 +226,7 @@ export default function StorageSettings() {
   }
 
   async function handleCheckPrivateConnection() {
+    if (credentialSaveInProgressRef.current) return;
     const checkedVersion = privateDraftVersion.current;
     try {
       const result = await privateCheckConnection.mutateAsync({
@@ -236,6 +245,7 @@ export default function StorageSettings() {
   }
 
   async function handleSave() {
+    if (credentialSaveInProgressRef.current) return;
     const publicStorageDisabled =
       form.getValue("s3.public_endpoint").trim() === "" &&
       form.getValue("s3.public_bucket").trim() === "";
@@ -266,20 +276,45 @@ export default function StorageSettings() {
       return;
     }
 
-    await form.save();
-    setEditingSensitiveKeys(new Set());
+    credentialSaveInProgressRef.current = true;
+    setCredentialSaveInProgress(true);
+    try {
+      await form.save();
+      setEditingSensitiveKeys(new Set());
+    } catch {
+      // The mutation reports the error; keep credential editors open for retry.
+    } finally {
+      credentialSaveInProgressRef.current = false;
+      setCredentialSaveInProgress(false);
+    }
   }
 
   function handleDiscard() {
+    if (credentialSaveInProgressRef.current) return;
     form.discard();
-    publicDraftVersion.current += 1;
-    privateDraftVersion.current += 1;
-    setPublicConnectionResult(null);
-    setPrivateConnectionResult(null);
+    invalidateConnectionResult("public");
+    invalidateConnectionResult("private");
     setEditingSensitiveKeys(new Set());
   }
 
-  if (form.isLoading)
+  if (form.sensitiveStatusError) {
+    return (
+      <div
+        className="flex items-start gap-3 rounded-xl border border-red-500/20 bg-red-500/5 p-4"
+        role="alert"
+      >
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+        <div>
+          <p className="text-sm font-medium">Protected credential status is unavailable</p>
+          <p className="text-muted-foreground mt-1 text-xs">
+            Reload this page before editing storage settings.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (form.isLoading || !form.sensitiveStatusReady)
     return (
       <div className="space-y-6" role="status" aria-label="Loading settings">
         <Skeleton className="h-8 w-48" />
@@ -377,6 +412,7 @@ export default function StorageSettings() {
               editing={editingSensitiveKeys.has("s3.public_access_key")}
               onReplace={() => beginCredentialReplacement("s3.public_access_key", "public")}
               onKeep={() => keepSavedCredential("s3.public_access_key", "public")}
+              disabled={form.isSaving || credentialSaveInProgress}
             />
             <S3CredentialField
               label="Secret Key"
@@ -386,13 +422,14 @@ export default function StorageSettings() {
               editing={editingSensitiveKeys.has("s3.public_secret_key")}
               onReplace={() => beginCredentialReplacement("s3.public_secret_key", "public")}
               onKeep={() => keepSavedCredential("s3.public_secret_key", "public")}
+              disabled={form.isSaving || credentialSaveInProgress}
             />
 
             <ConnectionCheckAction
               onClick={handleCheckPublicConnection}
               result={publicConnectionResult}
               isPending={publicCheckConnection.isPending}
-              disabled={form.isSaving}
+              disabled={form.isSaving || credentialSaveInProgress}
             />
 
             <div className="border-border mt-6 border-t pt-6">
@@ -486,6 +523,7 @@ export default function StorageSettings() {
               editing={editingSensitiveKeys.has("s3.private_access_key")}
               onReplace={() => beginCredentialReplacement("s3.private_access_key", "private")}
               onKeep={() => keepSavedCredential("s3.private_access_key", "private")}
+              disabled={form.isSaving || credentialSaveInProgress}
             />
             <S3CredentialField
               label="Secret Key"
@@ -495,13 +533,14 @@ export default function StorageSettings() {
               editing={editingSensitiveKeys.has("s3.private_secret_key")}
               onReplace={() => beginCredentialReplacement("s3.private_secret_key", "private")}
               onKeep={() => keepSavedCredential("s3.private_secret_key", "private")}
+              disabled={form.isSaving || credentialSaveInProgress}
             />
 
             <ConnectionCheckAction
               onClick={handleCheckPrivateConnection}
               result={privateConnectionResult}
               isPending={privateCheckConnection.isPending}
-              disabled={form.isSaving}
+              disabled={form.isSaving || credentialSaveInProgress}
             />
           </TabsContent>
 
@@ -558,7 +597,7 @@ export default function StorageSettings() {
         dirtyCount={form.dirtyCount}
         onSave={handleSave}
         onDiscard={handleDiscard}
-        isSaving={form.isSaving}
+        isSaving={form.isSaving || credentialSaveInProgress}
         restartRequired={form.restartRequired}
       />
     </div>

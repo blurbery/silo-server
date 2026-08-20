@@ -53,11 +53,13 @@ type watchStateImporter interface {
 const (
 	manualSyncCooldown = time.Hour
 	manualSyncTimeout  = 10 * time.Minute
-	// Built-in providers bind requests to this context and use HTTP client
-	// timeouts of at most 20 seconds. Keep dispatch below the reclaim lease;
-	// the per-session queue remains occupied until the worker itself exits.
-	confirmedStopDispatchTimeout = 25 * time.Second
-	confirmedStopLease           = time.Minute
+	// A completed stop may require a cold metadata lookup in a provider plugin.
+	// Match the plugin-host watch-sync deadline so the durable confirmation path
+	// does not cancel valid provider work before the RPC can finish. The reclaim
+	// lease must remain longer than that entire dispatch and finalization window
+	// so a second request cannot take over while the first is still valid.
+	confirmedStopDispatchTimeout = 2 * time.Minute
+	confirmedStopLease           = confirmedStopDispatchTimeout + 30*time.Second
 )
 
 var errConfirmedStopInProgress = errors.New("watch provider stop confirmation already in progress")
@@ -137,6 +139,9 @@ func (s *Service) GetConnectionStatus(ctx context.Context, userID int, profileID
 		SyncWatchlistRemovalsEnabled: false,
 		SyncWatchlistOrderEnabled:    true,
 		ScrobbleEnabled:              true,
+	}
+	if configurable, ok := provider.(connectionConfigProvider); ok {
+		status.ConnectionConfigSchema = configurable.ConnectionConfigSchema()
 	}
 	if connected {
 		status.ProviderUsername = conn.ProviderUsername
@@ -547,6 +552,17 @@ func (s *Service) ConnectAPIKey(
 	providerKey string,
 	apiKey string,
 ) (Connection, error) {
+	return s.ConnectAPIKeyWithConfig(ctx, userID, profileID, providerKey, apiKey, nil)
+}
+
+func (s *Service) ConnectAPIKeyWithConfig(
+	ctx context.Context,
+	userID int,
+	profileID string,
+	providerKey string,
+	apiKey string,
+	connectionConfig ConnectionConfigValues,
+) (Connection, error) {
 	if userID <= 0 {
 		return Connection{}, fmt.Errorf("user id is required")
 	}
@@ -566,7 +582,17 @@ func (s *Service) ConnectAPIKey(
 		return Connection{}, fmt.Errorf("provider %q does not support api-key auth", providerKey)
 	}
 
-	tokens, account, err := authProvider.ConnectWithAPIKey(ctx, apiKey)
+	var tokens TokenSet
+	var account ProviderAccount
+	var err error
+	if configured, ok := provider.(configuredAPIKeyAuthProvider); ok {
+		tokens, account, err = configured.ConnectWithAPIKeyConfig(ctx, apiKey, connectionConfig)
+	} else {
+		if len(connectionConfig) > 0 {
+			return Connection{}, fmt.Errorf("provider %q does not accept connection configuration", providerKey)
+		}
+		tokens, account, err = authProvider.ConnectWithAPIKey(ctx, apiKey)
+	}
 	if err != nil {
 		return Connection{}, err
 	}
@@ -1554,7 +1580,19 @@ func (s *Service) exportLocalPlays(
 	if err := s.repo.UpsertHistoryExports(ctx, exports); err != nil {
 		return err
 	}
-	pending, err := s.repo.ListPendingHistoryExports(ctx, conn.ID, 100)
+	historyIDs := make([]string, 0, len(exports))
+	for _, export := range exports {
+		historyIDs = append(historyIDs, export.HistoryID)
+	}
+	// A live watch event must not wait behind a connection's historical
+	// backlog. Scheduled sync still drains that backlog oldest-first, while
+	// this path selects only the events the user just created.
+	pending, err := s.repo.ListPendingHistoryExportsByHistoryIDs(
+		ctx,
+		conn.ID,
+		historyIDs,
+		watchedExportBatchSize(exporter, len(historyIDs)),
+	)
 	if err != nil {
 		return err
 	}
@@ -1647,18 +1685,23 @@ func (s *Service) persistConnectionError(ctx context.Context, conn Connection, m
 }
 
 func limitWatchedExportBatch(exporter WatchedExporter, plays []LocalPlay) ([]LocalPlay, bool) {
-	bounded, ok := exporter.(singleBatchWatchedExporter)
+	_, ok := exporter.(singleBatchWatchedExporter)
 	if !ok {
 		return plays, false
 	}
-	limit := bounded.ExportBatchSize()
-	if limit <= 0 {
-		limit = 1
-	}
+	limit := watchedExportBatchSize(exporter, len(plays))
 	if len(plays) > limit {
 		plays = plays[:limit]
 	}
 	return plays, true
+}
+
+func watchedExportBatchSize(exporter WatchedExporter, fallback int) int {
+	bounded, ok := exporter.(singleBatchWatchedExporter)
+	if !ok {
+		return max(1, fallback)
+	}
+	return max(1, bounded.ExportBatchSize())
 }
 
 func reconcileHistoryExports(connectionID string, local []LocalPlay, remote []RemotePlay) []HistoryExport {

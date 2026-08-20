@@ -13,7 +13,7 @@ interface UseSettingsFormOptions {
 
 export function useSettingsForm({ keys }: UseSettingsFormOptions) {
   const { data: settings, isLoading } = useAdminServerSettings();
-  const { data: sensitiveData } = useAdminSensitiveStatus();
+  const { data: sensitiveData, isError: sensitiveStatusError } = useAdminSensitiveStatus();
   const updateSettings = useUpdateServerSettings();
 
   const [localValues, setLocalValues] = useState<Record<string, string>>({});
@@ -159,6 +159,8 @@ export function useSettingsForm({ keys }: UseSettingsFormOptions) {
     restartRequired,
     sensitiveConfigured,
     sensitiveManagedByEnv,
+    sensitiveStatusReady: sensitiveData != null,
+    sensitiveStatusError,
     buildConnectionCheckRequest,
   };
 }

@@ -1,28 +1,25 @@
 # Developing Silo
 
-This document covers building, running, and contributing to the Silo server. If
-you just want to run Silo, see the [README](README.md).
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution expectations, pull
-request guidance, and the policy for AI-assisted submissions.
+How to build, run, and test the Silo server from source. To run Silo without
+building it, see the [README](README.md). Contribution rules and the
+pre-submission gate are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Prerequisites
 
-- **Git**, **Make**, and **OpenSSL**
-- **Docker Engine** or **Docker Desktop** with Docker Compose 2.24+ (local services and testcontainers)
-- **Go** 1.26.4+
-- **Node.js** 22+ with **pnpm** 10.32.1
-- **PostgreSQL** 18 with pgvector
-- **Redis**
-- **FFmpeg** (for transcoding support)
-- A **C compiler and build toolchain** (for CGO dependencies)
-- **pkg-config** and the **libvips development headers** (for image processing through bimg)
+- Git, Make, and OpenSSL
+- Docker Engine or Docker Desktop with Docker Compose 2.24+ (local services and testcontainers)
+- Go 1.26.4+
+- Node.js 22+ with pnpm 10.32.1
+- PostgreSQL 18 with pgvector
+- Redis
+- FFmpeg (transcoding)
+- A C compiler and build toolchain (CGO dependencies)
+- pkg-config and the libvips development headers (image processing through bimg)
 
-## Local Development
+## Local development
 
-Local development remains intentionally separate from the deploy-oriented
-Compose setup. Use [docker-compose.yml](docker-compose.yml) for local services
-and the source-build workflow below.
+Source builds use [docker-compose.yml](docker-compose.yml) only for PostgreSQL
+and Redis; the deploy-oriented stack in the README is separate.
 
 ```sh
 # Create the local bootstrap configuration
@@ -43,46 +40,54 @@ cd ..
 make embed-stub
 ```
 
-Run the backend and frontend in separate terminals. Start the backend first:
+Run the backend and frontend in separate terminals, backend first:
 
 ```sh
 make dev-backend
 ```
 
-Then start the frontend dev server with its proxy pointed at the source backend:
+The source-built backend listens on `:8080`, while the Vite proxy defaults to
+the Compose port `8090`. Point it at the source backend in `web/.env.local`:
 
-```sh
-VITE_API_PROXY_TARGET=http://localhost:8080 make dev-frontend
+```dotenv
+VITE_API_PROXY_TARGET=http://localhost:8080
 ```
 
-The template supplies a non-empty `MEDIA_ROOT` because Compose validates the whole file even when
-you start only PostgreSQL and Redis. Change it before testing libraries against real media.
+Then:
 
-If you are developing `Silo` and `silo-plugin-sdk` together, use an untracked local `go.work`
-workspace. `go.work` and `go.work.sum` are intentionally ignored and are developer conveniences
-only. CI uses a clean checkout that does not contain them, and release builds explicitly set
-`GOWORK=off`. Any new SDK helper used here must be pushed and tagged in `silo-plugin-sdk` before
-this repository can merge or release the change.
+```sh
+make dev-frontend
+```
 
-Plugin authors should start with the `silo-plugin-sdk` repository, usually
-checked out beside this one. It owns the RPC plugin package format, protobuf
-contracts, generated plugin API, SDK import paths, and manifest helpers.
+`.env.example` ships a non-empty `MEDIA_ROOT` because Compose validates the
+whole file even when you only start PostgreSQL and Redis. Change it before
+testing libraries against real media.
 
-## Build and Run from Source
+### Working on the plugin SDK at the same time
 
-After creating `.env` and starting PostgreSQL and Redis as described above,
-build the production frontend and Go binary:
+If a change spans Silo and `silo-plugin-sdk`, use an untracked local `go.work`
+workspace. `go.work` and `go.work.sum` are gitignored developer conveniences: CI
+runs from a clean checkout without them, and release builds set `GOWORK=off`.
+Any SDK package or symbol this repository uses must therefore be pushed and
+tagged in `silo-plugin-sdk` before the change here can merge.
+
+Plugin authors should start in the `silo-plugin-sdk` repository, usually checked
+out beside this one. It owns the plugin package format, protobuf contracts,
+generated plugin API, import paths, and manifest helpers.
+
+## Build and run from source
+
+With `.env` created and PostgreSQL and Redis running:
 
 ```sh
 make build
 ./silo
 ```
 
-The source-built server listens at <http://localhost:8080> by default. Complete
-onboarding and manage the remaining application settings through the web
-interface.
+The server listens at <http://localhost:8080>. Complete onboarding and manage
+the remaining settings in the web interface.
 
-## Make Targets
+## Make targets
 
 | Target | Description |
 |---|---|
@@ -98,60 +103,44 @@ interface.
 | `make migrate-up` | Apply pending Goose migrations using Silo's bootstrapping runner |
 | `make clean` | Remove build artifacts |
 
-## Database Migrations
+## Database migrations
 
-PostgreSQL schema migrations are managed by Goose. Migration SQL files live in
-`migrations/sql/` and use Goose annotations. Converted legacy migrations keep
-their original numeric versions so existing `schema_versions` rows can bootstrap
-cleanly into Goose without replaying old SQL. New migrations should be created
-with timestamped filenames:
+Goose manages the PostgreSQL schema. Migration SQL lives in `migrations/sql/`
+with Goose annotations. Create new migrations with timestamped filenames:
 
 ```sh
 make migrate-create NAME=add_thing
 make migrate-validate
 ```
 
-Do not run `goose fix`; timestamped migrations are the repository policy because
-they avoid version collisions across parallel PRs. The existing `001`-style
-files are historical compatibility records, not the naming pattern for new work.
-Runtime migrations are applied by the integrated/API server only. Proxy and
-transcode modes never mutate schema.
+Never run `goose fix`. Timestamped names avoid version collisions across
+parallel PRs; the `001`-style files are converted legacy migrations that keep
+their original numbers so existing `schema_versions` rows bootstrap into Goose
+without replaying old SQL. Do not renumber them.
+
+Only the integrated/API server applies migrations at runtime. Proxy and
+transcode modes never touch the schema.
+
 For existing installs, use `make migrate-status` and `make migrate-up` rather
-than invoking the Goose CLI directly; those targets copy legacy
-`schema_versions` rows into `public.goose_db_version` under the migration lock
-before reading or applying migrations. Set `ENV_FILE=path/to/.env` when the
-database URL should be read from a non-default env file.
+than the Goose CLI: those targets copy legacy `schema_versions` rows into
+`public.goose_db_version` under the migration lock before reading or applying
+anything. Set `ENV_FILE=path/to/.env` to read the database URL from a different
+env file.
 
-## Running Tests
+## Tests and lint
 
-```sh
-# Go tests (uses testcontainers — Docker must be running)
-make test-go
-
-# Frontend tests (uses the repository's current known-failure exclusions)
-make test-web
-```
-
-## Linting
+While iterating:
 
 ```sh
-# Go formatting and vet
-make embed-stub
-gofmt -l .
-go vet ./...
-
-# Frontend
-cd web
-pnpm run lint
-pnpm run format:check
-cd ..
+go test ./internal/<package>/...                 # needs Docker for testcontainers
+cd web && pnpm exec vitest run path/to/test.tsx
 ```
 
-`gofmt -l .` must produce no output. Full-tree `golangci-lint` currently reports inherited
-findings; pull-request CI runs it against changed lines from the target branch. See
-[CONTRIBUTING.md](CONTRIBUTING.md#validate-your-change) for the complete pre-submission gate.
+The full pre-submission gate (build, format, vet, lint, both test suites, and
+the verify targets) is listed once, in
+[CONTRIBUTING.md](CONTRIBUTING.md#validate-your-change).
 
-## Project Structure
+## Project structure
 
 ```
 cmd/silo/       Entry point

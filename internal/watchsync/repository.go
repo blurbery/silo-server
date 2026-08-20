@@ -34,6 +34,7 @@ type Repository interface {
 	ListListEventConnections(ctx context.Context, userID int, profileID string, list ListKind) ([]Connection, error)
 	UpsertHistoryExports(ctx context.Context, exports []HistoryExport) error
 	ListPendingHistoryExports(ctx context.Context, connectionID string, limit int) ([]HistoryExport, error)
+	ListPendingHistoryExportsByHistoryIDs(ctx context.Context, connectionID string, historyIDs []string, limit int) ([]HistoryExport, error)
 	MarkHistoryExportStatus(ctx context.Context, id string, status string, lastError string) error
 	MarkHistoryExportSatisfiedByScrobble(ctx context.Context, connectionID string, historyID string) error
 	UpsertListItemStates(ctx context.Context, states []ListItemState) error
@@ -761,6 +762,60 @@ func (r *PostgresRepository) ListPendingHistoryExports(ctx context.Context, conn
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate pending history exports: %w", err)
+	}
+	return exports, nil
+}
+
+func (r *PostgresRepository) ListPendingHistoryExportsByHistoryIDs(
+	ctx context.Context,
+	connectionID string,
+	historyIDs []string,
+	limit int,
+) ([]HistoryExport, error) {
+	if len(historyIDs) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 || limit > len(historyIDs) {
+		limit = len(historyIDs)
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT id::text, connection_id::text, history_id, media_item_id, watched_at,
+			provider_item_key, status, attempt_count, last_attempt_at, last_error, created_at, updated_at
+		FROM watch_provider_history_exports
+		WHERE connection_id = $1::uuid
+		  AND history_id = ANY($2::text[])
+		  AND status IN ('pending', 'failed')
+		  AND attempt_count < 5
+		ORDER BY watched_at ASC
+		LIMIT $3
+	`, connectionID, historyIDs, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list pending history exports by history ids: %w", err)
+	}
+	defer rows.Close()
+	var exports []HistoryExport
+	for rows.Next() {
+		var export HistoryExport
+		if err := rows.Scan(
+			&export.ID,
+			&export.ConnectionID,
+			&export.HistoryID,
+			&export.MediaItemID,
+			&export.WatchedAt,
+			&export.ProviderItemKey,
+			&export.Status,
+			&export.AttemptCount,
+			&export.LastAttemptAt,
+			&export.LastError,
+			&export.CreatedAt,
+			&export.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan pending history export by history ids: %w", err)
+		}
+		exports = append(exports, export)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending history exports by history ids: %w", err)
 	}
 	return exports, nil
 }

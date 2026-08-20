@@ -19,15 +19,15 @@ related:
 # Deploy Silo with Docker
 
 Docker Compose is the recommended way to run Silo. The repository's default
-stack is designed for a new single-host installation and includes:
+stack targets a new single-host installation and includes:
 
 - Silo in `integrated` mode
 - PostgreSQL 18 with pgvector
 - Redis
 - FFmpeg and the Silo web application in the Silo image
 
-Start with this layout unless you already operate the supporting services or
-need dedicated delivery nodes.
+Start here unless you already run PostgreSQL and Redis elsewhere or need
+dedicated delivery nodes.
 
 ```mermaid
 flowchart LR
@@ -50,7 +50,7 @@ and container runtime support.
 
 ## Initial configuration
 
-Clone the repository and create `.env` from the maintained example:
+Clone the repository and create `.env` from the example:
 
 ```sh
 git clone https://github.com/Silo-Server/silo-server.git
@@ -73,17 +73,16 @@ Then start the stack:
 docker compose up -d
 ```
 
-Open <http://localhost:8090> and complete onboarding. The default Compose stack
-wires the PostgreSQL and Redis connections; libraries, users, providers,
-storage, search, and playback settings are managed through the admin interface.
+Open <http://localhost:8090> and complete onboarding. The Compose stack wires
+the PostgreSQL and Redis connections; everything else (libraries, users,
+providers, storage, search, playback) is configured in the admin interface.
 
 > [!CAUTION]
 > `SECRET_KEY` is the master key for encrypted server-owned credentials. Keep it
 > secret and back it up separately from database dumps. Losing it makes stored
 > integration and storage credentials unrecoverable.
 
-The encryption design is documented in
-[Secret encryption at rest](../../architecture/secret-encryption.md).
+Design notes: [Secret encryption at rest](../../architecture/secret-encryption.md).
 
 ## Container image selection
 
@@ -97,9 +96,8 @@ Use `SILO_IMAGE` to select an image:
 SILO_IMAGE=ghcr.io/silo-server/silo-server:build-N
 ```
 
-Use a commit-SHA tag or digest when a deployment or rollback target must be
-immutable. See [Release versioning](../../release-versioning.md) for the full
-tag contract.
+Use a commit-SHA tag or digest when a deployment or rollback target must not
+move. [Release versioning](../../release-versioning.md) defines each tag.
 
 ## Storage and state
 
@@ -116,7 +114,7 @@ volumes. `SILO_DATA_ROOT` defaults to `/opt/silo` and contains:
 | `/opt/silo/catalog-seeds` | Read-only catalog seed data |
 | `/opt/silo/meilisearch` | Optional Meilisearch index |
 
-Override the base path when required:
+To use a different base path:
 
 ```dotenv
 SILO_DATA_ROOT=/srv/silo
@@ -146,8 +144,8 @@ Validate the merged Compose configuration before recreating the container.
 
 ### Published ports
 
-Change host-side port variables in `.env` when a default conflicts with another
-service. The container listeners remain fixed.
+Change the host-side port variables in `.env` when a default conflicts with
+another service. The container listeners are fixed.
 
 | Variable | Default | Purpose |
 | --- | ---: | --- |
@@ -156,6 +154,11 @@ service. The container listeners remain fixed.
 | `ABS_PORT` | `13378` | Audiobookshelf compatibility listener |
 | `PROXY_PORT` | `8083` | Commented standalone proxy example |
 | `TRANSCODE_PORT` | `8082` | Commented standalone transcode example |
+
+The Jellyfin/Emby and Audiobookshelf listeners are enabled by default, so
+`8096` and `13378` accept connections from the first start. Turn them off in
+**Admin > Settings** (`jellyfin_compat.enabled`, `audiobookshelf_compat.enabled`)
+if you do not use compatible clients.
 
 > [!WARNING]
 > The application and compatibility port mappings listen on all host interfaces
@@ -166,7 +169,7 @@ service. The container listeners remain fixed.
 
 ## Hardware acceleration
 
-The default stack is CPU-only so it can start on hosts without GPU devices.
+The default stack is CPU-only so it starts on hosts without a GPU.
 
 ### Intel or AMD VA-API and Intel Quick Sync
 
@@ -179,7 +182,7 @@ docker compose \
   up -d
 ```
 
-To use the overlay for future Compose commands, set:
+To make the overlay the default for this installation:
 
 ```dotenv
 COMPOSE_FILE=docker-compose.yml:docker-compose.vaapi.yml
@@ -208,8 +211,8 @@ Windows uses `;` instead of `:` between entries in `COMPOSE_FILE`.
 
 ## Optional Meilisearch
 
-PostgreSQL full-text search works without an additional service. To make
-Meilisearch available as an optional provider:
+PostgreSQL full-text search needs no extra service. To offer Meilisearch as an
+alternative provider:
 
 1. Generate a key and add it to `.env`:
 
@@ -242,8 +245,8 @@ Silo continues to use PostgreSQL full-text search until Meilisearch is selected.
 > dependencies on both services. Setting `DATABASE_URL` or `REDIS_URL` only in
 > `.env` does not replace that wiring.
 
-To use existing infrastructure, create a custom Compose definition or a tested
-override that does all of the following:
+To use existing infrastructure, write a Compose definition or override that
+does all of the following:
 
 - supplies the external `DATABASE_URL` and `REDIS_URL` to the Silo service
 - removes or replaces the bundled-service dependencies
@@ -257,10 +260,9 @@ Validate the merged configuration before starting it:
 docker compose -f docker-compose.yml -f your-override.yml config --quiet
 ```
 
-For a serious deployment, isolating PostgreSQL on a dedicated VM or managed
-service can simplify database upgrades, tuning, and backups. Redis can remain
-local for many installations or move to shared infrastructure when that is
-already available.
+Running PostgreSQL on a dedicated VM or managed service simplifies upgrades,
+tuning, and backups. Redis can stay local or move to shared infrastructure if
+you already have it.
 
 ## Server roles and distributed deployments
 
@@ -271,9 +273,8 @@ already available.
 | `proxy` | Dedicated stream and source-download delivery node. |
 | `transcode` | Dedicated HLS and prepared-download worker. |
 
-The main Compose file contains commented proxy and transcode examples. Most
-single-host installations should leave them disabled because `integrated`
-already includes proxying and transcoding.
+The main Compose file contains commented proxy and transcode examples. Leave
+them disabled on a single host; `integrated` already proxies and transcodes.
 
 For a distributed deployment:
 
@@ -284,18 +285,16 @@ For a distributed deployment:
   that can prepare downloads
 - restart a role after changing its artifact path
 
-Prepared downloads can run on transcode nodes. A selected node keeps the result
-on node-local storage and exposes it through Silo's authenticated internal
-artifact API; the paired proxy relays the bytes, so the nodes do not require a
-shared artifact mount. Dedicated transcode nodes default to a protected
-directory inside the transcode volume selected at process startup.
-`download.artifact_dir` overrides that location for dedicated transcode nodes
-and the integrated/API-local fallback; mount the configured path anywhere that
-can prepare downloads. Server-wide or per-user bandwidth-limited downloads
-stay API-local so aggregate limits remain exact.
+Prepared downloads can run on transcode nodes. The node keeps the result on
+its own disk and serves it through Silo's authenticated artifact API, so nodes
+need no shared artifact mount. Dedicated transcode nodes default to a protected
+directory inside the transcode volume; `download.artifact_dir` overrides that
+for transcode nodes and for the integrated/API fallback. Whatever path you
+configure must be mounted on every process that can prepare downloads.
 
-The client-facing delivery contract, including capability discovery and proxy
-routes, is documented in the [Downloads API](../../downloads-api.md).
+Downloads with a server-wide or per-user bandwidth limit are always served by
+the API server, so the limits stay exact regardless of topology. The
+client-facing contract is in the [Downloads API](../../downloads-api.md#411-distributed-proxy-delivery).
 
 ## PostgreSQL auto-tuning
 
@@ -312,10 +311,14 @@ POSTGRES_TUNE: auto
 > if PostgreSQL settings are managed elsewhere.
 
 Reloadable settings are applied with `pg_reload_conf()`. Restart-only settings
-are written and logged by name; apply them by restarting PostgreSQL once:
+are written to `postgresql.auto.conf` and logged by name on every Silo start
+until PostgreSQL has been restarted. Silo is already serving when that warning
+appears, and restarting only PostgreSQL drops every open Silo connection, so
+restart both during a quiet window (or once, right after first boot, before
+adding libraries):
 
 ```sh
-docker compose restart postgres
+docker compose restart postgres silo
 ```
 
 The bundled database user has the required permissions. For an external
@@ -351,47 +354,64 @@ default. Database-size classification uses
 | `POSTGRES_SHM_SIZE` | `8gb` | Docker `/dev/shm` size for bundled PostgreSQL. |
 
 Turning auto-tuning off does not remove settings already written to
-`postgresql.auto.conf`. Reset those PostgreSQL parameters if the deployment
-later moves fully to a custom configuration.
+`postgresql.auto.conf`. Reset them yourself if you later move to a fully custom
+configuration.
 
 ## Backups and updates
 
 Before an update:
 
-1. Pin or record the current image reference for rollback.
-2. Back up PostgreSQL and verify the backup can be read.
-3. Back up `.env`, especially `SECRET_KEY`, separately from the database.
-4. Preserve the effective Compose configuration and any custom overrides in a
-   restricted backup location.
-5. Review the incoming build or release for migration and compatibility notes.
+1. Record the image currently running (`docker compose images silo`) so you
+   can roll back to it. `latest` will not identify it later.
+2. Dump PostgreSQL and check the dump is readable:
 
-After selecting the intended `SILO_IMAGE`, update only the application service:
+   ```sh
+   docker compose exec -T postgres \
+     pg_dump -U "${POSTGRES_USER:-silo}" -Fc "${POSTGRES_DB:-silo}" > silo-$(date +%F).dump
+   pg_restore --list silo-$(date +%F).dump > /dev/null
+   ```
+
+   Do not copy `/opt/silo/postgres` while the container is running; a live
+   copy of the data directory is inconsistent and may not start. If you must
+   copy the directory, `docker compose stop postgres` first.
+3. Back up `.env`, especially `SECRET_KEY`, separately from the dump.
+4. Keep the effective Compose configuration and any overrides with the backup,
+   in a restricted location.
+5. Read the incoming build or release notes for migration and compatibility
+   changes.
+
+Set the intended `SILO_IMAGE`, then update only the application service:
 
 ```sh
 docker compose pull silo
 docker compose up -d --no-deps silo
+docker compose logs -f silo
 ```
 
-Silo applies pending database migrations during startup. Allow startup to
-finish before evaluating readiness or attempting another update.
-
-Use a build tag, commit-SHA tag, or digest when reproducible rollback matters.
-Do not assume that `latest` will continue to identify the image currently
-running on the host.
+Silo applies pending migrations during startup, under a database lock, before
+it opens its HTTP listener. The container healthcheck starts failing after
+about a minute, so a large migration can show `unhealthy` in `docker ps` while
+it is still working. Follow the logs until startup completes and do not
+restart the container during a migration: that abandons the run and can leave
+a lock-holding backend behind. Migrations time out after 20 minutes by default;
+raise `SILO_MIGRATE_TIMEOUT` (a Go duration such as `60m`, or `0` for no limit)
+for very large libraries.
 
 > [!WARNING]
-> Rolling back the Silo image does not reverse database migrations. Keep the
-> pre-update database backup and effective Compose configuration paired with the
-> previous image. Review every applied migration before deciding whether a
-> binary rollback is sufficient or a coordinated database restore is required;
-> restoring a database also discards writes made after the backup.
+> Rolling back the image does not reverse migrations. Check what was applied
+> with `docker compose run --rm silo --migrate-status`. For a reversible
+> migration, stop the stack and run
+> `docker compose run --rm silo --migrate-down-to <version>` before starting
+> the previous image; some migrations discard data on the way down, so read the
+> migration first. Restoring the pre-update dump is the fallback, and it
+> discards every write made after the dump.
 
-`docker compose config` can contain resolved database credentials and
-`SECRET_KEY`. Treat its output as a secret-bearing backup: restrict its file
-permissions, never paste it into issues or logs, and redact it before sharing.
+`docker compose config` output contains resolved database credentials and
+`SECRET_KEY`. Restrict its permissions, never paste it into issues or logs, and
+redact it before sharing.
 
-After an update, verify both endpoints on the configured host-side `PORT`.
-Replace `8090` below when `PORT` differs from the default:
+After an update, check both endpoints on the host-side `PORT` (replace `8090`
+if you changed it):
 
 ```sh
 curl -fsS http://localhost:8090/api/v1/health
@@ -403,11 +423,10 @@ including PostgreSQL and configured S3 storage.
 
 ## Migrating from Continuum
 
-Use the conservative preflight and cutover workflow in
-[Continuum to Silo Docker Migration](../../continuum-to-silo-docker-migration.md).
-Preserve the previous in-container media path when existing library records
-store that path, and do not remove the migration backup until scanning,
-metadata, users, plugins, and playback have been verified.
+Follow [Continuum to Silo Docker Migration](../../continuum-to-silo-docker-migration.md).
+Keep the old in-container media path if existing library records store it, and
+keep the migration backup until scanning, metadata, users, plugins, and
+playback have all been checked.
 
 ## Source References
 

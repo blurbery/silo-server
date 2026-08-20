@@ -79,10 +79,3 @@ body:
         - Fully AI-generated, human verified
     validations:
       required: true
-  - type: textarea
-    id: adversarial-review
-    attributes:
-      label: Adversarial review
-      description: Summarize independent/adversarial review findings and resolutions. Use "n/a" only when no AI or implementation change was involved.
-    validations:
-      required: true

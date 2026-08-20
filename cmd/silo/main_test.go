@@ -198,6 +198,66 @@ func (failingWatchSyncCapabilityStore) ListCapabilities(context.Context, int) ([
 	return nil, errors.New("database unavailable")
 }
 
+type staticWatchSyncCapabilityStore struct {
+	capabilities []*plugins.Capability
+}
+
+func (s staticWatchSyncCapabilityStore) ListEnabled(context.Context) ([]*plugins.Installation, error) {
+	return []*plugins.Installation{{ID: 4, Enabled: true, Kind: plugins.KindPlugin}}, nil
+}
+
+func (s staticWatchSyncCapabilityStore) ListCapabilities(context.Context, int) ([]*plugins.Capability, error) {
+	return s.capabilities, nil
+}
+
+func TestReloadWatchSyncPluginProvidersPreservesConnectionForm(t *testing.T) {
+	manifest := &pluginv1.PluginManifest{Capabilities: []*pluginv1.CapabilityDescriptor{{
+		Type: "watch_sync_provider.v1", Id: "floppy", DisplayName: "Floppy",
+		ConfigSchema: []*pluginv1.ConfigSchema{{
+			Key: "floppy", Title: "Your Floppy server", Required: true,
+			JsonSchema: `{"type":"object","properties":{"base_url":{"type":"string"}},"required":["base_url"]}`,
+			AdminForm: &pluginv1.AdminFormDescriptor{Fields: []*pluginv1.AdminFormField{{
+				Key: "base_url", Label: "Server URL", Required: true,
+				Control: pluginv1.AdminFormControl_ADMIN_FORM_CONTROL_TEXT,
+			}}},
+		}},
+		WatchSyncProvider: &pluginv1.WatchSyncProviderDescriptor{
+			AuthMethods: []pluginv1.WatchSyncAuthMethod{pluginv1.WatchSyncAuthMethod_WATCH_SYNC_AUTH_METHOD_API_KEY},
+		},
+	}}}
+	records, err := plugins.CapabilityRecordsFromManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilities := make([]*plugins.Capability, 0, len(records))
+	for i := range records {
+		record := records[i]
+		capabilities = append(capabilities, &record)
+	}
+
+	registry := watchsync.NewRegistry()
+	if err := reloadWatchSyncPluginProviders(
+		context.Background(), registry, staticWatchSyncCapabilityStore{capabilities: capabilities}, &plugins.Service{}, nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+	provider, ok := registry.Get("plugin:4:floppy")
+	if !ok {
+		t.Fatal("Floppy provider was not registered")
+	}
+	configurable, ok := provider.(interface {
+		ConnectionConfigSchema() []plugins.ConfigSchemaView
+	})
+	if !ok {
+		t.Fatal("Floppy provider does not expose connection configuration")
+	}
+	schemas := configurable.ConnectionConfigSchema()
+	if len(schemas) != 1 || schemas[0].AdminForm == nil || len(schemas[0].AdminForm.Fields) != 1 ||
+		schemas[0].AdminForm.Fields[0].Control != "TEXT" {
+		t.Fatalf("connection config schema = %#v", schemas)
+	}
+}
+
 func TestReloadWatchSyncPluginProvidersDropsStaleProvidersOnCapabilityReadFailure(t *testing.T) {
 	registry := watchsync.NewRegistry()
 	provider, err := watchsync.NewPluginProvider(watchsync.PluginProviderOptions{

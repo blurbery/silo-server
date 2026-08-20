@@ -5,11 +5,7 @@
 <h1 align="center">Silo</h1>
 
 <p align="center">
-  <strong>Your media. Your server. Your way.</strong>
-</p>
-
-<p align="center">
-  A modern, self-hosted media server for films, series, audiobooks, ebooks, podcasts, and manga.
+  A self-hosted media server for films, series, audiobooks, ebooks, podcasts, and manga.
 </p>
 
 <p align="center">
@@ -33,170 +29,107 @@
 ---
 
 > [!WARNING]
-> Silo is in active pre-release development. APIs, configuration, and database
-> migrations may change before the first stable release. Review the build history
-> and back up your deployment before updating.
+> Silo is pre-release. APIs, configuration, and database migrations may change
+> before the first stable release. Back up your deployment before updating.
 
-## A media server built around ownership
-
-Silo keeps your media, metadata, and household experience under your control.
-Run it on one host, reach it at home or away, and choose how each device receives
-the best version of your media.
+## What Silo does
 
 <table>
   <tr>
     <td width="33%" valign="top">
       <strong>Play</strong><br><br>
-      Direct play when possible, remux when needed, or transcode automatically,
-      with hardware acceleration including VA-API, Quick Sync, and NVENC.
+      Direct play when possible, remux when needed, transcode otherwise, with
+      VA-API, Quick Sync, and NVENC hardware acceleration.
     </td>
     <td width="33%" valign="top">
       <strong>Organize</strong><br><br>
-      Bring films, series, audiobooks, ebooks, podcasts, and manga into one
-      catalog, with plugin-driven matching and providers such as TMDB and TVDB
-      where supported.
+      One catalog for films, series, audiobooks, ebooks, podcasts, and manga,
+      matched through metadata plugins such as TMDB and TVDB.
     </td>
     <td width="33%" valign="top">
       <strong>Connect</strong><br><br>
-      Use the included web app or Silo's Jellyfin/Emby compatibility surface
-      with clients such as <a href="https://vidhub.okaapps.com/what-does-vidhub-do/">VidHub</a>,
+      Use the included web app, or the Jellyfin/Emby-compatible API with clients
+      such as <a href="https://vidhub.okaapps.com/what-does-vidhub-do/">VidHub</a>,
       <a href="https://github.com/jarnedemeulemeester/findroid">Findroid</a>, and
-      <a href="https://support.firecore.com/hc/en-us/articles/360006462093-Streaming-from-Plex-Emby-and-Jellyfin">Infuse</a>.
-      Client coverage varies.
+      <a href="https://firecore.com/infuse">Infuse</a>. Client coverage varies.
     </td>
   </tr>
   <tr>
     <td width="33%" valign="top">
       <strong>Share</strong><br><br>
-      Give household members their own profiles, watch state, library access,
-      and parental controls.
+      Household profiles with their own watch state, library access, and
+      parental controls.
     </td>
     <td width="33%" valign="top">
       <strong>Manage</strong><br><br>
-      Configure libraries, users, providers, storage, search, and playback from
-      a dedicated administration interface.
+      Libraries, users, providers, storage, search, and playback are configured
+      in the admin interface, not in config files.
     </td>
     <td width="33%" valign="top">
       <strong>Scale</strong><br><br>
-      Start with one integrated server, then separate proxy and transcode roles
-      across shared PostgreSQL and Redis infrastructure when needed.
+      Start with one integrated server; split proxy and transcode roles across
+      shared PostgreSQL and Redis when you need to.
     </td>
   </tr>
 </table>
 
 ## Quick start
 
-The recommended installation uses Docker Compose 2.24 or newer. The default
-stack includes Silo, PostgreSQL with pgvector, Redis, and FFmpeg.
+Requires Docker Compose 2.24 or newer. The default stack runs Silo, PostgreSQL
+with pgvector, and Redis.
 
-1. **Clone the repository and create your configuration.**
+```sh
+git clone https://github.com/Silo-Server/silo-server.git
+cd silo-server
+cp .env.example .env
+chmod 600 .env
+printf '\nPOSTGRES_PASSWORD=%s\nSECRET_KEY=%s\n' \
+  "$(openssl rand -hex 24)" "$(openssl rand -base64 48)" >> .env
+```
 
-   ```sh
-   git clone https://github.com/Silo-Server/silo-server.git
-   cd silo-server
-   cp .env.example .env
-   chmod 600 .env
-   printf '\nPOSTGRES_PASSWORD=%s\nSECRET_KEY=%s\n' \
-     "$(openssl rand -hex 24)" "$(openssl rand -base64 48)" >> .env
-   ```
+Set `MEDIA_ROOT` in `.env` to the absolute path of your media, then:
 
-2. **Set the host path to your media.**
+```sh
+docker compose up -d
+```
 
-   Edit `.env` and replace `MEDIA_ROOT` with an absolute path:
+Open <http://localhost:8090> and complete onboarding.
 
-   ```dotenv
-   MEDIA_ROOT=/path/to/your/media
-   ```
-
-3. **Start Silo.**
-
-   ```sh
-   docker compose up -d
-   ```
-
-4. **Open the web app.**
-
-   Visit <http://localhost:8090>, complete onboarding, then add libraries,
-   users, metadata providers, and playback settings from the admin interface.
-
-> [!CAUTION]
-> Keep `SECRET_KEY` secret and back it up separately from PostgreSQL. Silo uses
-> it to encrypt stored credentials; losing it makes those credentials
-> unrecoverable.
-
-The default deployment is CPU-only and stores application data under
-`/opt/silo`. The [Docker deployment guide](docs/wiki/deployment/docker.md)
-covers custom storage paths, VA-API/Quick Sync, NVIDIA NVENC, Meilisearch,
-external PostgreSQL and Redis, distributed roles, backups, and PostgreSQL
-auto-tuning.
-
-Migrating an existing Continuum installation? Follow the
-[Continuum-to-Silo cutover guide](docs/continuum-to-silo-docker-migration.md).
+The [Docker deployment guide](docs/wiki/deployment/docker.md) covers the
+`SECRET_KEY` backup requirement, storage paths, GPU acceleration, Meilisearch,
+external PostgreSQL and Redis, distributed roles, PostgreSQL tuning, backups,
+and updates. Migrating from Continuum? Use the
+[cutover guide](docs/continuum-to-silo-docker-migration.md).
 
 ## Builds and releases
 
-> [!IMPORTANT]
-> Until Silo's first release is selected and published, default-branch
-> containers are identified by an ordered `build-N` and their commit SHA.
-> Build numbers make published images comparable; they are not release versions.
-
-Silo's release contract follows [Semantic Versioning](https://semver.org/) with
-prerelease and build metadata support. The
-[release versioning guide](docs/release-versioning.md) explains the source of
-truth and the meaning of each container tag:
-
-| Image reference | Use |
-| --- | --- |
-| `build-N` | Select an ordered published build. |
-| Short commit SHA | Select the image built from an exact source revision. |
-| Image digest | Pin an immutable deployment or rollback target. |
-| `latest` | Follow the newest successful default-branch publication. |
-
-Review configuration, compatibility, and migration impact before every update.
+Until the first release, default-branch images carry an ordered `build-N` tag
+and a short commit SHA alongside `latest`. Build numbers order published images;
+they are not release versions. [Release versioning](docs/release-versioning.md)
+defines each tag and the SemVer contract.
 
 ## Documentation
 
-| Start here | What it covers |
-| --- | --- |
-| [Documentation index](docs/wiki/index.md) | User and operator guides currently available in the repository. |
-| [Docker deployment](docs/wiki/deployment/docker.md) | Storage, acceleration, search, topology, external services, tuning, and updates. |
-| [Media naming](docs/wiki/admin/media-folder-and-naming.md) | Supported library folder structures and filenames. |
-| [Development guide](DEVELOPMENT.md) | Source setup, builds, tests, migrations, and repository structure. |
-| [Settings API](docs/settings-api.md) | Client settings contracts, contextual scopes, and effective reads. |
-| [Downloads API](docs/downloads-api.md) | Offline sync, download delivery, and distributed client behavior. |
-| [Release versioning](docs/release-versioning.md) | SemVer, container identifiers, release notes, and publishing. |
+- [Documentation index](docs/wiki/index.md) — user and operator guides
+- [Development guide](DEVELOPMENT.md) — source setup, builds, tests, migrations
+- [Settings API](docs/settings-api.md) and [Downloads API](docs/downloads-api.md) — client contracts
 
 ## Community and contributions
 
-Questions and project discussion are welcome in the
-[Silo Discord community](https://discord.com/invite/4RxuUQAEnW).
+Questions and discussion: [Discord](https://discord.com/invite/4RxuUQAEnW).
+Bugs, install problems, and performance issues: the
+[GitHub issue forms](https://github.com/Silo-Server/silo-server/issues/new/choose),
+which ask for reproduction steps and raw logs.
 
-For a bug, installation problem, or performance issue, use the
-[GitHub issue forms](https://github.com/Silo-Server/silo-server/issues/new/choose)
-and include the workflow you followed, exact reproduction steps, expected and
-actual behavior, the affected version/build, deployment details, and raw logs
-where relevant.
-
-Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before
-starting, and use [DEVELOPMENT.md](DEVELOPMENT.md) for the local workflow.
-Non-trivial features, API changes, migrations, behavior changes, and refactors
-should be coordinated in an issue before implementation.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Features,
+API changes, migrations, and behavior changes should start as an issue.
 
 ## Supporting Silo
 
-Silo is a free and open-source project developed in spare time and funded out of
-pocket. It will remain free and open source.
-[GitHub Sponsors](https://github.com/sponsors/quick104) helps cover AI-assisted
-development tooling, including Claude and Codex, push-notification relay
-infrastructure, and future project costs.
-
-Sponsoring is optional. Bug reports, contributions, documentation, and feedback
-are equally valuable ways to support the project.
-
-<p align="center">
-  <a href="https://github.com/sponsors/quick104"><strong>Sponsor Silo</strong></a>
-  · <a href="https://discord.com/invite/4RxuUQAEnW"><strong>Join the community</strong></a>
-</p>
+Silo is developed in spare time and funded out of pocket, and will stay free and
+open source. [GitHub Sponsors](https://github.com/sponsors/quick104) covers AI
+development tooling (Claude, Codex), push-notification relay infrastructure, and
+future project costs. Bug reports, code, and documentation help just as much.
 
 ## License and trademarks
 

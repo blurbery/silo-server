@@ -150,20 +150,11 @@ reason in its own source, not an entry in a Makefile variable. `make test-web` s
 files in `WEBTEST_KNOWN_FAILURES`, which predate the CI gate; that list may only shrink — delete an
 entry together with its fix, and never add to it to make a new change pass.
 
-Before opening a merge request:
-
-```bash
-make lint
-make test
-cd web && pnpm run lint && pnpm run format:check
-make verify-local-paths
-```
-
-`.github/workflows/ci.yml` runs these on every pull request, with one difference worth knowing:
-`make lint` runs `golangci-lint` over the whole tree, while CI runs it with `--new-from-merge-base`
-so only the lines a branch touched have to be clean. The repo does not pass a full run today, so
-expect local output to include findings that are not yours and that CI will not fail on. Do not add
-to them.
+Before opening a pull request, run the full gate listed once in
+[CONTRIBUTING.md](CONTRIBUTING.md#validate-your-change). Note that `make lint` runs
+`golangci-lint` over the whole tree while CI runs it with `--new-from-merge-base`, so only the
+lines a branch touched have to be clean. The repo does not pass a full run today; expect local
+output to include findings that are not yours and that CI will not fail on. Do not add to them.
 
 Go stays `gofmt`/`goimports` clean; the frontend follows `web/.prettierrc`.
 
@@ -203,7 +194,8 @@ Design new endpoints today so they can live under that regime tomorrow.
 Conventional Commit subjects (`feat(playback): add realtime session hub`). One concern per PR.
 Explain the problem, why this approach, the linked issue/spec/plan, and risks or follow-up work.
 Include screenshots or recordings for UI changes. Link the capability epic or sub-issue the PR
-serves (`Part of #NNN`) — PRs with no linked scope item get questioned at review. For non-trivial
+serves (`Related issue: #NNN`); write `Related issue: N/A — narrow fix` only when no prior
+coordination was needed, otherwise an unlinked PR gets questioned at review. For non-trivial
 work, open an issue or discussion first; this codebase moves quickly.
 
 AI-use disclosure is required in the PR body. If you are an AI agent contributing on behalf of a

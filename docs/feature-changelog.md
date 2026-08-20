@@ -1,6 +1,43 @@
 # Feature Changelog
 
+## 2026-08-20
+
+### Make featured heroes read like editorial summaries
+Home and Library Recommended now present concise title metadata without taking technical quality details away from movie and episode pages.
+- Prefers catalog runtime over progress duration and safely omits invalid or unavailable values.
+- Orders movie and series metadata as year, runtime, IMDb rating, up to two normalized genres, and content rating.
+- Gives episode heroes their own season/episode, runtime, and content-rating presentation.
+- Keeps resolution, HDR, and audio-quality badges on movie and episode detail heroes.
+
+### Give each profile its own watch-provider server
+Plugin watch providers can now ask for connection details per profile instead of forcing every profile on a Silo server to share one installation-wide configuration.
+- Lets a self-hosted provider give each household member their own server URL and credentials.
+- Renders the provider's own setup fields beside the API key on the profile's watch-provider screen, so connecting stays a single step.
+- Encrypts every field the provider declares as a secret and keeps submitted setup data out of admin-facing plugin configuration.
+- Prefers a profile's own values over installation-wide values of the same name, so existing connections keep working until they are reconnected.
+
+### Serve downloads from proxy nodes
+Download delivery can now be spread across proxy and transcode nodes instead of always flowing through the API server.
+- Adds `proxy_delivery` to the download capability response and the opt-in `/downloads/{id}/file-proxy` and `/direct-download-proxy` routes, which redirect to an eligible proxy node per request and serve bytes directly otherwise.
+- Prepared downloads can run on transcode nodes; the result stays on that node and is relayed through the authenticated artifact API, so nodes need no shared mount.
+- Bandwidth-limited downloads stay on the API server so server-wide and per-user limits remain exact.
+- The existing `/file` and `/direct-download` routes are unchanged.
+
 ## 2026-08-19
+
+### Scope API keys to the admin routes they need
+`sa_` API keys can carry scopes. A key without scopes behaves exactly as before — full access as its owning user — while a scoped key is an allowlist credential admitted only to the routes its scopes name. Scopes narrow, they never grant: the owning user's role checks still apply afterwards.
+- Two scopes ship: `admin:users` (user lifecycle plus reading a user's profiles) and `admin:access-groups:read`. Impersonation is outside both.
+- A scoped `admin:users` key cannot escalate: it may not create or promote an `admin` account and may not set a password on an existing admin, so a leaked key cannot mint an unscoped login.
+- `POST /api/v1/api-keys` and `POST /api/v1/admin/api-keys` accept `scopes`; `GET /api/v1/api-keys/scopes` advertises the supported scopes for feature detection. Jellyfin-compat surfaces refuse scoped keys.
+
+### Per-user policy overrides inherit from the access group
+User policy fields stop being "strictest of user and group wins" and become inherit/override: a field left unset on the account takes the access group's value, and a field set on the account is authoritative in either direction — an admin can grant downloads to one member of a no-downloads plan, or cap one member of an unlimited plan.
+- Makes every user policy field nullable (`max_streams`, `max_transcodes`, `max_playback_quality`, `transcode_allowed`, `audio_transcode_allowed`, `download_allowed`, `download_transcode_allowed`, `library_ids`, plus a new `requests_allowed`); `null` means inherit. `0` on a stream or transcode cap now means an explicit "unlimited" override instead of "defer to the group".
+- Adds `transcode_allowed` and `audio_transcode_allowed` to access groups so every account field has a group value to inherit, and lets users override the group's media-request gate.
+- Admin user API: `GET` responses carry the stored overrides (null when inherited) plus an `effective_policy` block with the resolved values; `PUT` accepts an explicit `null` on any policy field to clear an override back to inherit. Login and `/auth/me` now report the resolved `download_allowed`.
+- Migration maps existing rows so an account that was deferring to its group keeps doing so (a cap of 0 or less, an empty quality, and a permissive boolean become inherit), while explicit restrictions (false, positive caps, a named quality, a library list) stay as overrides. Two behavior changes come with it: a stored cap above the group's cap now wins instead of being clamped, and `download_transcode_allowed` — the one field whose old column default was "off", so nearly every account stores false — maps false to inherit rather than to an explicit deny, which means members of a group that allows transcoded downloads now get them. Only an explicit `true` on the account survives as an override; an account with no group still defaults to "off" for that field.
+- Web admin: user forms gain per-field Inherit/Override controls and show the effective value next to each inherited field; the access-group editor gains the two transcode gates.
 
 ### Make published server builds easy to compare
 Every successful default-branch container build now carries an ordered build number alongside its exact source revision.

@@ -175,8 +175,8 @@ func (s *Server) releaseSessionLifecycleLock(sessionID string, lk *sessionLifecy
 }
 
 // lockSessionLifecycle acquires the per-session lifecycle mutex and returns a
-// release func. Held across "check existing → spawn → register" so a fresh start
-// and a reconstruct never run concurrent ffmpeg writers for one session's dir.
+// release func. Held across "check existing → spawn → register" and coordinated
+// teardown so those paths never run concurrent ffmpeg writers in one session dir.
 func (s *Server) lockSessionLifecycle(sessionID string) func() {
 	lk := s.retainSessionLifecycleLock(sessionID)
 	lk.mu.Lock()
@@ -1306,32 +1306,53 @@ func (s *Server) handleForceReload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "reload failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.mu.Lock()
-	stopped := make([]string, 0, len(s.sessions))
-	for id, session := range s.sessions {
-		session.Close()
-		if err := os.RemoveAll(s.sessionOutputDir(id)); err != nil {
-			slog.WarnContext(r.Context(), "remove transcode session directory during reload", "component", "transcodenode", "session", id, "error", err)
-		}
-		delete(s.sessions, id)
-		delete(s.lastAccess, id)
-		stopped = append(stopped, id)
+	type forceReloadVictim struct {
+		id      string
+		session *playback.TranscodeSession
 	}
-	s.activeJobs.Store(0)
-	s.mu.Unlock()
+	s.mu.RLock()
+	victims := make([]forceReloadVictim, 0, len(s.sessions))
+	for id, session := range s.sessions {
+		victims = append(victims, forceReloadVictim{id: id, session: session})
+	}
+	s.mu.RUnlock()
 
-	// A force-reload tears every session down for good, so drop their recipes too:
-	// otherwise a buffered/retrying request could reconstruct a session this reload
-	// deliberately killed. Best-effort, done outside the map lock.
-	if s.recipeStore != nil {
-		for _, id := range stopped {
+	for _, victim := range victims {
+		unlock := s.lockSessionLifecycle(victim.id)
+
+		s.mu.Lock()
+		if current, ok := s.sessions[victim.id]; !ok || current != victim.session {
+			s.mu.Unlock()
+			unlock()
+			continue
+		}
+		delete(s.sessions, victim.id)
+		delete(s.lastAccess, victim.id)
+		s.mu.Unlock()
+		s.activeJobs.Add(-1)
+
+		victim.session.Close()
+		if err := os.RemoveAll(s.sessionOutputDir(victim.id)); err != nil {
+			slog.WarnContext(r.Context(), "remove transcode session directory during reload", "component", "transcodenode", "session", victim.id, "error", err)
+		}
+
+		// A force-reload tears this session down for good, so drop its recipe too:
+		// otherwise a buffered/retrying request could reconstruct a session this
+		// reload deliberately killed. Keep the lifecycle lock through deletion so a
+		// concurrent same-ID start cannot have its newly written recipe removed.
+		if s.recipeStore != nil {
+			id := victim.id
 			if err := s.recipeStore.Delete(r.Context(), id); err != nil {
 				slog.WarnContext(r.Context(), "delete transcode recipe on force reload", "component", "transcodenode", "error", err, "session", id, "playback_session_id", id)
 			}
 		}
-	}
 
-	s.tracker.Cleanup(r.Context())
+		// Drop only this victim from the tracker. A blanket Cleanup here would
+		// also wipe unrelated tracker-only work, such as an active download
+		// preparation, even though force reload does not stop that job.
+		s.tracker.Remove(r.Context(), victim.id)
+		unlock()
+	}
 
 	slog.InfoContext(r.Context(), "transcode force reload completed", slog.String("component", "transcodenode"))
 	w.WriteHeader(http.StatusNoContent)

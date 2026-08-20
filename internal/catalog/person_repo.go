@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -104,18 +105,35 @@ func (r *PersonRepository) FindOrCreate(ctx context.Context, p models.Person) (i
 	return id, nil
 }
 
-// enrichExisting updates empty fields on an existing person with non-empty values from p.
-func personPhotoFillPredicate(existing, incoming string) string {
+// personPhotoReplacePredicate builds the SQL condition under which item-credit
+// data may write a person's photo columns.
+//
+// A cached artwork key is immutable and is never replaced from a credit.
+// Credits carry the provider URL, so overwriting the key would both re-arm the
+// download loop (EnqueueExistingProviderArtwork treats a URL in photo_path as
+// "not cached yet") and hand the displaced key to the artwork GC trigger.
+// Anything that is not a cached key is still replaceable by a real image: an
+// empty column, the "-" no-photo sentinel, and a provider URL that never made
+// it through the cache. Keeping URLs replaceable is what stops a person with
+// no external id — FindRefreshCandidates skips them, so no refresh will ever
+// revisit the row — from being stuck with a dead URL forever. The
+// LIKE '%://%' test for "not a cached key" is the same one the artwork GC
+// trigger and the image cache sweep use.
+func personPhotoReplacePredicate(existingPath, incomingPath string) string {
 	return fmt.Sprintf(
-		"((COALESCE(%s, '') = '' AND %s <> '') OR (%s = '-' AND %s NOT IN ('', '-')))",
-		existing, incoming, existing, incoming,
+		"((COALESCE(%[1]s, '') = '' AND %[2]s <> '') OR "+
+			"((%[1]s = '-' OR %[1]s LIKE '%%://%%') AND %[2]s NOT IN ('', '-') "+
+			"AND %[2]s IS DISTINCT FROM %[1]s))",
+		existingPath, incomingPath,
 	)
 }
 
-func batchPersonEnrichmentQuery() string {
-	photoPathFill := personPhotoFillPredicate("people.photo_path", "t.photo_path")
-	photoSourceFill := personPhotoFillPredicate("people.photo_source_path", "t.photo_source_path")
-	photoThumbFill := personPhotoFillPredicate("people.photo_thumbhash", "t.photo_thumbhash")
+// batchPersonEnrichmentSQL is built once: the text is constant, and the batch
+// enricher runs per scan batch.
+var batchPersonEnrichmentSQL = sync.OnceValue(buildBatchPersonEnrichmentQuery)
+
+func buildBatchPersonEnrichmentQuery() string {
+	photoReplace := personPhotoReplacePredicate("people.photo_path", "t.photo_path")
 	return fmt.Sprintf(`
 		UPDATE people SET
 			tmdb_id = CASE WHEN COALESCE(people.tmdb_id, '') = '' AND t.tmdb_id <> '' THEN t.tmdb_id ELSE people.tmdb_id END,
@@ -123,8 +141,8 @@ func batchPersonEnrichmentQuery() string {
 			tvdb_id = CASE WHEN COALESCE(people.tvdb_id, '') = '' AND t.tvdb_id <> '' THEN t.tvdb_id ELSE people.tvdb_id END,
 			plex_guid = CASE WHEN COALESCE(people.plex_guid, '') = '' AND t.plex_guid <> '' THEN t.plex_guid ELSE people.plex_guid END,
 			photo_path = CASE WHEN %[1]s THEN t.photo_path ELSE people.photo_path END,
-			photo_source_path = CASE WHEN %[2]s THEN t.photo_source_path ELSE people.photo_source_path END,
-			photo_thumbhash = CASE WHEN %[3]s THEN t.photo_thumbhash ELSE people.photo_thumbhash END,
+			photo_source_path = CASE WHEN %[1]s THEN t.photo_source_path ELSE people.photo_source_path END,
+			photo_thumbhash = CASE WHEN %[1]s THEN t.photo_thumbhash ELSE people.photo_thumbhash END,
 			bio = CASE WHEN COALESCE(people.bio, '') = '' AND t.bio <> '' THEN t.bio ELSE people.bio END,
 			birthplace = CASE WHEN COALESCE(people.birthplace, '') = '' AND t.birthplace <> '' THEN t.birthplace ELSE people.birthplace END,
 			homepage = CASE WHEN COALESCE(people.homepage, '') = '' AND t.homepage <> '' THEN t.homepage ELSE people.homepage END,
@@ -140,14 +158,15 @@ func batchPersonEnrichmentQuery() string {
 			(COALESCE(people.tvdb_id, '') = '' AND t.tvdb_id <> '') OR
 			(COALESCE(people.plex_guid, '') = '' AND t.plex_guid <> '') OR
 			%[1]s OR
-			%[2]s OR
-			%[3]s OR
 			(COALESCE(people.bio, '') = '' AND t.bio <> '') OR
 			(COALESCE(people.birthplace, '') = '' AND t.birthplace <> '') OR
 			(COALESCE(people.homepage, '') = '' AND t.homepage <> '')
-		  )`, photoPathFill, photoSourceFill, photoThumbFill)
+		  )`, photoReplace)
 }
 
+// enrichExisting fills gaps on an existing person from p. It never rewrites a
+// field the catalog already holds, and it leaves the row — including
+// updated_at — untouched when there is nothing to fill.
 func (r *PersonRepository) enrichExisting(ctx context.Context, id int64, p models.Person) (int64, error) {
 	var setClauses []string
 	var changePredicates []string
@@ -164,27 +183,33 @@ func (r *PersonRepository) enrichExisting(ctx context.Context, id int64, p model
 		args = append(args, value)
 		argIdx++
 	}
-	// fillPhoto also allows a real image to replace the explicit "no photo"
-	// sentinel, but never replaces a populated provider or cached S3 path.
-	fillPhoto := func(column, value string) {
-		if value == "" {
+	// fillPhoto writes the photo triple as a unit under one decision taken on
+	// photo_path. The path, its source URL, and its thumbhash describe a single
+	// image: moving the path alone binds the new photo to the previous source,
+	// which is what UpdatePhotoIfSourceMatches keys the cache handshake on, so
+	// the finished download would land the *old* image on the row — and leave
+	// the old image's thumbhash behind it.
+	fillPhoto := func(person models.Person) {
+		if person.PhotoPath == "" {
 			return
 		}
 		incoming := fmt.Sprintf("$%d", argIdx)
-		predicate := personPhotoFillPredicate(column, incoming)
-		setClauses = append(setClauses, fmt.Sprintf("%s = CASE WHEN %s THEN %s ELSE %s END", column, predicate, incoming, column))
+		predicate := personPhotoReplacePredicate("photo_path", incoming)
+		setClauses = append(setClauses,
+			fmt.Sprintf("photo_path = CASE WHEN %s THEN %s ELSE photo_path END", predicate, incoming),
+			fmt.Sprintf("photo_source_path = CASE WHEN %s THEN $%d ELSE photo_source_path END", predicate, argIdx+1),
+			fmt.Sprintf("photo_thumbhash = CASE WHEN %s THEN $%d ELSE photo_thumbhash END", predicate, argIdx+2),
+		)
 		changePredicates = append(changePredicates, predicate)
-		args = append(args, value)
-		argIdx++
+		args = append(args, person.PhotoPath, person.PhotoSourcePath, person.PhotoThumbhash)
+		argIdx += 3
 	}
 
 	fillEmpty("tmdb_id", p.TmdbID)
 	fillEmpty("imdb_id", p.ImdbID)
 	fillEmpty("tvdb_id", p.TvdbID)
 	fillEmpty("plex_guid", p.PlexGUID)
-	fillPhoto("photo_path", p.PhotoPath)
-	fillPhoto("photo_source_path", p.PhotoSourcePath)
-	fillPhoto("photo_thumbhash", p.PhotoThumbhash)
+	fillPhoto(p)
 	fillEmpty("bio", p.Bio)
 	fillEmpty("birthplace", p.Birthplace)
 	fillEmpty("homepage", p.Homepage)
@@ -354,8 +379,9 @@ func (r *PersonRepository) BatchFindOrCreate(ctx context.Context, people []model
 		rows.Close()
 	}
 
-	// Phase 4: Batch enrich found people. Item-credit data is only allowed to
-	// fill gaps; full person refresh owns replacement of existing artwork.
+	// Phase 4: Batch enrich found people. Item-credit data fills gaps and may
+	// replace a photo that was never cached; a cached artwork key is immutable
+	// here. See personPhotoReplacePredicate.
 	if len(toEnrich) > 0 {
 		enrichIDs := make([]int64, len(toEnrich))
 		eTmdbIDs := make([]string, len(toEnrich))
@@ -381,7 +407,7 @@ func (r *PersonRepository) BatchFindOrCreate(ctx context.Context, people []model
 			eBirthplaces[i] = e.person.Birthplace
 			eHomepages[i] = e.person.Homepage
 		}
-		_, err := r.pool.Exec(ctx, batchPersonEnrichmentQuery(),
+		_, err := r.pool.Exec(ctx, batchPersonEnrichmentSQL(),
 			enrichIDs, eTmdbIDs, eImdbIDs, eTvdbIDs, ePlexGUIDs,
 			ePhotoPaths, ePhotoSourcePaths, ePhotoThumbs, eBios, eBirthplaces, eHomepages,
 		)
