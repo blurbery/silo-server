@@ -22,10 +22,10 @@ Describe migration, compatibility, security, or operational impact. Write
 
 ## AI Disclosure
 
-- Tool(s):
-- Model(s):
-- Involvement:
-- Adversarial review:
+- Tool(s): exact tool name(s), or "none"
+- Model(s): exact model identifier(s) reported by each tool, or "n/a"
+- Involvement: Fully AI-generated, human verified | AI-assisted | Human-written, AI-reviewed | No AI used
+- Adversarial review: findings and resolutions, or "n/a" only when no AI or implementation change was involved
 
 ## Checklist
 
