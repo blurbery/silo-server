@@ -1259,6 +1259,21 @@ func (h *AdminHandler) HandleUpdateItemMetadata(w http.ResponseWriter, r *http.R
 // encryption can never drift apart. See catalog.SensitiveSettingKeys.
 var sensitiveSettingKeys = catalog.SensitiveSettingKeys
 
+// machineManagedSettingKeys contains durable internal state that shares the
+// server_settings store but is not part of the administrator settings API.
+var machineManagedSettingKeys = map[string]bool{
+	config.ArtworkStorageReconcileCheckpointKey: true,
+}
+
+func redactAdminSettings(values map[string]string) {
+	for key := range sensitiveSettingKeys {
+		delete(values, key)
+	}
+	for key := range machineManagedSettingKeys {
+		delete(values, key)
+	}
+}
+
 // HandleGetSettings handles GET /admin/settings.
 func (h *AdminHandler) HandleGetSettings(w http.ResponseWriter, r *http.Request) {
 	if h.SettingsRepo == nil {
@@ -1270,9 +1285,7 @@ func (h *AdminHandler) HandleGetSettings(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load settings")
 		return
 	}
-	for key := range sensitiveSettingKeys {
-		delete(all, key)
-	}
+	redactAdminSettings(all)
 	writeJSON(w, http.StatusOK, all)
 }
 
@@ -1290,9 +1303,7 @@ func (h *AdminHandler) HandleGetEffectiveSettings(w http.ResponseWriter, r *http
 		return
 	}
 	effective := h.effectiveAdminSettings(all)
-	for key := range sensitiveSettingKeys {
-		delete(effective, key)
-	}
+	redactAdminSettings(effective)
 	writeJSON(w, http.StatusOK, effective)
 }
 
@@ -1867,7 +1878,7 @@ func (h *AdminHandler) HandleGetSetting(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if sensitiveSettingKeys[key] {
+	if sensitiveSettingKeys[key] || machineManagedSettingKeys[key] {
 		writeError(w, http.StatusNotFound, "not_found", "Setting not found")
 		return
 	}
@@ -2145,6 +2156,10 @@ func (h *AdminHandler) HandleUpdateSettings(w http.ResponseWriter, r *http.Reque
 			writeError(w, http.StatusBadRequest, "bad_request", "Setting key is required")
 			return
 		}
+		if machineManagedSettingKeys[key] {
+			writeError(w, http.StatusBadRequest, "bad_request", key+" is managed internally")
+			return
+		}
 		if h.BootstrapSensitiveConfigured[key] {
 			writeError(w, http.StatusBadRequest, "managed_by_environment", key+" is managed by an environment variable")
 			return
@@ -2244,6 +2259,10 @@ func (h *AdminHandler) HandleUpdateSetting(w http.ResponseWriter, r *http.Reques
 	key := chi.URLParam(r, "key")
 	if key == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "Setting key is required")
+		return
+	}
+	if machineManagedSettingKeys[key] {
+		writeError(w, http.StatusBadRequest, "bad_request", key+" is managed internally")
 		return
 	}
 	if h.BootstrapSensitiveConfigured[key] {

@@ -80,6 +80,9 @@ func TestBuildSweepBatchQueryUsesNativeNumericKeys(t *testing.T) {
 			folderSurface = surface
 		}
 	}
+	if peopleSurface.name == "" || folderSurface.name == "" {
+		t.Fatalf("surface lookup failed: person photos=%q library posters=%q", peopleSurface.name, folderSurface.name)
+	}
 
 	query, args, err := buildSweepBatchQuery(peopleSurface, []string{"128111764822294558"})
 	if err != nil {
@@ -278,6 +281,13 @@ type scriptedArtworkBatch struct {
 	sweepErrors int
 }
 
+type scriptedArtworkChapterBatch struct {
+	cursor      int64
+	done        int
+	verified    int
+	sweepErrors int
+}
+
 type scriptedArtworkSweepCall struct {
 	name   string
 	cursor []string
@@ -285,10 +295,11 @@ type scriptedArtworkSweepCall struct {
 }
 
 type scriptedArtworkVerifySweeper struct {
-	batches   map[string][]scriptedArtworkBatch
-	calls     []scriptedArtworkSweepCall
-	processed map[string]int
-	chapters  int
+	batches           map[string][]scriptedArtworkBatch
+	chapterBatches    []scriptedArtworkChapterBatch
+	calls             []scriptedArtworkSweepCall
+	processed         map[string]int
+	chaptersProcessed int
 }
 
 func (s *scriptedArtworkVerifySweeper) sweepSurfaceFrom(
@@ -321,13 +332,22 @@ func (s *scriptedArtworkVerifySweeper) sweepSurfaceFrom(
 }
 
 func (s *scriptedArtworkVerifySweeper) sweepChapterThumbnailsFrom(
-	context.Context,
-	*ArtworkReconcileStats,
-	int64,
-	int,
-	func(int64, int, bool) error,
+	_ context.Context,
+	stats *ArtworkReconcileStats,
+	_ int64,
+	_ int,
+	onBatch func(int64, int, bool) error,
 ) error {
-	s.chapters++
+	for _, batch := range s.chapterBatches {
+		s.chaptersProcessed++
+		stats.Checked += batch.verified + batch.sweepErrors
+		stats.Verified += batch.verified
+		stats.Errors += batch.sweepErrors
+		stats.SweepErrors += batch.sweepErrors
+		if err := onBatch(batch.cursor, batch.done, batch.sweepErrors == 0); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -360,8 +380,8 @@ func TestArtworkReconcileStopsAtUnsafeBatchAndResumesFromLastCheckpoint(t *testi
 	if stats.SweepErrors != 1 {
 		t.Fatalf("first sweep errors = %d, want 1", stats.SweepErrors)
 	}
-	if firstRun.processed["posters"] != 2 || firstRun.processed["later surface"] != 0 || firstRun.chapters != 0 {
-		t.Fatalf("work after unsafe batch: processed=%v chapter_calls=%d", firstRun.processed, firstRun.chapters)
+	if firstRun.processed["posters"] != 2 || firstRun.processed["later surface"] != 0 || firstRun.chaptersProcessed != 0 {
+		t.Fatalf("work after unsafe batch: processed=%v chapter_batches=%d", firstRun.processed, firstRun.chaptersProcessed)
 	}
 	if saveCount != 1 || saved.SurfaceDone != 500 || len(saved.SurfaceCursor) != 1 || saved.SurfaceCursor[0] != "0499" {
 		t.Fatalf("saved checkpoint = %#v (save count %d), want safe first batch", saved, saveCount)
@@ -389,6 +409,39 @@ func TestArtworkReconcileStopsAtUnsafeBatchAndResumesFromLastCheckpoint(t *testi
 	}
 	if stats.Verified != 1002 || !completed.Complete() {
 		t.Fatalf("resumed stats/checkpoint = %#v / %#v, want 1002 verified and complete", stats, completed)
+	}
+}
+
+func TestArtworkReconcileWithoutSaverContinuesAfterUnsafeBatches(t *testing.T) {
+	surfaces := []artworkSweepSurface{{name: "posters"}, {name: "later surface"}}
+	checkpoint := ArtworkReconcileCheckpoint{
+		Version:      artworkReconcileCheckpointVersion,
+		Totals:       []int{1, 1},
+		ChapterTotal: 2,
+		Stats:        ArtworkReconcileStats{Mode: ArtworkReconcileModeVerify},
+	}
+	sweeper := &scriptedArtworkVerifySweeper{
+		batches: map[string][]scriptedArtworkBatch{
+			"posters":       {{cursor: []string{"poster"}, done: 1, sweepErrors: 1}},
+			"later surface": {{cursor: []string{"later"}, done: 1, verified: 1}},
+		},
+		chapterBatches: []scriptedArtworkChapterBatch{
+			{cursor: 10, done: 1, sweepErrors: 1},
+			{cursor: 20, done: 2, verified: 1},
+		},
+	}
+
+	stats, err := runArtworkVerifySweep(
+		context.Background(), sweeper, surfaces, checkpoint, nil, func(float64, string) {},
+	)
+	if err != nil {
+		t.Fatalf("sweep without saver: %v", err)
+	}
+	if sweeper.processed["posters"] != 1 || sweeper.processed["later surface"] != 1 || sweeper.chaptersProcessed != 2 {
+		t.Fatalf("work after unsafe batches: surfaces=%v chapter_batches=%d", sweeper.processed, sweeper.chaptersProcessed)
+	}
+	if stats.Verified != 2 || stats.SweepErrors != 2 {
+		t.Fatalf("stats = %#v, want 2 verified and 2 sweep errors", stats)
 	}
 }
 

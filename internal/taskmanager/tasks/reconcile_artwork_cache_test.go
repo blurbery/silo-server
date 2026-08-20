@@ -240,6 +240,30 @@ func TestReconcileArtworkCacheCheckpointIsScopedToStorageMove(t *testing.T) {
 	}
 }
 
+func TestReconcileArtworkCacheIgnoresMalformedCheckpoint(t *testing.T) {
+	store := &fakeSettingsStore{values: map[string]string{
+		ArtworkStorageIdentityKey:            "old",
+		ArtworkStorageReconcileCheckpointKey: "{not-json",
+	}}
+	runner := &fakeResumableReconcileRunner{stats: metadata.ArtworkReconcileStats{Mode: metadata.ArtworkReconcileModeVerify}}
+
+	if err := NewReconcileArtworkCacheTask(runner, store, nil, "new").Execute(context.Background(), &fakeProgress{}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if runner.received != nil {
+		t.Fatalf("received malformed checkpoint: %#v", runner.received)
+	}
+	if !runner.saveProvided {
+		t.Fatal("fresh storage-move sweep did not receive a checkpoint saver")
+	}
+	if got := store.values[ArtworkStorageIdentityKey]; got != "new" {
+		t.Fatalf("fingerprint after completion = %q, want new", got)
+	}
+	if got := store.values[ArtworkStorageReconcileCheckpointKey]; got != "" {
+		t.Fatalf("checkpoint after completion = %q, want empty", got)
+	}
+}
+
 func TestReconcileArtworkCacheManualRunIgnoresSameIdentityCheckpoint(t *testing.T) {
 	checkpoint := metadata.ArtworkReconcileCheckpoint{
 		Version:      1,

@@ -16,6 +16,11 @@ import (
 const cloudflareURLMode = "cloudflare_token"
 const chapterThumbnailSoftwareToneMapKey = "playback.chapter_thumbnail_software_tone_map_enabled"
 
+// ArtworkStorageReconcileCheckpointKey is machine-managed task state. It is
+// stored alongside server settings for durability but must not be exposed or
+// edited through the administrator settings API.
+const ArtworkStorageReconcileCheckpointKey = "s3.public_storage_reconcile_checkpoint"
+
 // adminSettingDefaults is the effective value shown by the Admin UI when no
 // row exists in server_settings. Keep these values aligned with the runtime
 // readers that own each setting. The UI must never invent a second set of

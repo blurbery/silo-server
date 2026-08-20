@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Silo-Server/silo-server/internal/config"
 	"github.com/Silo-Server/silo-server/internal/metadata"
 	"github.com/Silo-Server/silo-server/internal/s3client"
 	"github.com/Silo-Server/silo-server/internal/taskmanager"
@@ -21,7 +22,7 @@ const (
 	// ArtworkStorageReconcileCheckpointKey holds a machine-managed verify
 	// cursor. It is scoped to both the stored and target identities so a later
 	// storage move can never resume an older bucket's sweep.
-	ArtworkStorageReconcileCheckpointKey = "s3.public_storage_reconcile_checkpoint"
+	ArtworkStorageReconcileCheckpointKey = config.ArtworkStorageReconcileCheckpointKey
 )
 
 // ArtworkStorageIdentity builds the fingerprint of the public S3 storage the
@@ -119,22 +120,33 @@ func (t *ReconcileArtworkCacheTask) ShouldRun(ctx context.Context) (bool, error)
 	if t.runner == nil || t.settings == nil {
 		return false, nil
 	}
+	stored, err := t.readStorageIdentity(ctx)
+	if err != nil {
+		return false, fmt.Errorf("reading artwork storage identity: %w", err)
+	}
+	return stored != "" && stored != t.identity, nil
+}
+
+func (t *ReconcileArtworkCacheTask) readStorageIdentity(ctx context.Context) (string, error) {
 	var stored string
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
 		stored, err = t.settings.Get(ctx, ArtworkStorageIdentityKey)
 		if err == nil {
-			return stored != "" && stored != t.identity, nil
+			return stored, nil
+		}
+		if attempt == 2 {
+			break
 		}
 		timer := time.NewTimer(time.Duration(attempt+1) * time.Second)
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
 			timer.Stop()
-			return false, ctx.Err()
+			return "", ctx.Err()
 		}
 	}
-	return false, fmt.Errorf("reading artwork storage identity: %w", err)
+	return "", err
 }
 
 func (t *ReconcileArtworkCacheTask) Execute(ctx context.Context, progress taskmanager.ProgressReporter) error {
@@ -222,7 +234,7 @@ func (t *ReconcileArtworkCacheTask) run(
 		return t.runner.Run(ctx, progress)
 	}
 
-	baseline, err := t.settings.Get(ctx, ArtworkStorageIdentityKey)
+	baseline, err := t.readStorageIdentity(ctx)
 	if err != nil {
 		return metadata.ArtworkReconcileStats{Mode: metadata.ArtworkReconcileModeVerify}, fmt.Errorf("reading artwork reconcile baseline identity: %w", err)
 	}

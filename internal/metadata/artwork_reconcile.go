@@ -483,11 +483,11 @@ func runArtworkVerifySweep(
 			func(batchCursor []string, batchDone int, batchCheckpointable bool) error {
 				pct := 5 + 90*float64(runtimeDone+batchDone)/float64(total)
 				progress(pct, fmt.Sprintf("Verifying %s (%d/%d overall)", s.name, runtimeDone+batchDone, total))
-				if !batchCheckpointable {
+				if !batchCheckpointable && save != nil {
 					return fmt.Errorf("storage errors in %s batch; stopping at the last saved checkpoint", s.name)
 				}
 				checkpoint.SurfaceIndex = i
-				checkpoint.SurfaceCursor = append(checkpoint.SurfaceCursor[:0], batchCursor...)
+				checkpoint.SurfaceCursor = append([]string(nil), batchCursor...)
 				checkpoint.SurfaceDone = batchDone
 				checkpoint.Done = runtimeDone
 				checkpoint.Stats = stats
@@ -524,7 +524,7 @@ func runArtworkVerifySweep(
 			func(batchCursor int64, batchDone int, batchCheckpointable bool) error {
 				pct := 5 + 90*float64(runtimeDone+batchDone)/float64(total)
 				progress(pct, fmt.Sprintf("Verifying chapter thumbnails (%d/%d overall)", runtimeDone+batchDone, total))
-				if !batchCheckpointable {
+				if !batchCheckpointable && save != nil {
 					return fmt.Errorf("storage errors in chapter-thumbnail batch; stopping at the last saved checkpoint")
 				}
 				checkpoint.SurfaceIndex = len(surfaces)
