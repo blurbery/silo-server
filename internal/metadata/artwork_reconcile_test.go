@@ -60,6 +60,49 @@ func TestShouldBulkReset(t *testing.T) {
 	}
 }
 
+func TestArtworkSweepSurfacesUseIndexablePaginationKeys(t *testing.T) {
+	for _, surface := range artworkSweepSurfaces() {
+		for _, keyCol := range surface.keyCols {
+			if strings.Contains(keyCol.column, "::") {
+				t.Fatalf("surface %q paginates on expression %q; use the native key column so PostgreSQL can use its index", surface.name, keyCol.column)
+			}
+		}
+	}
+}
+
+func TestBuildSweepBatchQueryUsesNativeNumericKeys(t *testing.T) {
+	var peopleSurface, folderSurface artworkSweepSurface
+	for _, surface := range artworkSweepSurfaces() {
+		switch surface.name {
+		case "person photos":
+			peopleSurface = surface
+		case "library posters":
+			folderSurface = surface
+		}
+	}
+
+	query, args, err := buildSweepBatchQuery(peopleSurface, []string{"128111764822294558"})
+	if err != nil {
+		t.Fatalf("build people query: %v", err)
+	}
+	if !strings.Contains(query, "SELECT (id)::text") ||
+		!strings.Contains(query, "AND (id) > ($1)") ||
+		!strings.Contains(query, "ORDER BY id LIMIT $2") {
+		t.Fatalf("people query does not keep pagination on native id: %s", query)
+	}
+	if _, ok := args[0].(int64); !ok {
+		t.Fatalf("people cursor type = %T, want int64", args[0])
+	}
+
+	_, args, err = buildSweepBatchQuery(folderSurface, []string{"42"})
+	if err != nil {
+		t.Fatalf("build folder query: %v", err)
+	}
+	if _, ok := args[0].(int32); !ok {
+		t.Fatalf("folder cursor type = %T, want int32", args[0])
+	}
+}
+
 func TestArtworkReconcileVerifySweep(t *testing.T) {
 	dsn := os.Getenv("SILO_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -91,6 +134,15 @@ func TestArtworkReconcileVerifySweep(t *testing.T) {
 	seedItem(id("upload"), key("upload"), "upload://admin/poster.jpg")
 	seedItem(id("uncached"), "https://img.example/direct.jpg", "https://img.example/direct.jpg")
 
+	personID := suffix
+	personKey := key("person-missing")
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO people (id, name, photo_path, photo_source_path)
+		VALUES ($1, 'ARC Person', $2, 'https://img.example/person.jpg')
+	`, personID, personKey); err != nil {
+		t.Fatalf("seed person: %v", err)
+	}
+
 	var fileID int64
 	chapters := fmt.Sprintf(
 		`[{"index":0,"title":"One","thumbnail_path":%q,"thumbnail_thumbhash":"aGFzaA==","custom":"kept"},`+
@@ -120,6 +172,7 @@ func TestArtworkReconcileVerifySweep(t *testing.T) {
 		_, _ = pool.Exec(ctx, `DELETE FROM library_collections WHERE id = $1`, id("coll"))
 		_, _ = pool.Exec(ctx, `DELETE FROM media_files WHERE id = $1`, fileID)
 		_, _ = pool.Exec(ctx, `DELETE FROM media_folders WHERE id = $1`, folderID)
+		_, _ = pool.Exec(ctx, `DELETE FROM people WHERE id = $1`, personID)
 		for _, name := range []string{"intact", "missing", "upload", "uncached"} {
 			_, _ = pool.Exec(ctx, `DELETE FROM media_items WHERE content_id = $1`, id(name))
 		}
@@ -128,6 +181,7 @@ func TestArtworkReconcileVerifySweep(t *testing.T) {
 	checker := &fakeObjectChecker{missing: map[string]bool{
 		key("missing"):         true,
 		key("upload"):          true,
+		personKey:              true,
 		key("chapter-missing"): true,
 		key("coll"):            true,
 		fmt.Sprintf("library-posters/arc-%d.png", suffix): true,
@@ -165,6 +219,14 @@ func TestArtworkReconcileVerifySweep(t *testing.T) {
 	}
 	if checker.checked["https://img.example/direct.jpg"] != 0 {
 		t.Fatal("provider URLs must not be HEAD-checked")
+	}
+
+	var personPhoto string
+	if err := pool.QueryRow(ctx, `SELECT photo_path FROM people WHERE id = $1`, personID).Scan(&personPhoto); err != nil {
+		t.Fatalf("read person: %v", err)
+	}
+	if personPhoto != "https://img.example/person.jpg" {
+		t.Fatalf("missing person photo_path = %q, want reset to provider source", personPhoto)
 	}
 
 	var rawChapters string
@@ -209,6 +271,87 @@ func TestArtworkReconcileVerifySweep(t *testing.T) {
 	}
 }
 
+func TestArtworkReconcileResumesFromSavedBatch(t *testing.T) {
+	dsn := os.Getenv("SILO_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("SILO_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect test database: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	prefix := fmt.Sprintf("arc-resume-%d-", time.Now().UnixNano())
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO media_items (content_id, type, title, status, genres, poster_path, poster_source_path)
+		SELECT
+			$1 || lpad(n::text, 4, '0'),
+			'movie', 'ARC Resume', 'matched', '{}'::text[],
+			'tmdb/movies/' || $1 || lpad(n::text, 4, '0') || '/poster/original.webp',
+			'https://img.example/' || $1 || lpad(n::text, 4, '0') || '.jpg'
+		FROM generate_series(0, 500) AS n
+	`, prefix); err != nil {
+		t.Fatalf("seed resumable artwork: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM media_items WHERE content_id LIKE $1`, prefix+"%")
+	})
+
+	surface := artworkSweepSurface{
+		name:      "resume test posters",
+		table:     "media_items",
+		keyCols:   []artworkSweepKey{textSweepKey("content_id")},
+		pathCol:   "poster_path",
+		sourceCol: "poster_source_path",
+		clearSet:  `poster_path = '', last_refreshed = NULL, updated_at = NOW()`,
+	}
+	checker := &fakeObjectChecker{}
+	reconciler := NewArtworkCacheReconciler(pool, checker)
+	checkpoint := ArtworkReconcileCheckpoint{
+		Version: artworkReconcileCheckpointVersion,
+		Totals:  []int{501},
+		Stats:   ArtworkReconcileStats{Mode: "verify"},
+	}
+	stopAfterFirstBatch := errors.New("simulated restart")
+	var saved ArtworkReconcileCheckpoint
+	_, err = reconciler.runVerifySweep(ctx, []artworkSweepSurface{surface}, checkpoint,
+		func(next ArtworkReconcileCheckpoint) error {
+			saved = cloneArtworkReconcileCheckpoint(next)
+			if next.SurfaceDone == artworkReconcileBatchSize {
+				return stopAfterFirstBatch
+			}
+			return nil
+		}, func(float64, string) {})
+	if !errors.Is(err, stopAfterFirstBatch) {
+		t.Fatalf("first sweep error = %v, want simulated restart", err)
+	}
+	if saved.SurfaceDone != artworkReconcileBatchSize || len(saved.SurfaceCursor) != 1 {
+		t.Fatalf("saved checkpoint = %#v, want one completed batch", saved)
+	}
+
+	checker.mu.Lock()
+	checker.checked = map[string]int{}
+	checker.mu.Unlock()
+	stats, err := reconciler.runVerifySweep(ctx, []artworkSweepSurface{surface}, saved, nil, func(float64, string) {})
+	if err != nil {
+		t.Fatalf("resumed sweep: %v", err)
+	}
+	if stats.Verified != 501 {
+		t.Fatalf("resumed Verified = %d, want 501", stats.Verified)
+	}
+	firstKey := fmt.Sprintf("tmdb/movies/%s%04d/poster/original.webp", prefix, 0)
+	lastKey := fmt.Sprintf("tmdb/movies/%s%04d/poster/original.webp", prefix, 500)
+	checker.mu.Lock()
+	firstChecks := checker.checked[firstKey]
+	lastChecks := checker.checked[lastKey]
+	checker.mu.Unlock()
+	if firstChecks != 0 || lastChecks != 1 {
+		t.Fatalf("resume checks: first=%d last=%d, want first=0 last=1", firstChecks, lastChecks)
+	}
+}
+
 func TestArtworkReconcileLeavesRowsAloneOnStorageErrors(t *testing.T) {
 	dsn := os.Getenv("SILO_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -244,12 +387,20 @@ func TestArtworkReconcileLeavesRowsAloneOnStorageErrors(t *testing.T) {
 	})
 
 	checker := &fakeObjectChecker{erroring: map[string]bool{cachedKey: true}}
-	stats, err := NewArtworkCacheReconciler(pool, checker).Run(ctx, nil)
+	var saved ArtworkReconcileCheckpoint
+	stats, err := NewArtworkCacheReconciler(pool, checker).RunResumable(ctx, nil,
+		func(next ArtworkReconcileCheckpoint) error {
+			saved = cloneArtworkReconcileCheckpoint(next)
+			return nil
+		}, nil)
 	if err != nil {
-		t.Fatalf("Run: %v", err)
+		t.Fatalf("RunResumable: %v", err)
 	}
-	if stats.Errors == 0 {
+	if stats.Errors == 0 || stats.SweepErrors == 0 {
 		t.Fatal("expected the erroring key to be counted")
+	}
+	if saved.SurfaceIndex != 0 || len(saved.SurfaceCursor) != 0 || saved.Finished {
+		t.Fatalf("checkpoint advanced past an errored batch: %#v", saved)
 	}
 
 	var posterPath string

@@ -16,7 +16,13 @@ import (
 // ArtworkStorageIdentityKey is the server_settings key holding the storage
 // identity fingerprint of the public S3 bucket the artwork cache was last
 // reconciled against. Machine-managed; not an admin-editable setting.
-const ArtworkStorageIdentityKey = "s3.public_storage_identity"
+const (
+	ArtworkStorageIdentityKey = "s3.public_storage_identity"
+	// ArtworkStorageReconcileCheckpointKey holds a machine-managed verify
+	// cursor. It is scoped to both the stored and target identities so a later
+	// storage move can never resume an older bucket's sweep.
+	ArtworkStorageReconcileCheckpointKey = "s3.public_storage_reconcile_checkpoint"
+)
 
 // ArtworkStorageIdentity builds the fingerprint of the public S3 storage the
 // cached artwork lives in. Only fields that determine *where objects are
@@ -46,6 +52,21 @@ type ArtworkReconcileSettingsStore interface {
 // *metadata.ArtworkCacheReconciler.
 type ArtworkReconcileRunner interface {
 	Run(ctx context.Context, progress func(percent float64, message string)) (metadata.ArtworkReconcileStats, error)
+}
+
+type resumableArtworkReconcileRunner interface {
+	RunResumable(
+		ctx context.Context,
+		checkpoint *metadata.ArtworkReconcileCheckpoint,
+		save func(metadata.ArtworkReconcileCheckpoint) error,
+		progress func(percent float64, message string),
+	) (metadata.ArtworkReconcileStats, error)
+}
+
+type artworkReconcileCheckpointEnvelope struct {
+	BaselineIdentity string                              `json:"baseline_identity"`
+	TargetIdentity   string                              `json:"target_identity"`
+	Checkpoint       metadata.ArtworkReconcileCheckpoint `json:"checkpoint"`
 }
 
 // BrandingAssetReconciler clears branding asset refs whose stored objects are
@@ -122,7 +143,7 @@ func (t *ReconcileArtworkCacheTask) Execute(ctx context.Context, progress taskma
 		return nil
 	}
 
-	stats, err := t.runner.Run(ctx, progress.Report)
+	stats, err := t.run(ctx, progress.Report)
 	if err != nil {
 		if data, marshalErr := json.Marshal(stats); marshalErr == nil {
 			progress.SetResultData(data)
@@ -149,6 +170,13 @@ func (t *ReconcileArtworkCacheTask) Execute(ctx context.Context, progress taskma
 	if setErr := t.settings.Set(ctx, ArtworkStorageIdentityKey, t.identity); setErr != nil {
 		return fmt.Errorf("persisting artwork storage identity: %w", setErr)
 	}
+	if clearErr := t.settings.Set(ctx, ArtworkStorageReconcileCheckpointKey, ""); clearErr != nil {
+		// The certified identity suppresses automatic reruns, and checkpoint
+		// envelopes are tied to their pre-run baseline, so stale state is safe.
+		// Surface the cleanup problem without turning a completed sweep into a
+		// failed task that an admin might unnecessarily repeat.
+		slog.WarnContext(ctx, "artwork reconcile: clearing completed checkpoint failed", "error", clearErr)
+	}
 
 	brandingNote := ""
 	if t.branding != nil {
@@ -170,7 +198,7 @@ func (t *ReconcileArtworkCacheTask) Execute(ctx context.Context, progress taskma
 		"Verified %d cached images intact, re-queued %d for re-cache, cleared %d without a re-downloadable source",
 		stats.Verified, stats.Requeued, stats.Cleared,
 	)
-	if stats.Mode == "bulk_reset" {
+	if stats.Mode == metadata.ArtworkReconcileModeBulkReset {
 		message = fmt.Sprintf(
 			"Storage probe found %d/%d sampled objects missing; reset all cached artwork (re-queued %d, cleared %d)",
 			stats.SampleMissing, stats.Sampled, stats.Requeued, stats.Cleared,
@@ -183,4 +211,52 @@ func (t *ReconcileArtworkCacheTask) Execute(ctx context.Context, progress taskma
 	}
 	progress.Report(100, message+brandingNote)
 	return nil
+}
+
+func (t *ReconcileArtworkCacheTask) run(
+	ctx context.Context,
+	progress func(percent float64, message string),
+) (metadata.ArtworkReconcileStats, error) {
+	runner, ok := t.runner.(resumableArtworkReconcileRunner)
+	if !ok {
+		return t.runner.Run(ctx, progress)
+	}
+
+	baseline, err := t.settings.Get(ctx, ArtworkStorageIdentityKey)
+	if err != nil {
+		return metadata.ArtworkReconcileStats{Mode: metadata.ArtworkReconcileModeVerify}, fmt.Errorf("reading artwork reconcile baseline identity: %w", err)
+	}
+	rawCheckpoint, err := t.settings.Get(ctx, ArtworkStorageReconcileCheckpointKey)
+	if err != nil {
+		return metadata.ArtworkReconcileStats{Mode: metadata.ArtworkReconcileModeVerify}, fmt.Errorf("reading artwork reconcile checkpoint: %w", err)
+	}
+
+	var checkpoint *metadata.ArtworkReconcileCheckpoint
+	if strings.TrimSpace(rawCheckpoint) != "" {
+		var envelope artworkReconcileCheckpointEnvelope
+		if unmarshalErr := json.Unmarshal([]byte(rawCheckpoint), &envelope); unmarshalErr != nil {
+			slog.WarnContext(ctx, "artwork reconcile: ignoring invalid checkpoint", "error", unmarshalErr)
+		} else if envelope.BaselineIdentity == baseline && envelope.TargetIdentity == t.identity &&
+			(baseline != t.identity || !envelope.Checkpoint.Complete()) {
+			checkpoint = &envelope.Checkpoint
+		}
+	}
+
+	save := func(next metadata.ArtworkReconcileCheckpoint) error {
+		envelope := artworkReconcileCheckpointEnvelope{
+			BaselineIdentity: baseline,
+			TargetIdentity:   t.identity,
+			Checkpoint:       next,
+		}
+		encoded, marshalErr := json.Marshal(envelope)
+		if marshalErr != nil {
+			return fmt.Errorf("encoding artwork reconcile checkpoint: %w", marshalErr)
+		}
+		if setErr := t.settings.Set(ctx, ArtworkStorageReconcileCheckpointKey, string(encoded)); setErr != nil {
+			return fmt.Errorf("persisting artwork reconcile checkpoint: %w", setErr)
+		}
+		return nil
+	}
+
+	return runner.RunResumable(ctx, checkpoint, save, progress)
 }
