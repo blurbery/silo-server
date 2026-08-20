@@ -47,6 +47,7 @@ type fakeResumableReconcileRunner struct {
 	stats            metadata.ArtworkReconcileStats
 	err              error
 	legacyRuns       int
+	saveProvided     bool
 }
 
 func (f *fakeResumableReconcileRunner) Run(context.Context, func(float64, string)) (metadata.ArtworkReconcileStats, error) {
@@ -60,13 +61,14 @@ func (f *fakeResumableReconcileRunner) RunResumable(
 	save func(metadata.ArtworkReconcileCheckpoint) error,
 	_ func(float64, string),
 ) (metadata.ArtworkReconcileStats, error) {
+	f.saveProvided = save != nil
 	if checkpoint != nil {
 		copied := *checkpoint
 		copied.Totals = append([]int(nil), checkpoint.Totals...)
 		copied.SurfaceCursor = append([]string(nil), checkpoint.SurfaceCursor...)
 		f.received = &copied
 	}
-	if f.checkpointToSave != nil {
+	if f.checkpointToSave != nil && save != nil {
 		if err := save(*f.checkpointToSave); err != nil {
 			return f.stats, err
 		}
@@ -235,6 +237,37 @@ func TestReconcileArtworkCacheCheckpointIsScopedToStorageMove(t *testing.T) {
 	}
 	if runner.received != nil {
 		t.Fatalf("received checkpoint from a different storage move: %#v", runner.received)
+	}
+}
+
+func TestReconcileArtworkCacheManualRunIgnoresSameIdentityCheckpoint(t *testing.T) {
+	checkpoint := metadata.ArtworkReconcileCheckpoint{
+		Version:      1,
+		Totals:       make([]int, 14),
+		SurfaceIndex: 3,
+		Stats:        metadata.ArtworkReconcileStats{Mode: metadata.ArtworkReconcileModeVerify},
+	}
+	envelope, err := json.Marshal(artworkReconcileCheckpointEnvelope{
+		BaselineIdentity: "current",
+		TargetIdentity:   "current",
+		Checkpoint:       checkpoint,
+	})
+	if err != nil {
+		t.Fatalf("marshal checkpoint: %v", err)
+	}
+	store := &fakeSettingsStore{values: map[string]string{
+		ArtworkStorageIdentityKey:            "current",
+		ArtworkStorageReconcileCheckpointKey: string(envelope),
+	}}
+	runner := &fakeResumableReconcileRunner{stats: metadata.ArtworkReconcileStats{Mode: metadata.ArtworkReconcileModeVerify}}
+	if err := NewReconcileArtworkCacheTask(runner, store, nil, "current").Execute(context.Background(), &fakeProgress{}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if runner.received != nil {
+		t.Fatalf("manual run resumed a stale same-identity checkpoint: %#v", runner.received)
+	}
+	if runner.saveProvided {
+		t.Fatal("manual same-identity run received a checkpoint saver")
 	}
 }
 

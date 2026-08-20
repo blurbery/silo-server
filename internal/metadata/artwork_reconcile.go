@@ -410,6 +410,38 @@ func (r *ArtworkCacheReconciler) runVerifySweep(
 	save func(ArtworkReconcileCheckpoint) error,
 	progress func(percent float64, message string),
 ) (ArtworkReconcileStats, error) {
+	return runArtworkVerifySweep(ctx, r, surfaces, checkpoint, save, progress)
+}
+
+// artworkVerifySweeper separates the checkpoint state machine from its
+// database and object-storage work. Keeping that boundary small makes restart
+// behavior testable without a live PostgreSQL database.
+type artworkVerifySweeper interface {
+	sweepSurfaceFrom(
+		context.Context,
+		artworkSweepSurface,
+		*ArtworkReconcileStats,
+		[]string,
+		int,
+		func([]string, int, bool) error,
+	) error
+	sweepChapterThumbnailsFrom(
+		context.Context,
+		*ArtworkReconcileStats,
+		int64,
+		int,
+		func(int64, int, bool) error,
+	) error
+}
+
+func runArtworkVerifySweep(
+	ctx context.Context,
+	sweeper artworkVerifySweeper,
+	surfaces []artworkSweepSurface,
+	checkpoint ArtworkReconcileCheckpoint,
+	save func(ArtworkReconcileCheckpoint) error,
+	progress func(percent float64, message string),
+) (ArtworkReconcileStats, error) {
 	stats := checkpoint.Stats
 	total := checkpoint.ChapterTotal
 	for _, count := range checkpoint.Totals {
@@ -421,7 +453,6 @@ func (r *ArtworkCacheReconciler) runVerifySweep(
 	}
 
 	runtimeDone := checkpoint.Done
-	checkpointBlocked := false
 	startSurface := checkpoint.SurfaceIndex
 	for i := startSurface; i < len(surfaces); i++ {
 		s := surfaces[i]
@@ -433,9 +464,6 @@ func (r *ArtworkCacheReconciler) runVerifySweep(
 		}
 		if checkpoint.Totals[i] == 0 {
 			runtimeDone += checkpoint.Totals[i]
-			if checkpointBlocked {
-				continue
-			}
 			checkpoint.SurfaceIndex = i + 1
 			checkpoint.SurfaceCursor = nil
 			checkpoint.SurfaceDone = 0
@@ -451,14 +479,12 @@ func (r *ArtworkCacheReconciler) runVerifySweep(
 			pct := 5 + 90*float64(runtimeDone+surfaceDone)/float64(total)
 			progress(pct, fmt.Sprintf("Resuming %s (%d/%d overall)", s.name, runtimeDone+surfaceDone, total))
 		}
-		surfaceStartErrors := stats.SweepErrors
-		if err := r.sweepSurfaceFrom(ctx, s, &stats, cursor, surfaceDone,
+		if err := sweeper.sweepSurfaceFrom(ctx, s, &stats, cursor, surfaceDone,
 			func(batchCursor []string, batchDone int, batchCheckpointable bool) error {
 				pct := 5 + 90*float64(runtimeDone+batchDone)/float64(total)
 				progress(pct, fmt.Sprintf("Verifying %s (%d/%d overall)", s.name, runtimeDone+batchDone, total))
-				if !batchCheckpointable || checkpointBlocked {
-					checkpointBlocked = true
-					return nil
+				if !batchCheckpointable {
+					return fmt.Errorf("storage errors in %s batch; stopping at the last saved checkpoint", s.name)
 				}
 				checkpoint.SurfaceIndex = i
 				checkpoint.SurfaceCursor = append(checkpoint.SurfaceCursor[:0], batchCursor...)
@@ -472,13 +498,7 @@ func (r *ArtworkCacheReconciler) runVerifySweep(
 			}); err != nil {
 			return stats, err
 		}
-		if stats.SweepErrors > surfaceStartErrors {
-			checkpointBlocked = true
-		}
 		runtimeDone += checkpoint.Totals[i]
-		if checkpointBlocked {
-			continue
-		}
 		checkpoint.SurfaceIndex = i + 1
 		checkpoint.SurfaceCursor = nil
 		checkpoint.SurfaceDone = 0
@@ -500,13 +520,12 @@ func (r *ArtworkCacheReconciler) runVerifySweep(
 			pct := 5 + 90*float64(runtimeDone+chapterDone)/float64(total)
 			progress(pct, fmt.Sprintf("Resuming chapter thumbnails (%d/%d overall)", runtimeDone+chapterDone, total))
 		}
-		if err := r.sweepChapterThumbnailsFrom(ctx, &stats, chapterCursor, chapterDone,
+		if err := sweeper.sweepChapterThumbnailsFrom(ctx, &stats, chapterCursor, chapterDone,
 			func(batchCursor int64, batchDone int, batchCheckpointable bool) error {
 				pct := 5 + 90*float64(runtimeDone+batchDone)/float64(total)
 				progress(pct, fmt.Sprintf("Verifying chapter thumbnails (%d/%d overall)", runtimeDone+batchDone, total))
-				if !batchCheckpointable || checkpointBlocked {
-					checkpointBlocked = true
-					return nil
+				if !batchCheckpointable {
+					return fmt.Errorf("storage errors in chapter-thumbnail batch; stopping at the last saved checkpoint")
 				}
 				checkpoint.SurfaceIndex = len(surfaces)
 				checkpoint.SurfaceCursor = nil
@@ -523,14 +542,12 @@ func (r *ArtworkCacheReconciler) runVerifySweep(
 			return stats, err
 		}
 	}
-	if !checkpointBlocked {
-		checkpoint.SurfaceIndex = len(surfaces) + 1
-		checkpoint.Done = runtimeDone
-		checkpoint.Finished = true
-		checkpoint.Stats = stats
-		if err := saveArtworkReconcileCheckpoint(save, checkpoint); err != nil {
-			return stats, fmt.Errorf("artwork reconcile: saving completed checkpoint: %w", err)
-		}
+	checkpoint.SurfaceIndex = len(surfaces) + 1
+	checkpoint.Done = runtimeDone
+	checkpoint.Finished = true
+	checkpoint.Stats = stats
+	if err := saveArtworkReconcileCheckpoint(save, checkpoint); err != nil {
+		return stats, fmt.Errorf("artwork reconcile: saving completed checkpoint: %w", err)
 	}
 	return stats, nil
 }

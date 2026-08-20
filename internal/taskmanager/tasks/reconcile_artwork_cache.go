@@ -226,6 +226,12 @@ func (t *ReconcileArtworkCacheTask) run(
 	if err != nil {
 		return metadata.ArtworkReconcileStats{Mode: metadata.ArtworkReconcileModeVerify}, fmt.Errorf("reading artwork reconcile baseline identity: %w", err)
 	}
+	// A same-identity run is a manual recovery sweep. It must cover the whole
+	// catalog as it exists now rather than inheriting a cursor from an older
+	// attempt, because objects may have disappeared anywhere in the meantime.
+	if baseline == t.identity {
+		return runner.RunResumable(ctx, nil, nil, progress)
+	}
 	rawCheckpoint, err := t.settings.Get(ctx, ArtworkStorageReconcileCheckpointKey)
 	if err != nil {
 		return metadata.ArtworkReconcileStats{Mode: metadata.ArtworkReconcileModeVerify}, fmt.Errorf("reading artwork reconcile checkpoint: %w", err)
@@ -236,8 +242,7 @@ func (t *ReconcileArtworkCacheTask) run(
 		var envelope artworkReconcileCheckpointEnvelope
 		if unmarshalErr := json.Unmarshal([]byte(rawCheckpoint), &envelope); unmarshalErr != nil {
 			slog.WarnContext(ctx, "artwork reconcile: ignoring invalid checkpoint", "error", unmarshalErr)
-		} else if envelope.BaselineIdentity == baseline && envelope.TargetIdentity == t.identity &&
-			(baseline != t.identity || !envelope.Checkpoint.Complete()) {
+		} else if envelope.BaselineIdentity == baseline && envelope.TargetIdentity == t.identity {
 			checkpoint = &envelope.Checkpoint
 		}
 	}

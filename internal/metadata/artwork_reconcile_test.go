@@ -271,84 +271,124 @@ func TestArtworkReconcileVerifySweep(t *testing.T) {
 	}
 }
 
-func TestArtworkReconcileResumesFromSavedBatch(t *testing.T) {
-	dsn := os.Getenv("SILO_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("SILO_TEST_DATABASE_URL is not set")
-	}
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect test database: %v", err)
-	}
-	t.Cleanup(pool.Close)
+type scriptedArtworkBatch struct {
+	cursor      []string
+	done        int
+	verified    int
+	sweepErrors int
+}
 
-	prefix := fmt.Sprintf("arc-resume-%d-", time.Now().UnixNano())
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO media_items (content_id, type, title, status, genres, poster_path, poster_source_path)
-		SELECT
-			$1 || lpad(n::text, 4, '0'),
-			'movie', 'ARC Resume', 'matched', '{}'::text[],
-			'tmdb/movies/' || $1 || lpad(n::text, 4, '0') || '/poster/original.webp',
-			'https://img.example/' || $1 || lpad(n::text, 4, '0') || '.jpg'
-		FROM generate_series(0, 500) AS n
-	`, prefix); err != nil {
-		t.Fatalf("seed resumable artwork: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = pool.Exec(ctx, `DELETE FROM media_items WHERE content_id LIKE $1`, prefix+"%")
+type scriptedArtworkSweepCall struct {
+	name   string
+	cursor []string
+	done   int
+}
+
+type scriptedArtworkVerifySweeper struct {
+	batches   map[string][]scriptedArtworkBatch
+	calls     []scriptedArtworkSweepCall
+	processed map[string]int
+	chapters  int
+}
+
+func (s *scriptedArtworkVerifySweeper) sweepSurfaceFrom(
+	_ context.Context,
+	surface artworkSweepSurface,
+	stats *ArtworkReconcileStats,
+	cursor []string,
+	done int,
+	onBatch func([]string, int, bool) error,
+) error {
+	s.calls = append(s.calls, scriptedArtworkSweepCall{
+		name:   surface.name,
+		cursor: append([]string(nil), cursor...),
+		done:   done,
 	})
-
-	surface := artworkSweepSurface{
-		name:      "resume test posters",
-		table:     "media_items",
-		keyCols:   []artworkSweepKey{textSweepKey("content_id")},
-		pathCol:   "poster_path",
-		sourceCol: "poster_source_path",
-		clearSet:  `poster_path = '', last_refreshed = NULL, updated_at = NOW()`,
+	if s.processed == nil {
+		s.processed = make(map[string]int)
 	}
-	checker := &fakeObjectChecker{}
-	reconciler := NewArtworkCacheReconciler(pool, checker)
+	for _, batch := range s.batches[surface.name] {
+		s.processed[surface.name]++
+		stats.Checked += batch.verified + batch.sweepErrors
+		stats.Verified += batch.verified
+		stats.Errors += batch.sweepErrors
+		stats.SweepErrors += batch.sweepErrors
+		if err := onBatch(batch.cursor, batch.done, batch.sweepErrors == 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *scriptedArtworkVerifySweeper) sweepChapterThumbnailsFrom(
+	context.Context,
+	*ArtworkReconcileStats,
+	int64,
+	int,
+	func(int64, int, bool) error,
+) error {
+	s.chapters++
+	return nil
+}
+
+func TestArtworkReconcileStopsAtUnsafeBatchAndResumesFromLastCheckpoint(t *testing.T) {
+	surfaces := []artworkSweepSurface{{name: "posters"}, {name: "later surface"}}
 	checkpoint := ArtworkReconcileCheckpoint{
 		Version: artworkReconcileCheckpointVersion,
-		Totals:  []int{501},
-		Stats:   ArtworkReconcileStats{Mode: "verify"},
+		Totals:  []int{1001, 1},
+		Stats:   ArtworkReconcileStats{Mode: ArtworkReconcileModeVerify},
 	}
-	stopAfterFirstBatch := errors.New("simulated restart")
+	firstRun := &scriptedArtworkVerifySweeper{batches: map[string][]scriptedArtworkBatch{
+		"posters": {
+			{cursor: []string{"0499"}, done: 500, verified: 500},
+			{cursor: []string{"0999"}, done: 1000, verified: 499, sweepErrors: 1},
+			{cursor: []string{"1000"}, done: 1001, verified: 1},
+		},
+		"later surface": {{cursor: []string{"later"}, done: 1, verified: 1}},
+	}}
 	var saved ArtworkReconcileCheckpoint
-	_, err = reconciler.runVerifySweep(ctx, []artworkSweepSurface{surface}, checkpoint,
+	saveCount := 0
+	stats, err := runArtworkVerifySweep(context.Background(), firstRun, surfaces, checkpoint,
 		func(next ArtworkReconcileCheckpoint) error {
+			saveCount++
 			saved = cloneArtworkReconcileCheckpoint(next)
-			if next.SurfaceDone == artworkReconcileBatchSize {
-				return stopAfterFirstBatch
-			}
 			return nil
 		}, func(float64, string) {})
-	if !errors.Is(err, stopAfterFirstBatch) {
-		t.Fatalf("first sweep error = %v, want simulated restart", err)
+	if err == nil || !strings.Contains(err.Error(), "last saved checkpoint") {
+		t.Fatalf("first sweep error = %v, want checkpoint stop", err)
 	}
-	if saved.SurfaceDone != artworkReconcileBatchSize || len(saved.SurfaceCursor) != 1 {
-		t.Fatalf("saved checkpoint = %#v, want one completed batch", saved)
+	if stats.SweepErrors != 1 {
+		t.Fatalf("first sweep errors = %d, want 1", stats.SweepErrors)
+	}
+	if firstRun.processed["posters"] != 2 || firstRun.processed["later surface"] != 0 || firstRun.chapters != 0 {
+		t.Fatalf("work after unsafe batch: processed=%v chapter_calls=%d", firstRun.processed, firstRun.chapters)
+	}
+	if saveCount != 1 || saved.SurfaceDone != 500 || len(saved.SurfaceCursor) != 1 || saved.SurfaceCursor[0] != "0499" {
+		t.Fatalf("saved checkpoint = %#v (save count %d), want safe first batch", saved, saveCount)
 	}
 
-	checker.mu.Lock()
-	checker.checked = map[string]int{}
-	checker.mu.Unlock()
-	stats, err := reconciler.runVerifySweep(ctx, []artworkSweepSurface{surface}, saved, nil, func(float64, string) {})
+	resumedRun := &scriptedArtworkVerifySweeper{batches: map[string][]scriptedArtworkBatch{
+		"posters": {
+			{cursor: []string{"0999"}, done: 1000, verified: 500},
+			{cursor: []string{"1000"}, done: 1001, verified: 1},
+		},
+		"later surface": {{cursor: []string{"later"}, done: 1, verified: 1}},
+	}}
+	var completed ArtworkReconcileCheckpoint
+	stats, err = runArtworkVerifySweep(context.Background(), resumedRun, surfaces, saved,
+		func(next ArtworkReconcileCheckpoint) error {
+			completed = cloneArtworkReconcileCheckpoint(next)
+			return nil
+		}, func(float64, string) {})
 	if err != nil {
 		t.Fatalf("resumed sweep: %v", err)
 	}
-	if stats.Verified != 501 {
-		t.Fatalf("resumed Verified = %d, want 501", stats.Verified)
+	if len(resumedRun.calls) == 0 || resumedRun.calls[0].done != 500 ||
+		len(resumedRun.calls[0].cursor) != 1 || resumedRun.calls[0].cursor[0] != "0499" {
+		t.Fatalf("resume call = %#v, want cursor 0499 at 500 rows", resumedRun.calls)
 	}
-	firstKey := fmt.Sprintf("tmdb/movies/%s%04d/poster/original.webp", prefix, 0)
-	lastKey := fmt.Sprintf("tmdb/movies/%s%04d/poster/original.webp", prefix, 500)
-	checker.mu.Lock()
-	firstChecks := checker.checked[firstKey]
-	lastChecks := checker.checked[lastKey]
-	checker.mu.Unlock()
-	if firstChecks != 0 || lastChecks != 1 {
-		t.Fatalf("resume checks: first=%d last=%d, want first=0 last=1", firstChecks, lastChecks)
+	if stats.Verified != 1002 || !completed.Complete() {
+		t.Fatalf("resumed stats/checkpoint = %#v / %#v, want 1002 verified and complete", stats, completed)
 	}
 }
 
@@ -393,8 +433,8 @@ func TestArtworkReconcileLeavesRowsAloneOnStorageErrors(t *testing.T) {
 			saved = cloneArtworkReconcileCheckpoint(next)
 			return nil
 		}, nil)
-	if err != nil {
-		t.Fatalf("RunResumable: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "last saved checkpoint") {
+		t.Fatalf("RunResumable error = %v, want checkpoint stop", err)
 	}
 	if stats.Errors == 0 || stats.SweepErrors == 0 {
 		t.Fatal("expected the erroring key to be counted")
