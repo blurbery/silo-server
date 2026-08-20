@@ -4583,6 +4583,7 @@ export interface TaskInfo {
   state: TaskState;
   progress: number;
   progress_message?: string;
+  manual_only?: boolean;
   last_execution?: ExecutionResult;
   triggers: TriggerConfig[];
   next_run_at?: string;

@@ -3,8 +3,11 @@ package tasks
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/Silo-Server/silo-server/internal/metadata"
 	"github.com/Silo-Server/silo-server/internal/taskmanager"
@@ -19,6 +22,7 @@ type fakeMetadataImageCacheRunner struct {
 	maxRuntime  time.Duration
 	drainCalls  int
 	backfills   int
+	workerIDs   []string
 }
 
 func (f *fakeMetadataImageCacheRunner) run(claimLimit int, concurrency int, maxRuntime time.Duration, reportProgress metadata.ImageCacheRunProgressReporter) (metadata.ImageCacheRunStats, error) {
@@ -31,13 +35,15 @@ func (f *fakeMetadataImageCacheRunner) run(claimLimit int, concurrency int, maxR
 	return f.stats, f.err
 }
 
-func (f *fakeMetadataImageCacheRunner) DrainUntilIdle(_ context.Context, _ string, claimLimit int, concurrency int, maxRuntime time.Duration, reportProgress metadata.ImageCacheRunProgressReporter) (metadata.ImageCacheRunStats, error) {
+func (f *fakeMetadataImageCacheRunner) DrainUntilIdle(_ context.Context, workerID string, claimLimit int, concurrency int, maxRuntime time.Duration, reportProgress metadata.ImageCacheRunProgressReporter) (metadata.ImageCacheRunStats, error) {
 	f.drainCalls++
+	f.workerIDs = append(f.workerIDs, workerID)
 	return f.run(claimLimit, concurrency, maxRuntime, reportProgress)
 }
 
-func (f *fakeMetadataImageCacheRunner) RunUntilIdle(_ context.Context, _ string, claimLimit int, concurrency int, maxRuntime time.Duration, reportProgress metadata.ImageCacheRunProgressReporter) (metadata.ImageCacheRunStats, error) {
+func (f *fakeMetadataImageCacheRunner) RunUntilIdle(_ context.Context, workerID string, claimLimit int, concurrency int, maxRuntime time.Duration, reportProgress metadata.ImageCacheRunProgressReporter) (metadata.ImageCacheRunStats, error) {
 	f.backfills++
+	f.workerIDs = append(f.workerIDs, workerID)
 	return f.run(claimLimit, concurrency, maxRuntime, reportProgress)
 }
 
@@ -77,6 +83,9 @@ func TestBackfillMetadataImagesTaskProperties(t *testing.T) {
 	if len(task.DefaultTriggers()) != 0 {
 		t.Fatalf("DefaultTriggers count = %d, want manual-only", len(task.DefaultTriggers()))
 	}
+	if !task.ManualOnly() {
+		t.Fatal("ManualOnly() = false, want true")
+	}
 	shouldRun, err := task.ShouldRun(context.Background())
 	if err != nil || shouldRun {
 		t.Fatalf("ShouldRun() = %t, %v, want false, nil", shouldRun, err)
@@ -106,8 +115,8 @@ func TestCacheMetadataImagesTaskReportsStats(t *testing.T) {
 	if err := task.Execute(context.Background(), progress); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if runner.claimLimit != 1000 {
-		t.Fatalf("claimLimit = %d, want 1000", runner.claimLimit)
+	if runner.claimLimit != 2 {
+		t.Fatalf("claimLimit = %d, want one immediately-startable job per worker", runner.claimLimit)
 	}
 	if runner.concurrency != 2 {
 		t.Fatalf("concurrency = %d, want 2", runner.concurrency)
@@ -117,6 +126,9 @@ func TestCacheMetadataImagesTaskReportsStats(t *testing.T) {
 	}
 	if runner.drainCalls != 1 || runner.backfills != 0 {
 		t.Fatalf("runner calls drain=%d backfill=%d, want 1/0", runner.drainCalls, runner.backfills)
+	}
+	if len(runner.workerIDs) != 1 || !strings.Contains(runner.workerIDs[0], ":drain:") {
+		t.Fatalf("drain worker IDs = %#v, want one execution-scoped drain owner", runner.workerIDs)
 	}
 	if len(progress.messages) != 3 {
 		t.Fatalf("progress reports = %d, want 3", len(progress.messages))
@@ -146,12 +158,50 @@ func TestBackfillMetadataImagesTaskReportsDiscovery(t *testing.T) {
 	if runner.drainCalls != 0 || runner.backfills != 1 {
 		t.Fatalf("runner calls drain=%d backfill=%d, want 0/1", runner.drainCalls, runner.backfills)
 	}
+	if runner.maxRuntime != 0 {
+		t.Fatalf("maxRuntime = %s, want no deadline for manual backfill", runner.maxRuntime)
+	}
+	if runner.claimLimit != 2 {
+		t.Fatalf("claimLimit = %d, want one immediately-startable job per worker", runner.claimLimit)
+	}
+	if len(runner.workerIDs) != 1 || !strings.Contains(runner.workerIDs[0], ":backfill:") {
+		t.Fatalf("backfill worker IDs = %#v, want one execution-scoped backfill owner", runner.workerIDs)
+	}
 	if progress.messages[0] != "Starting full metadata image backfill" {
 		t.Fatalf("initial message = %q", progress.messages[0])
 	}
 	want := "Discovered 5 existing, Batches 2, claimed 5, cached 5, 0 failed attempts, skipped 0, uploaded 0 variants, found 0 existing variants, deleted 0 old successes"
 	if got := progress.messages[len(progress.messages)-1]; got != want {
 		t.Fatalf("final message = %q, want %q", got, want)
+	}
+}
+
+func TestMetadataImageTasksUseDistinctExecutionLeaseOwners(t *testing.T) {
+	runner := &fakeMetadataImageCacheRunner{}
+	progress := &recordingProgress{}
+	cacheTask := NewCacheMetadataImagesTask(runner)
+	backfillTask := NewBackfillMetadataImagesTask(runner)
+	for i := 0; i < 2; i++ {
+		if err := cacheTask.Execute(context.Background(), progress); err != nil {
+			t.Fatalf("cache Execute() call %d error = %v", i+1, err)
+		}
+		if err := backfillTask.Execute(context.Background(), progress); err != nil {
+			t.Fatalf("backfill Execute() call %d error = %v", i+1, err)
+		}
+	}
+	if len(runner.workerIDs) != 4 {
+		t.Fatalf("worker IDs = %#v, want four execution-scoped lease owners", runner.workerIDs)
+	}
+	seen := make(map[string]struct{}, len(runner.workerIDs))
+	for _, workerID := range runner.workerIDs {
+		if _, duplicate := seen[workerID]; duplicate {
+			t.Fatalf("duplicate worker ID %q in %#v", workerID, runner.workerIDs)
+		}
+		seen[workerID] = struct{}{}
+		suffix := workerID[strings.LastIndex(workerID, ":")+1:]
+		if _, err := uuid.Parse(suffix); err != nil {
+			t.Fatalf("worker ID %q has invalid UUID suffix: %v", workerID, err)
+		}
 	}
 }
 

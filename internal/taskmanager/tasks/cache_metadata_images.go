@@ -6,13 +6,18 @@ import (
 	"os"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/Silo-Server/silo-server/internal/metadata"
 	"github.com/Silo-Server/silo-server/internal/taskmanager"
 )
 
 const (
 	cacheMetadataImagesIntervalMs = int64(60 * 1000)
-	cacheMetadataImagesBatchSize  = 1000
+	// Claim only work that can start immediately. Claiming a large queue page
+	// stamps one lease on every row up front; with two workers, the unstarted
+	// tail could expire and be reclaimed before this execution reaches it.
+	cacheMetadataImagesClaimLimit = 2
 	cacheMetadataImagesWorkers    = 2
 	cacheMetadataImagesMaxRuntime = 10 * time.Minute
 )
@@ -59,7 +64,8 @@ func (t *BackfillMetadataImagesTask) Description() string {
 func (t *BackfillMetadataImagesTask) Category() taskmanager.TaskCategory {
 	return taskmanager.TaskCategoryMetadata
 }
-func (t *BackfillMetadataImagesTask) IsHidden() bool { return false }
+func (t *BackfillMetadataImagesTask) IsHidden() bool   { return false }
+func (t *BackfillMetadataImagesTask) ManualOnly() bool { return true }
 
 func (t *CacheMetadataImagesTask) DefaultTriggers() []taskmanager.TriggerConfig {
 	return []taskmanager.TriggerConfig{
@@ -103,10 +109,23 @@ func executeMetadataImages(ctx context.Context, progress taskmanager.ProgressRep
 	if hostname == "" {
 		hostname = "silo"
 	}
+	mode := "drain"
+	maxRuntime := cacheMetadataImagesMaxRuntime
 	startMessage := "Starting queued metadata image cache"
 	if backfill {
+		mode = "backfill"
+		// A manual backfill must either reach the end of discovery or be
+		// explicitly cancelled. A scheduled drain is bounded because its next
+		// trigger continues the durable queue; a manual-only task has no such
+		// continuation and must not report a partial sweep as complete.
+		maxRuntime = 0
 		startMessage = "Starting full metadata image backfill"
 	}
+	// TaskManager prevents overlap for one task key, but drain and backfill are
+	// intentionally separate tasks and may run together. Give every execution
+	// a distinct lease owner so a stale worker can never finalize a job reclaimed
+	// by the other task after its lease expires.
+	workerID := fmt.Sprintf("%s:%s:%s", hostname, mode, uuid.NewString())
 	progress.Report(0, startMessage)
 	// Discovery widens the denominator mid-run, so the raw ratio can dip when a
 	// sweep enqueues a fresh page. Reports are sequential, so a high-water mark
@@ -114,10 +133,10 @@ func executeMetadataImages(ctx context.Context, progress taskmanager.ProgressRep
 	reportedPercent := 0.0
 	stats, err := run(
 		ctx,
-		hostname,
-		cacheMetadataImagesBatchSize,
+		workerID,
+		cacheMetadataImagesClaimLimit,
 		cacheMetadataImagesWorkers,
-		cacheMetadataImagesMaxRuntime,
+		maxRuntime,
 		func(update metadata.ImageCacheRunStats) {
 			percent := cacheMetadataImagesPercent(update)
 			if percent < reportedPercent {

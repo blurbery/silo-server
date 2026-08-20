@@ -568,14 +568,21 @@ export default function AdminTaskDetail() {
       <div className="space-y-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-lg font-medium tracking-tight">Schedule</h2>
-          {!editing && (
+          {!task.manual_only && !editing && (
             <Button variant="outline" size="sm" onClick={startEditing}>
               Edit Schedule
             </Button>
           )}
         </div>
 
-        {!editing ? (
+        {task.manual_only ? (
+          <div className="surface-panel-subtle rounded-xl p-4 text-sm">
+            <p className="text-muted-foreground">
+              Manual only. This task runs only when you select Run Now; scheduled triggers cannot be
+              configured.
+            </p>
+          </div>
+        ) : !editing ? (
           <div className="surface-panel overflow-hidden rounded-2xl border-0">
             {task.triggers.length === 0 && (
               <p className="text-muted-foreground p-4 text-sm">No triggers configured.</p>
