@@ -294,7 +294,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	// dual-layer output, so the default Android route mirrors Silo Apple: P8.1
 	// base-layer Dolby Vision first, then same-file HDR10.
 	if source.DVProfile == 7 && quality.PreservesSource && videoOK && containerOK && audioOK &&
-		audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && !subtitle.RequiresBurn {
+		originalAudioSelectionRealizableV3(input.Request, file, input.AudioTrackIndex) && !subtitle.RequiresBurn {
 		if clientDV81Eligible {
 			plan := base
 			plan.Delivery = DeliveryOriginalHTTPV3
@@ -570,7 +570,7 @@ func planAudioOnlyV3(input PlannerInputV3, file *models.MediaFile, source Source
 		Timeline:               TimelineV3{SourceStartSeconds: floatOrZeroV3(request.StartPosition), PlayerStartSeconds: floatOrZeroV3(request.StartPosition), CanSeekAnywhere: true, SeekRestoration: "player_position"},
 	}
 	containerOK := containsFoldV3(request.Capabilities.Containers, source.Container)
-	if audioOK && containerOK && !bandwidthCapExceeded && audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && deliveryAvailableV3(request, DeliveryClassOriginalHTTPV3) {
+	if audioOK && containerOK && !bandwidthCapExceeded && originalAudioSelectionRealizableV3(request, file, input.AudioTrackIndex) && deliveryAvailableV3(request, DeliveryClassOriginalHTTPV3) {
 		plan := base
 		plan.Delivery = DeliveryOriginalHTTPV3
 		plan.Stream = StreamV3{Protocol: StreamHTTPProgressiveV3, Container: source.Container, MIMEType: MimeFromExtension(file.FilePath), Headers: map[string]string{}, HeaderRefresh: HeaderRefreshNoneV3}

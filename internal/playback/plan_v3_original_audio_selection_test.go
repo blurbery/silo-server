@@ -176,3 +176,76 @@ func TestPlanPlaybackV3OriginalHTTPKeepsRemuxWithoutAudioSelectionFeature(t *tes
 		t.Fatalf("result = %s", ExplainPlannerResultV3(result))
 	}
 }
+
+func TestPlanPlaybackV3Profile7OriginalHTTPHonorsClientAudioTrackSelection(t *testing.T) {
+	file := detailedFixtureFileV3()
+	file.VideoTracks[0].DVProfile = 7
+	file.VideoTracks[0].DVBLCompatID = 1
+	file.VideoTracks[0].DVELPresent = true
+	file.VideoTracks[0].DVEnhancementLayer = "unknown"
+	file.VideoTracks[0].VideoRange = "DolbyVision"
+	file.VideoTracks[0].VideoRangeType = "DOVIWithEL"
+	file.AudioTracks = []models.AudioTrack{
+		{Codec: "aac", Channels: 2, Layout: "stereo", Default: true},
+		{Codec: "aac", Channels: 2, Layout: "stereo"},
+	}
+
+	request := validStartRequestV3()
+	request.ClientFeatures = append(request.ClientFeatures, FeatureClientVideoTransforms)
+	request.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
+	request.Capabilities.HDRDetails = &HDRCapabilitiesV3{HDR10: true, DolbyVisionProfiles: []int{8}}
+	request.ClientPlaybackContext.Output.HDRDetails = request.Capabilities.HDRDetails
+	direct := request.ClientPlaybackContext.Deliveries[DeliveryClassOriginalHTTPV3]
+	direct.Features = append(direct.Features, ClientAudioTrackSelectionV3)
+	direct.Transformations = []TransformationV3{
+		{Name: ClientDV7ToDV81V3, Executor: ExecutorClientV3, RecipeVersion: ClientDVTransformVersionV3},
+		{Name: ClientDV7ToHDR10V3, Executor: ExecutorClientV3, RecipeVersion: ClientDVTransformVersionV3},
+	}
+	request.ClientPlaybackContext.Deliveries[DeliveryClassOriginalHTTPV3] = direct
+
+	input := PlannerInputV3{
+		Request: request, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 1,
+		Settings: PlannerSettingsV3{TranscodeEnabled: true}, Registry: testTransformationRegistryV3(),
+	}
+	first := PlanPlaybackV3(input)
+	if first.Plan == nil || first.Plan.Delivery != DeliveryOriginalHTTPV3 || first.Plan.DecisionReason != "client_dv7_to_dv81" {
+		t.Fatalf("first = %s", ExplainPlannerResultV3(first))
+	}
+	if first.Plan.SelectedTracks.Audio == nil || first.Plan.SelectedTracks.Audio.Index == nil || *first.Plan.SelectedTracks.Audio.Index != 1 {
+		t.Fatalf("first selected audio = %#v, want index 1", first.Plan.SelectedTracks.Audio)
+	}
+
+	input.AttemptedKeys = []string{first.Plan.PlanAttemptKey}
+	second := PlanPlaybackV3(input)
+	if second.Plan == nil || second.Plan.Delivery != DeliveryOriginalHTTPV3 || second.Plan.DecisionReason != "client_dv7_to_hdr10" {
+		t.Fatalf("second = %s", ExplainPlannerResultV3(second))
+	}
+	if second.Plan.SelectedTracks.Audio == nil || second.Plan.SelectedTracks.Audio.Index == nil || *second.Plan.SelectedTracks.Audio.Index != 1 {
+		t.Fatalf("second selected audio = %#v, want index 1", second.Plan.SelectedTracks.Audio)
+	}
+}
+
+func TestPlanPlaybackV3AudioOnlyOriginalHTTPHonorsClientAudioTrackSelection(t *testing.T) {
+	file := audioOnlyFixtureFileV3()
+	file.AudioTracks = []models.AudioTrack{
+		{Codec: "aac", Channels: 2, Layout: "stereo", Default: true},
+		{Codec: "aac", Channels: 2, Layout: "stereo"},
+	}
+	request := validStartRequestV3()
+	request.FileID = file.ID
+	request.Capabilities.Containers = []string{"mp4"}
+	direct := request.ClientPlaybackContext.Deliveries[DeliveryClassOriginalHTTPV3]
+	direct.Features = append(direct.Features, ClientAudioTrackSelectionV3)
+	request.ClientPlaybackContext.Deliveries[DeliveryClassOriginalHTTPV3] = direct
+
+	result := PlanPlaybackV3(PlannerInputV3{
+		Request: request, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 1,
+		Settings: PlannerSettingsV3{TranscodeEnabled: true}, Registry: testTransformationRegistryV3(),
+	})
+	if result.Plan == nil || result.Plan.Delivery != DeliveryOriginalHTTPV3 || result.PlayMethod != PlayDirect {
+		t.Fatalf("result = %s", ExplainPlannerResultV3(result))
+	}
+	if result.Plan.SelectedTracks.Audio == nil || result.Plan.SelectedTracks.Audio.Index == nil || *result.Plan.SelectedTracks.Audio.Index != 1 {
+		t.Fatalf("selected audio = %#v, want index 1", result.Plan.SelectedTracks.Audio)
+	}
+}
