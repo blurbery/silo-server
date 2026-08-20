@@ -105,8 +105,52 @@ func (r *PersonRepository) FindOrCreate(ctx context.Context, p models.Person) (i
 }
 
 // enrichExisting updates empty fields on an existing person with non-empty values from p.
+func personPhotoFillPredicate(existing, incoming string) string {
+	return fmt.Sprintf(
+		"((COALESCE(%s, '') = '' AND %s <> '') OR (%s = '-' AND %s NOT IN ('', '-')))",
+		existing, incoming, existing, incoming,
+	)
+}
+
+func batchPersonEnrichmentQuery() string {
+	photoPathFill := personPhotoFillPredicate("people.photo_path", "t.photo_path")
+	photoSourceFill := personPhotoFillPredicate("people.photo_source_path", "t.photo_source_path")
+	photoThumbFill := personPhotoFillPredicate("people.photo_thumbhash", "t.photo_thumbhash")
+	return fmt.Sprintf(`
+		UPDATE people SET
+			tmdb_id = CASE WHEN COALESCE(people.tmdb_id, '') = '' AND t.tmdb_id <> '' THEN t.tmdb_id ELSE people.tmdb_id END,
+			imdb_id = CASE WHEN COALESCE(people.imdb_id, '') = '' AND t.imdb_id <> '' THEN t.imdb_id ELSE people.imdb_id END,
+			tvdb_id = CASE WHEN COALESCE(people.tvdb_id, '') = '' AND t.tvdb_id <> '' THEN t.tvdb_id ELSE people.tvdb_id END,
+			plex_guid = CASE WHEN COALESCE(people.plex_guid, '') = '' AND t.plex_guid <> '' THEN t.plex_guid ELSE people.plex_guid END,
+			photo_path = CASE WHEN %[1]s THEN t.photo_path ELSE people.photo_path END,
+			photo_source_path = CASE WHEN %[2]s THEN t.photo_source_path ELSE people.photo_source_path END,
+			photo_thumbhash = CASE WHEN %[3]s THEN t.photo_thumbhash ELSE people.photo_thumbhash END,
+			bio = CASE WHEN COALESCE(people.bio, '') = '' AND t.bio <> '' THEN t.bio ELSE people.bio END,
+			birthplace = CASE WHEN COALESCE(people.birthplace, '') = '' AND t.birthplace <> '' THEN t.birthplace ELSE people.birthplace END,
+			homepage = CASE WHEN COALESCE(people.homepage, '') = '' AND t.homepage <> '' THEN t.homepage ELSE people.homepage END,
+			updated_at = NOW()
+		FROM UNNEST($1::bigint[], $2::text[], $3::text[], $4::text[], $5::text[],
+		            $6::text[], $7::text[], $8::text[], $9::text[], $10::text[], $11::text[])
+			AS t(id, tmdb_id, imdb_id, tvdb_id, plex_guid,
+			     photo_path, photo_source_path, photo_thumbhash, bio, birthplace, homepage)
+		WHERE people.id = t.id
+		  AND (
+			(COALESCE(people.tmdb_id, '') = '' AND t.tmdb_id <> '') OR
+			(COALESCE(people.imdb_id, '') = '' AND t.imdb_id <> '') OR
+			(COALESCE(people.tvdb_id, '') = '' AND t.tvdb_id <> '') OR
+			(COALESCE(people.plex_guid, '') = '' AND t.plex_guid <> '') OR
+			%[1]s OR
+			%[2]s OR
+			%[3]s OR
+			(COALESCE(people.bio, '') = '' AND t.bio <> '') OR
+			(COALESCE(people.birthplace, '') = '' AND t.birthplace <> '') OR
+			(COALESCE(people.homepage, '') = '' AND t.homepage <> '')
+		  )`, photoPathFill, photoSourceFill, photoThumbFill)
+}
+
 func (r *PersonRepository) enrichExisting(ctx context.Context, id int64, p models.Person) (int64, error) {
 	var setClauses []string
+	var changePredicates []string
 	var args []interface{}
 	argIdx := 1
 
@@ -115,22 +159,21 @@ func (r *PersonRepository) enrichExisting(ctx context.Context, id int64, p model
 		if value == "" {
 			return
 		}
-		setClauses = append(setClauses, fmt.Sprintf("%s = CASE WHEN %s = '' THEN $%d ELSE %s END", column, column, argIdx, column))
+		setClauses = append(setClauses, fmt.Sprintf("%s = CASE WHEN COALESCE(%s, '') = '' THEN $%d ELSE %s END", column, column, argIdx, column))
+		changePredicates = append(changePredicates, fmt.Sprintf("COALESCE(%s, '') = ''", column))
 		args = append(args, value)
 		argIdx++
 	}
-	// overwriteIfReal sets the column when the new value is real. The "-"
-	// sentinel ("no photo, but we tried") is only written when the existing
-	// column is empty, so it cannot clobber a real provider path.
-	overwriteIfReal := func(column, value string) {
+	// fillPhoto also allows a real image to replace the explicit "no photo"
+	// sentinel, but never replaces a populated provider or cached S3 path.
+	fillPhoto := func(column, value string) {
 		if value == "" {
 			return
 		}
-		if value == "-" {
-			setClauses = append(setClauses, fmt.Sprintf("%s = CASE WHEN %s = '' THEN $%d ELSE %s END", column, column, argIdx, column))
-		} else {
-			setClauses = append(setClauses, fmt.Sprintf("%s = $%d", column, argIdx))
-		}
+		incoming := fmt.Sprintf("$%d", argIdx)
+		predicate := personPhotoFillPredicate(column, incoming)
+		setClauses = append(setClauses, fmt.Sprintf("%s = CASE WHEN %s THEN %s ELSE %s END", column, predicate, incoming, column))
+		changePredicates = append(changePredicates, predicate)
 		args = append(args, value)
 		argIdx++
 	}
@@ -139,9 +182,9 @@ func (r *PersonRepository) enrichExisting(ctx context.Context, id int64, p model
 	fillEmpty("imdb_id", p.ImdbID)
 	fillEmpty("tvdb_id", p.TvdbID)
 	fillEmpty("plex_guid", p.PlexGUID)
-	overwriteIfReal("photo_path", p.PhotoPath)
-	overwriteIfReal("photo_source_path", p.PhotoSourcePath)
-	overwriteIfReal("photo_thumbhash", p.PhotoThumbhash)
+	fillPhoto("photo_path", p.PhotoPath)
+	fillPhoto("photo_source_path", p.PhotoSourcePath)
+	fillPhoto("photo_thumbhash", p.PhotoThumbhash)
 	fillEmpty("bio", p.Bio)
 	fillEmpty("birthplace", p.Birthplace)
 	fillEmpty("homepage", p.Homepage)
@@ -151,7 +194,10 @@ func (r *PersonRepository) enrichExisting(ctx context.Context, id int64, p model
 	}
 
 	setClauses = append(setClauses, "updated_at = now()")
-	query := fmt.Sprintf("UPDATE people SET %s WHERE id = $%d", strings.Join(setClauses, ", "), argIdx)
+	query := fmt.Sprintf(
+		"UPDATE people SET %s WHERE id = $%d AND (%s)",
+		strings.Join(setClauses, ", "), argIdx, strings.Join(changePredicates, " OR "),
+	)
 	args = append(args, id)
 
 	if _, err := r.pool.Exec(ctx, query, args...); err != nil {
@@ -308,7 +354,8 @@ func (r *PersonRepository) BatchFindOrCreate(ctx context.Context, people []model
 		rows.Close()
 	}
 
-	// Phase 4: Batch enrich found people (same fillEmpty/overwrite semantics).
+	// Phase 4: Batch enrich found people. Item-credit data is only allowed to
+	// fill gaps; full person refresh owns replacement of existing artwork.
 	if len(toEnrich) > 0 {
 		enrichIDs := make([]int64, len(toEnrich))
 		eTmdbIDs := make([]string, len(toEnrich))
@@ -334,36 +381,7 @@ func (r *PersonRepository) BatchFindOrCreate(ctx context.Context, people []model
 			eBirthplaces[i] = e.person.Birthplace
 			eHomepages[i] = e.person.Homepage
 		}
-		_, err := r.pool.Exec(ctx, `
-			UPDATE people SET
-				tmdb_id = CASE WHEN people.tmdb_id = '' AND t.tmdb_id <> '' THEN t.tmdb_id ELSE people.tmdb_id END,
-				imdb_id = CASE WHEN people.imdb_id = '' AND t.imdb_id <> '' THEN t.imdb_id ELSE people.imdb_id END,
-				tvdb_id = CASE WHEN people.tvdb_id = '' AND t.tvdb_id <> '' THEN t.tvdb_id ELSE people.tvdb_id END,
-				plex_guid = CASE WHEN people.plex_guid = '' AND t.plex_guid <> '' THEN t.plex_guid ELSE people.plex_guid END,
-				photo_path = CASE
-					WHEN t.photo_path NOT IN ('', '-') THEN t.photo_path
-					WHEN people.photo_path = ''        THEN t.photo_path
-					ELSE people.photo_path
-				END,
-				photo_source_path = CASE
-					WHEN t.photo_source_path NOT IN ('', '-') THEN t.photo_source_path
-					WHEN people.photo_source_path = ''        THEN t.photo_source_path
-					ELSE people.photo_source_path
-				END,
-				photo_thumbhash = CASE
-					WHEN t.photo_thumbhash NOT IN ('', '-') THEN t.photo_thumbhash
-					WHEN people.photo_thumbhash = ''        THEN t.photo_thumbhash
-					ELSE people.photo_thumbhash
-				END,
-				bio = CASE WHEN people.bio = '' AND t.bio <> '' THEN t.bio ELSE people.bio END,
-				birthplace = CASE WHEN people.birthplace = '' AND t.birthplace <> '' THEN t.birthplace ELSE people.birthplace END,
-				homepage = CASE WHEN people.homepage = '' AND t.homepage <> '' THEN t.homepage ELSE people.homepage END,
-				updated_at = NOW()
-			FROM UNNEST($1::bigint[], $2::text[], $3::text[], $4::text[], $5::text[],
-			            $6::text[], $7::text[], $8::text[], $9::text[], $10::text[], $11::text[])
-				AS t(id, tmdb_id, imdb_id, tvdb_id, plex_guid,
-				     photo_path, photo_source_path, photo_thumbhash, bio, birthplace, homepage)
-			WHERE people.id = t.id`,
+		_, err := r.pool.Exec(ctx, batchPersonEnrichmentQuery(),
 			enrichIDs, eTmdbIDs, eImdbIDs, eTvdbIDs, ePlexGUIDs,
 			ePhotoPaths, ePhotoSourcePaths, ePhotoThumbs, eBios, eBirthplaces, eHomepages,
 		)
