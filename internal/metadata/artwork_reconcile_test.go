@@ -283,7 +283,7 @@ type scriptedArtworkBatch struct {
 
 type scriptedArtworkChapterBatch struct {
 	cursor      int64
-	done        int
+	rows        int
 	verified    int
 	sweepErrors int
 }
@@ -294,10 +294,16 @@ type scriptedArtworkSweepCall struct {
 	done   int
 }
 
+type scriptedArtworkChapterSweepCall struct {
+	cursor int64
+	done   int
+}
+
 type scriptedArtworkVerifySweeper struct {
 	batches           map[string][]scriptedArtworkBatch
 	chapterBatches    []scriptedArtworkChapterBatch
 	calls             []scriptedArtworkSweepCall
+	chapterCalls      []scriptedArtworkChapterSweepCall
 	processed         map[string]int
 	chaptersProcessed int
 }
@@ -334,17 +340,22 @@ func (s *scriptedArtworkVerifySweeper) sweepSurfaceFrom(
 func (s *scriptedArtworkVerifySweeper) sweepChapterThumbnailsFrom(
 	_ context.Context,
 	stats *ArtworkReconcileStats,
-	_ int64,
-	_ int,
+	cursor int64,
+	done int,
 	onBatch func(int64, int, bool) error,
 ) error {
+	s.chapterCalls = append(s.chapterCalls, scriptedArtworkChapterSweepCall{cursor: cursor, done: done})
 	for _, batch := range s.chapterBatches {
+		if batch.cursor <= cursor {
+			continue
+		}
 		s.chaptersProcessed++
 		stats.Checked += batch.verified + batch.sweepErrors
 		stats.Verified += batch.verified
 		stats.Errors += batch.sweepErrors
 		stats.SweepErrors += batch.sweepErrors
-		if err := onBatch(batch.cursor, batch.done, batch.sweepErrors == 0); err != nil {
+		done += batch.rows
+		if err := onBatch(batch.cursor, done, batch.sweepErrors == 0); err != nil {
 			return err
 		}
 	}
@@ -412,6 +423,61 @@ func TestArtworkReconcileStopsAtUnsafeBatchAndResumesFromLastCheckpoint(t *testi
 	}
 }
 
+func TestArtworkReconcileStopsAndResumesChapterThumbnailsFromLastCheckpoint(t *testing.T) {
+	checkpoint := ArtworkReconcileCheckpoint{
+		Version:      artworkReconcileCheckpointVersion,
+		ChapterTotal: 3,
+		Stats:        ArtworkReconcileStats{Mode: ArtworkReconcileModeVerify},
+	}
+	firstRun := &scriptedArtworkVerifySweeper{chapterBatches: []scriptedArtworkChapterBatch{
+		{cursor: 10, rows: 1, verified: 1},
+		{cursor: 20, rows: 1, sweepErrors: 1},
+		{cursor: 30, rows: 1, verified: 1},
+	}}
+	var saved ArtworkReconcileCheckpoint
+	saveCount := 0
+
+	stats, err := runArtworkVerifySweep(context.Background(), firstRun, nil, checkpoint,
+		func(next ArtworkReconcileCheckpoint) error {
+			saveCount++
+			saved = cloneArtworkReconcileCheckpoint(next)
+			return nil
+		}, func(float64, string) {})
+	if err == nil || !strings.Contains(err.Error(), "last saved checkpoint") {
+		t.Fatalf("first chapter sweep error = %v, want checkpoint stop", err)
+	}
+	if stats.SweepErrors != 1 || firstRun.chaptersProcessed != 2 {
+		t.Fatalf("first chapter sweep stats/work = %#v / %d batches, want 1 error after 2 batches", stats, firstRun.chaptersProcessed)
+	}
+	if saveCount != 1 || saved.ChapterCursor != 10 || saved.ChapterDone != 1 {
+		t.Fatalf("saved chapter checkpoint = %#v (save count %d), want cursor 10 at 1 row", saved, saveCount)
+	}
+
+	resumedRun := &scriptedArtworkVerifySweeper{chapterBatches: []scriptedArtworkChapterBatch{
+		{cursor: 10, rows: 1, verified: 1},
+		{cursor: 20, rows: 1, verified: 1},
+		{cursor: 30, rows: 1, verified: 1},
+	}}
+	var completed ArtworkReconcileCheckpoint
+	stats, err = runArtworkVerifySweep(context.Background(), resumedRun, nil, saved,
+		func(next ArtworkReconcileCheckpoint) error {
+			completed = cloneArtworkReconcileCheckpoint(next)
+			return nil
+		}, func(float64, string) {})
+	if err != nil {
+		t.Fatalf("resumed chapter sweep: %v", err)
+	}
+	if len(resumedRun.chapterCalls) != 1 || resumedRun.chapterCalls[0].cursor != 10 || resumedRun.chapterCalls[0].done != 1 {
+		t.Fatalf("chapter resume call = %#v, want cursor 10 at 1 row", resumedRun.chapterCalls)
+	}
+	if resumedRun.chaptersProcessed != 2 {
+		t.Fatalf("resumed chapter batches = %d, want 2 (saved batch skipped)", resumedRun.chaptersProcessed)
+	}
+	if stats.Verified != 3 || !completed.Complete() {
+		t.Fatalf("resumed chapter stats/checkpoint = %#v / %#v, want 3 verified and complete", stats, completed)
+	}
+}
+
 func TestArtworkReconcileWithoutSaverContinuesAfterUnsafeBatches(t *testing.T) {
 	surfaces := []artworkSweepSurface{{name: "posters"}, {name: "later surface"}}
 	checkpoint := ArtworkReconcileCheckpoint{
@@ -426,8 +492,8 @@ func TestArtworkReconcileWithoutSaverContinuesAfterUnsafeBatches(t *testing.T) {
 			"later surface": {{cursor: []string{"later"}, done: 1, verified: 1}},
 		},
 		chapterBatches: []scriptedArtworkChapterBatch{
-			{cursor: 10, done: 1, sweepErrors: 1},
-			{cursor: 20, done: 2, verified: 1},
+			{cursor: 10, rows: 1, sweepErrors: 1},
+			{cursor: 20, rows: 1, verified: 1},
 		},
 	}
 
