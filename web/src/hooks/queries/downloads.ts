@@ -45,6 +45,7 @@ export interface DownloadCapability {
   season_download: boolean;
   series_monitoring: boolean;
   monitoring_modes?: string[];
+  proxy_delivery: boolean;
 }
 
 export function useDownloadCapability(enabled = true) {

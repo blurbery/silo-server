@@ -319,11 +319,18 @@ docker compose restart postgres
 ```
 
 The bundled database user has the required permissions. For an external
-database, set `POSTGRES_TUNE=off` and manage tuning on the database host by
-default. If Silo is deliberately allowed to tune that server, set explicit
-`POSTGRES_TUNE_MEMORY` and `POSTGRES_TUNE_CPUS` values for the database host and
-grant the `DATABASE_URL` user permission to run `ALTER SYSTEM`; automatic host
-detection describes the Silo container, not a remote database machine.
+database, keep `POSTGRES_TUNE=off` for the application credential and manage
+tuning out of band with a separate administrative credential. Silo uses the
+`DATABASE_URL` identity for both normal operation and tuning; it does not have
+a separate tuning credential. Granting that identity `ALTER SYSTEM` permits
+server-wide configuration changes if the application credential is
+compromised.
+
+Enable external tuning only in a trusted deployment that accepts this risk. Set
+explicit `POSTGRES_TUNE_MEMORY` and `POSTGRES_TUNE_CPUS` values for the database
+host and grant the `DATABASE_URL` user permission to run `ALTER SYSTEM`;
+automatic host detection describes the Silo container, not a remote database
+machine.
 
 When `POSTGRES_TUNE_MEMORY=auto`, Silo uses the first trustworthy source from a
 finite Docker cgroup limit, the bundled read-only `/host/proc/meminfo` mount,
@@ -383,7 +390,8 @@ running on the host.
 `SECRET_KEY`. Treat its output as a secret-bearing backup: restrict its file
 permissions, never paste it into issues or logs, and redact it before sharing.
 
-After an update, verify both endpoints:
+After an update, verify both endpoints on the configured host-side `PORT`.
+Replace `8090` below when `PORT` differs from the default:
 
 ```sh
 curl -fsS http://localhost:8090/api/v1/health
