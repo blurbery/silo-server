@@ -633,6 +633,47 @@ func TestImageCacheProcessorDeletesOldSucceededJobsWithoutClaimedJobs(t *testing
 	}
 }
 
+func TestImageCacheProcessorDrainUntilIdleNeverDiscoversCatalog(t *testing.T) {
+	job := &models.MetadataImageCacheJob{
+		ID:                9,
+		TargetType:        ImageCacheTargetEpisode,
+		TargetContentID:   "episode-tvdb-1-1-1",
+		SourcePath:        "tvdb://banners/episode-1.jpg",
+		ProviderID:        "tvdb",
+		ProviderContentID: "1",
+		ContentType:       "series",
+		ImageType:         ImageCacheImageStill,
+		SeasonNumber:      intPointer(1),
+		EpisodeNumber:     intPointer(1),
+	}
+	jobs := &loopingImageCacheJobs{
+		// A discovery call would enqueue more work; drain mode must never ask.
+		enqueueResults: []int{1000},
+		claimedResults: [][]*models.MetadataImageCacheJob{
+			{job},
+			{},
+		},
+		backlog: ImageCacheBacklog{Known: true, Queued: 1},
+	}
+	cacher := &fakeImageCacher{result: &CacheImageResult{
+		BasePath: "tvdb/series/1/seasons/1/episodes/1/still",
+		Ext:      ".webp",
+	}}
+	resolver := &fakeImageResolver{url: "https://artworks.thetvdb.com/banners/episode.jpg"}
+	processor := NewImageCacheProcessor(jobs, cacher, resolver, nil, &fakeEpisodeStillUpdater{updated: true})
+
+	stats, err := processor.DrainUntilIdle(context.Background(), "test-worker", 1000, 2, time.Minute, nil)
+	if err != nil {
+		t.Fatalf("DrainUntilIdle() error = %v", err)
+	}
+	if stats.Claimed != 1 || stats.Succeeded != 1 || stats.EnqueuedExisting != 0 {
+		t.Fatalf("stats = %+v, want one queued job drained and no discovery", stats)
+	}
+	if jobs.enqueueCalls != 0 || jobs.claimCalls != 2 {
+		t.Fatalf("calls enqueue=%d claim=%d, want 0/2", jobs.enqueueCalls, jobs.claimCalls)
+	}
+}
+
 func TestImageCacheProcessorRunUntilIdleDrainsNewWorkAddedDuringRun(t *testing.T) {
 	job1 := &models.MetadataImageCacheJob{
 		ID:                10,

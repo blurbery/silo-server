@@ -75,6 +75,8 @@ describe("StorageSettings", () => {
     expect(markup).toContain("Storage location change");
     expect(markup).toContain("will not change artwork cache records");
     expect(markup).toContain("manually run Reconcile Artwork Cache");
+    expect(markup).toContain("manual Backfill Metadata Images");
+    expect(markup).toContain("new or changed metadata");
     expect(markup).not.toContain("automatically re-caches anything missing");
   });
 

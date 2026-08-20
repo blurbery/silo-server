@@ -50,7 +50,7 @@ type ArtworkReconcileStats struct {
 	SampleMissing int    `json:"sample_missing"`
 	Checked       int    `json:"checked"`
 	Verified      int    `json:"verified"`
-	Requeued      int    `json:"requeued"` // reset to provider source; re-cached by the image cache pipeline
+	Requeued      int    `json:"requeued"` // reset to provider source; an explicit backfill may cache it again
 	Cleared       int    `json:"cleared"`  // no re-downloadable source; refilled by scans/enrichment or re-uploaded by an admin
 	Errors        int    `json:"errors"`
 	// SweepErrors is the subset of Errors from the sweep itself (skipped
@@ -724,9 +724,9 @@ func (r *ArtworkCacheReconciler) objectExistsWithRetry(ctx context.Context, buck
 }
 
 // bulkResetSurface resets every cached row without per-row verification. Rows
-// with a re-downloadable provider source go back to that source (the enqueue
-// loop re-caches them); rows without one are cleared so their owning pipeline
-// can refill them.
+// with a re-downloadable provider source go back to that source so an explicit
+// manual backfill can cache them again. Rows without one are cleared so their
+// owning pipeline can refill them.
 func (r *ArtworkCacheReconciler) bulkResetSurface(ctx context.Context, s artworkSweepSurface, stats *ArtworkReconcileStats) error {
 	if s.sourceCol != "" {
 		requeue := fmt.Sprintf(

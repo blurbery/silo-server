@@ -18,7 +18,7 @@ import (
 // ErrArtworkReconcileManualRunRequired prevents a storage-location change from
 // mutating artwork records on a scheduler trigger. An administrator must first
 // migrate the existing objects, then explicitly run the task if they intend
-// missing records to be re-queued or cleared.
+// missing records to be reset for an explicit backfill or cleared.
 var ErrArtworkReconcileManualRunRequired = errors.New("artwork storage changed; manual reconcile required")
 
 // ArtworkStorageIdentityKey is the server_settings key holding the storage
@@ -103,7 +103,7 @@ func NewReconcileArtworkCacheTask(runner ArtworkReconcileRunner, settings Artwor
 func (t *ReconcileArtworkCacheTask) Key() string  { return "reconcile_artwork_cache" }
 func (t *ReconcileArtworkCacheTask) Name() string { return "Reconcile Artwork Cache" }
 func (t *ReconcileArtworkCacheTask) Description() string {
-	return "Manually verifies cached artwork against object storage; missing records may be re-queued or cleared across the full artwork library"
+	return "Manually verifies cached artwork against object storage; missing records may be reset across the full library and require an explicit metadata image backfill"
 }
 func (t *ReconcileArtworkCacheTask) Category() taskmanager.TaskCategory {
 	return taskmanager.TaskCategoryMetadata
@@ -137,7 +137,7 @@ func (t *ReconcileArtworkCacheTask) ShouldRun(ctx context.Context) (bool, error)
 		return false, nil
 	}
 	return false, fmt.Errorf(
-		"%w: migrate or copy the existing public artwork objects before running Reconcile Artwork Cache manually; a manual run may re-queue or clear the full artwork library",
+		"%w: migrate or copy the existing public artwork objects before running Reconcile Artwork Cache manually; a manual run may reset or clear the full artwork library, and re-downloading requires a separate manual Backfill Metadata Images run",
 		ErrArtworkReconcileManualRunRequired,
 	)
 }
@@ -187,7 +187,7 @@ func (t *ReconcileArtworkCacheTask) Execute(ctx context.Context, progress taskma
 			progress.SetResultData(data)
 		}
 		return fmt.Errorf(
-			"artwork reconcile: %d rows skipped on storage errors (verified %d, re-queued %d, cleared %d); storage identity left uncertified; run Reconcile Artwork Cache manually to resume",
+			"artwork reconcile: %d rows skipped on storage errors (verified %d, reset for backfill %d, cleared %d); storage identity left uncertified; run Reconcile Artwork Cache manually to resume",
 			stats.SweepErrors, stats.Verified, stats.Requeued, stats.Cleared,
 		)
 	}
@@ -222,12 +222,12 @@ func (t *ReconcileArtworkCacheTask) Execute(ctx context.Context, progress taskma
 	}
 
 	message := fmt.Sprintf(
-		"Verified %d cached images intact, re-queued %d for re-cache, cleared %d without a re-downloadable source",
+		"Verified %d cached images intact, reset %d for an optional manual backfill, cleared %d without a re-downloadable source",
 		stats.Verified, stats.Requeued, stats.Cleared,
 	)
 	if stats.Mode == metadata.ArtworkReconcileModeBulkReset {
 		message = fmt.Sprintf(
-			"Storage probe found %d/%d sampled objects missing; reset all cached artwork (re-queued %d, cleared %d)",
+			"Storage probe found %d/%d sampled objects missing; reset all cached artwork (%d provider records ready for an optional manual backfill, cleared %d)",
 			stats.SampleMissing, stats.Sampled, stats.Requeued, stats.Cleared,
 		)
 	}

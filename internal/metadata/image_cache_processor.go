@@ -432,7 +432,23 @@ loop:
 	return stats
 }
 
+// DrainUntilIdle processes only jobs that have already been queued by scans,
+// metadata refreshes, or explicit artwork changes. It never performs the
+// full-catalog discovery sweep, so it is safe for startup and interval tasks:
+// an idle server stays idle instead of turning every scheduler tick into a
+// library-wide backfill.
+func (p *ImageCacheProcessor) DrainUntilIdle(ctx context.Context, workerID string, claimLimit int, concurrency int, maxRuntime time.Duration, reportProgress ImageCacheRunProgressReporter) (ImageCacheRunStats, error) {
+	return p.runUntilIdle(ctx, workerID, claimLimit, concurrency, maxRuntime, false, reportProgress)
+}
+
+// RunUntilIdle drains the queue and explicitly discovers uncached provider
+// artwork across the catalog. This is the manual backfill path; scheduled
+// cache processing must use DrainUntilIdle.
 func (p *ImageCacheProcessor) RunUntilIdle(ctx context.Context, workerID string, claimLimit int, concurrency int, maxRuntime time.Duration, reportProgress ImageCacheRunProgressReporter) (ImageCacheRunStats, error) {
+	return p.runUntilIdle(ctx, workerID, claimLimit, concurrency, maxRuntime, true, reportProgress)
+}
+
+func (p *ImageCacheProcessor) runUntilIdle(ctx context.Context, workerID string, claimLimit int, concurrency int, maxRuntime time.Duration, discover bool, reportProgress ImageCacheRunProgressReporter) (ImageCacheRunStats, error) {
 	var total ImageCacheRunStats
 	if p == nil || p.jobs == nil || p.cacher == nil || !p.enabled.Load() {
 		return total, nil
@@ -441,10 +457,12 @@ func (p *ImageCacheProcessor) RunUntilIdle(ctx context.Context, workerID string,
 	reportImageCacheRunProgress(reportProgress, total)
 
 	if maxRuntime <= 0 {
-		enqueued, derr := p.discoverExisting(ctx, claimLimit)
-		total.EnqueuedExisting += enqueued
-		if derr != nil {
-			return total, derr
+		if discover {
+			enqueued, derr := p.discoverExisting(ctx, claimLimit)
+			total.EnqueuedExisting += enqueued
+			if derr != nil {
+				return total, derr
+			}
 		}
 		stats, err := p.RunOnce(ctx, workerID, claimLimit, concurrency)
 		total.add(stats)
@@ -456,7 +474,7 @@ func (p *ImageCacheProcessor) RunUntilIdle(ctx context.Context, workerID string,
 	// Decide once per run whether a full-catalog backfill sweep is due. Within a
 	// due run we keep sweeping until the catalog is exhausted; otherwise we only
 	// drain the existing queue.
-	sweep := p.discoveryDue()
+	sweep := discover && p.discoveryDue()
 	deadline := time.Now().Add(maxRuntime)
 	for {
 		if err := ctx.Err(); err != nil {

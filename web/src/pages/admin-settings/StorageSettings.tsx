@@ -361,8 +361,10 @@ export default function StorageSettings() {
                     Artwork is cached in this bucket. Silo will not change artwork cache records
                     automatically after restart. Copy or migrate the existing bucket objects first,
                     then manually run Reconcile Artwork Cache only if you intend every missing
-                    record to be re-queued or cleared. Uploaded images (custom posters, collection
-                    artwork, branding) cannot be re-downloaded.
+                    record to be reset or cleared. Re-downloading those reset provider images is a
+                    separate, manual Backfill Metadata Images action; normal scheduled caching only
+                    processes artwork queued by new or changed metadata. Uploaded images (custom
+                    posters, collection artwork, branding) cannot be re-downloaded.
                   </p>
                 </div>
               </div>
