@@ -158,7 +158,8 @@ Response:
   "transcode_user_allowed": true,
   "season_download": true,
   "series_monitoring": true,
-  "monitoring_modes": ["all", "future", "latest_season", "specific_seasons"]
+  "monitoring_modes": ["all", "future", "latest_season", "specific_seasons"],
+  "proxy_delivery": true
 }
 ```
 
@@ -172,6 +173,7 @@ Response:
 | `season_download`        | Per-season batch downloads are available.                                         |
 | `series_monitoring`      | Auto-download subscriptions are available.                                        |
 | `monitoring_modes`       | Subscription modes the client may request.                                        |
+| `proxy_delivery`         | Proxy-aware download routes are available for opt-in distributed delivery.        |
 
 `quality_presets` is always an array — `[]` (never `null`) when downloads are
 disabled or the user lacks download permission — so clients can rely on
@@ -418,6 +420,29 @@ For browser-friendly links, the endpoint accepts the session access token as a
 > **Security note:** the query token is the session access token. Treat
 > direct-download URLs as secrets — they end up in browser history and proxy
 > logs. A short-lived download-scoped URL is a planned follow-up.
+
+### 4.11 Distributed proxy delivery
+
+Clients discover distributed delivery through `proxy_delivery` on the download
+capability response. When it is `true`, clients may opt into the proxy-aware
+routes:
+
+```http
+GET  /api/v1/downloads/{id}/file-proxy
+HEAD /api/v1/downloads/{id}/file-proxy
+GET  /api/v1/direct-download-proxy?file_id={id}
+HEAD /api/v1/direct-download-proxy?file_id={id}
+```
+
+These routes may return a temporary redirect to a proxy node. The established
+`/file` and `/direct-download` routes keep serving bytes directly and retain
+their existing status-code contract. When a prepared artifact is stored on a
+transcode node, the API performs the authenticated relay for those fallback
+routes.
+
+Downloads with a configured server-wide or per-user bandwidth limit remain
+API-local so aggregate limits stay exact. Clients must treat proxy delivery as
+an advertised capability, not infer it from a server version.
 
 ---
 

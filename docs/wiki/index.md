@@ -9,7 +9,7 @@ tags:
 audience:
   - end-user
   - operator
-last_reviewed: 2026-04-11
+last_reviewed: 2026-08-20
 related: []
 ---
 
@@ -40,7 +40,8 @@ rewriting.
 
 ## Deployment
 
-- No pages yet.
+- [Deploy Silo with Docker](deployment/docker.md) - Install and operate Silo with Docker Compose,
+  including storage, GPU acceleration, search, distributed roles, tuning, backups, and updates.
 
 ## Troubleshooting
 
