@@ -1,99 +1,175 @@
 # Contributing to Silo
 
-Hey, thanks for wanting to contribute!
+Thank you for contributing to Silo. Contributions from people using any
+development workflow—including AI-assisted workflows—are welcome. Every
+contributor remains responsible for understanding, testing, and explaining the
+work they submit.
 
-Let's be real: this project is built almost entirely with AI assistance. Claude, Codex, whatever you've got — we're not pretending otherwise. But there's a big difference between *using AI well* and *submitting AI slop*. We care a lot about the first one, and we'll push back hard on the second.
+Most of Silo's codebase was developed with AI assistance. The same ownership,
+evidence, and disclosure standards apply to maintainers and external
+contributors.
 
-- AI-generated code is fine. AI slop is not.
-- You are responsible for everything you submit, even if an AI wrote it.
-- Actually read the code. Actually run the tests. Actually understand what it does.
-- Don't send big changes without talking about them first.
+## Before you start
 
-## Things Are Moving Fast
+> [!IMPORTANT]
+> Coordinate non-trivial work before implementation. Open an issue or start a
+> project discussion for features, API or behavior changes, schema migrations,
+> large refactors, and other changes that affect product scope. Documentation,
+> typo fixes, and narrow bug fixes may go directly to a pull request.
 
-Silo is in heavy active development. Features get rewritten, APIs shift, whole sections get reworked — sometimes day to day. **If you want to work on something, reach out first.** Open an issue or drop a message so:
+Silo is pre-1.0 and evolving. Early coordination helps avoid duplicate work,
+conflicts with changes already in progress, and proposals outside the current
+scope. Review [Project non-goals](docs/non-goals.md) and the relevant
+architecture documentation before proposing a new capability.
 
-- You don't build on something that's already been rewritten locally but not pushed yet.
-- I can avoid breaking something you're actively working on.
-- We can check the area is stable enough to be worth building on right now.
+Durable architecture and contracts belong under `docs/architecture/`. Temporary
+implementation plans and working notes belong in the issue or pull request, not
+as permanent repository documents.
 
-## Before You Start
+## Reporting a problem
 
-Small stuff (typo fixes, minor bugs) — just open a merge request. No ceremony.
+Use the [GitHub issue forms](https://github.com/Silo-Server/silo-server/issues/new/choose)
+for bugs, installation problems, and performance issues. Start with what you
+observed, not a root-cause theory.
 
-For anything bigger, start with an issue first. New features, API changes, schema migrations, large refactors, behavior changes — talk about it before writing code. Durable design docs live under `docs/architecture/`; working plans and specs are ephemeral and go in the PR description, not the repo.
+Include:
 
-## Don't Submit AI Slop
+- what you were trying to do
+- the exact steps you performed
+- expected and actual behavior
+- the specific action that is slow or broken, such as save, scan, browse,
+  import, or playback
+- whether the problem is consistent or intermittent
+- the relevant library, media type, filter, setting, or value
+- Silo version, build, branch, or commit
+- deployment details
+- screenshots, recordings, or raw log excerpts when relevant
 
-AI writes most of the code here. That's fine. What's not fine is copy-pasting output without understanding it.
+Put suspected files, SQL output, stack traces, and root-cause theories under
+**Technical notes**, after the workflow and reproduction are clear.
+Redact credentials, tokens, personal data, and private media details from raw
+evidence, and mark each redaction. Do not paraphrase or synthesize the remainder.
 
-1. **Read every line of your diff.** If you can't explain it, don't submit it.
-2. **Run the tests** — but don't blindly trust them. The tests were also AI-written and they have blind spots.
-3. **Test the app yourself locally.** Spin it up, click around, try the thing you changed. There is no substitute for this.
-4. **Run code-review** on your own work before submitting. `superpowers:requesting-code-review` or whatever tooling you have.
-5. **Watch for AI-introduced bugs.** Silent behavior changes, dead code, subtle regressions — look for them.
-6. **Understand the bigger picture.** A change that looks fine in isolation can break something three layers away.
+## Prepare a focused change
 
-"The AI suggested it" is not an acceptable answer in review. You should be able to explain the reasoning and tradeoffs.
+1. Read the existing implementation and tests in the area you will change.
+2. Keep one concern per pull request; do not mix unrelated cleanup or refactors.
+3. Follow established patterns and add comments only where behavior is not
+   obvious from the code.
+4. Add focused tests that fail before the fix and pass after it.
+5. Exercise user-facing behavior in a running application when the change can
+   be tested manually.
+6. Review the complete diff for unintended behavior, generated-file drift,
+   local paths, credentials, and unrelated edits.
+7. Obtain an independent or adversarial review of non-trivial changes and
+   resolve the findings before submission.
 
-## AI Disclosure (Required)
+Tests are evidence, not proof. Consider system-level effects beyond the files
+you touched, and be prepared to explain the implementation, alternatives, and
+tradeoffs during review.
 
-Every PR and every issue needs to say what AI was involved: the tool, the exact model ID, and the involvement level. "No AI" is a perfectly fine answer. Just say so.
+## Development setup
 
-```md
-### AI Disclosure
-- Tool(s): e.g. Claude Code, Codex CLI, Cursor — or "none"
-- Model(s): exact model ID(s), e.g. claude-fable-5, gpt-5.4 — or "n/a"
-- Involvement: fully AI-generated | AI-assisted | human-written, AI-reviewed | none
-- Adversarial review: what your own AI review of the diff found, and how you resolved it
-```
+Follow [DEVELOPMENT.md](DEVELOPMENT.md) for prerequisites, local services,
+builds, migrations, tests, and repository structure.
 
-The exact model matters. This project is developed with frontier models. If a PR was generated by an older or weaker model, the fastest honest response may be for me to re-implement the idea with a current model instead of reviewing the diff line by line. Disclosing the model lets that call happen quickly. "Thanks, the idea is accepted, but the implementation will be redone" is a possible outcome; see [Be Realistic](#be-realistic).
+If a change spans Silo and `silo-plugin-sdk`, use an untracked local `go.work`
+workspace for iteration. `go.work` and `go.work.sum` are intentionally ignored.
+CI runs from a clean checkout, and release builds explicitly set `GOWORK=off`.
+Any SDK package or symbol used by repository code must therefore exist in a
+pushed, tagged `github.com/Silo-Server/silo-plugin-sdk` release before merge.
 
-Before submitting, run an adversarial review of your own diff with whatever AI tooling you have, and summarize what it found and what you did about it. "It found nothing" is only credible for tiny diffs.
+## Validate your change
 
-Undisclosed AI use that is discovered later gets the PR closed on the spot. Repeat offenses get you blocked. The offense is the non-disclosure, not the AI use.
-
-Fabricated content is an immediate block, first offense. Invented APIs, repro steps that never happened, AI-imagined vulnerabilities, and "bugs" nobody actually observed all count. This is the curl-style rule for hallucinated reports.
-
-For issues, logs must be raw copy-paste, never AI-paraphrased. You must have actually reproduced the problem yourself on a real deployment before filing.
-
-## Merge Requests
-
-A good MR answers: what problem does this solve, why this approach, how was it tested, anything to watch out for. For non-trivial changes, link the issue and note any migration/compatibility concerns. Screenshots for UI changes.
-
-Small, well-explained MRs get reviewed fast. Big unexplained ones sit.
-
-AI disclosure is mandatory for every MR; use the required block in [AI Disclosure (Required)](#ai-disclosure-required).
-
-## Development Setup
-
-See the README for full setup. Common checks:
+Run focused tests while iterating:
 
 ```sh
-go test ./...                        # Go tests
-golangci-lint run                    # Go lint
-cd web && bun test                   # Frontend tests
-cd web && bun run lint               # Frontend lint
-cd web && bun run format:check       # Frontend formatting
+go test ./internal/<package>/...
+cd web && pnpm exec vitest run path/to/changed.test.tsx
 ```
 
-If your change spans `Silo` and `silo-plugin-sdk`, local iteration through [`go.work`](go.work) is expected. Do not rely on that workspace in repo-tracked config or release pipelines. CI validates this repo with `GOWORK=off`, and any new SDK package or symbol must come from a pushed, tagged `github.com/Silo-Server/silo-plugin-sdk` release before the change is ready to merge.
+Before opening a pull request, run every relevant repository gate. A typical
+local validation is:
 
-## Style
+```sh
+# Go build, formatting, vet, and tests
+make embed-stub
+go build ./...
+gofmt -l .
+go vet ./...
+make test-go
 
-- One thing per MR. Don't mix unrelated changes.
-- Follow existing patterns.
-- Comments for non-obvious things only.
+# Web install, lint, formatting, build, and tests
+cd web
+pnpm install --frozen-lockfile
+pnpm run lint
+pnpm run format:check
+pnpm run build
+cd ..
+make test-web
 
-## For AI Agents
+# Generated contracts, fixtures, and docs hygiene
+make verify-settings-bindings-all
+make verify-playback-fixtures
+make verify-local-paths
+```
 
-If you're an LLM working on this codebase: read `CLAUDE.md` (or `AGENTS.md` when available) for project-specific instructions, architecture reference, and verification requirements. The rules in this file apply to you too — especially the parts about not submitting slop and running verification before declaring work complete.
+`gofmt -l .` must produce no output. Run additional focused tests for every
+manually resolved or high-risk area.
 
-## Be Realistic
+> [!NOTE]
+> `make lint` runs `golangci-lint` across the full Go tree and can report
+> inherited findings. Pull-request CI gates changed Go lines with
+> `golangci-lint run --new-from-merge-base="origin/<base>" ./...`; new or changed
+> lines must be clean. The current [CI workflow](.github/workflows/ci.yml) is the
+> authoritative list of required checks.
 
-Opening a merge request doesn't create an obligation on my side. I might close it, ignore it, ask you to shrink it, or reimplement the idea myself later. The codebase is moving fast and sometimes the best response to a good PR is "thanks, but I already went a different direction."
+Paste actual command results into the pull request. Do not report a check as
+passing if it was skipped, failed, or was not run in the stated environment.
 
-If you're fine with that, welcome aboard.
+## AI-assisted contributions
 
-If you're not sure whether something is in scope, open an issue and ask. Always better than building something that needs to be reshaped.
+> [!WARNING]
+> AI use must be disclosed in every issue and pull request. Fabricated APIs,
+> observations, vulnerabilities, reproduction steps, logs, or test results are
+> not acceptable. Bug reports must come from a real reproduction, and logs must
+> be raw rather than AI-paraphrased.
+
+Read and follow the canonical
+[AI-assisted contribution policy](docs/ai-contributions.md). It defines the
+required disclosure block, contributor responsibilities, evidence standard,
+and enforcement policy. "No AI" is a valid disclosure; non-disclosure is not.
+
+## Open the pull request
+
+Use a concise [Conventional Commit](https://www.conventionalcommits.org/)
+title. A reviewable pull request should include:
+
+- a linked issue or scope item for non-trivial work; use `N/A — narrow fix` when
+  prior coordination was not required
+- the user or maintainer problem being solved
+- why the chosen approach is appropriate
+- actual validation commands and results
+- migration, compatibility, security, or operational risks
+- screenshots or recordings for visible UI changes
+- the completed AI disclosure
+- a summary of independent or adversarial review findings and resolutions
+
+Keep the commit history intentional and the final diff limited to the stated
+problem.
+
+## Review expectations
+
+Maintainers may ask for a smaller change, request a different implementation,
+decline work that no longer fits the project, or accept the idea and implement
+it separately. Opening a pull request does not guarantee merge. Clear scope,
+reproducible evidence, and a focused diff make review faster.
+
+If scope is uncertain, ask before investing in an implementation.
+
+## Instructions for coding agents
+
+Coding agents must read [AGENTS.md](AGENTS.md) before changing the repository.
+`CLAUDE.md` points to the same project instructions. This guide and the
+[AI-assisted contribution policy](docs/ai-contributions.md) apply equally to
+agent-authored and human-authored work.
