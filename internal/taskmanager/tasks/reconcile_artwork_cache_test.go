@@ -136,8 +136,11 @@ func TestReconcileArtworkCacheShouldRun(t *testing.T) {
 	}
 
 	store.values[ArtworkStorageIdentityKey] = "old-endpoint|bucket|prefix"
-	if run, err := task.ShouldRun(context.Background()); err != nil || !run {
-		t.Fatalf("ShouldRun with changed fingerprint = %v, %v; want true, nil", run, err)
+	if run, err := task.ShouldRun(context.Background()); run || !errors.Is(err, ErrArtworkReconcileManualRunRequired) {
+		t.Fatalf("ShouldRun with changed fingerprint = %v, %v; want false, manual-run-required", run, err)
+	}
+	if runner.runs != 0 {
+		t.Fatalf("scheduled preflight ran reconciler %d times, want 0", runner.runs)
 	}
 }
 
@@ -194,7 +197,18 @@ func TestReconcileArtworkCacheExecuteResumesMatchingCheckpoint(t *testing.T) {
 	}
 
 	resumed := &fakeResumableReconcileRunner{stats: metadata.ArtworkReconcileStats{Mode: "verify", Verified: 1000}}
-	if err := NewReconcileArtworkCacheTask(resumed, store, nil, "new").Execute(context.Background(), &fakeProgress{}); err != nil {
+	resumeTask := NewReconcileArtworkCacheTask(resumed, store, nil, "new")
+	rawCheckpoint := store.values[ArtworkStorageReconcileCheckpointKey]
+	if run, err := resumeTask.ShouldRun(context.Background()); run || !errors.Is(err, ErrArtworkReconcileManualRunRequired) {
+		t.Fatalf("scheduled resume preflight = %v, %v; want false, manual-run-required", run, err)
+	}
+	if got := store.values[ArtworkStorageReconcileCheckpointKey]; got != rawCheckpoint {
+		t.Fatal("scheduled preflight changed the saved checkpoint")
+	}
+	if resumed.received != nil || resumed.legacyRuns != 0 {
+		t.Fatal("scheduled preflight invoked the resumable runner")
+	}
+	if err := resumeTask.Execute(context.Background(), &fakeProgress{}); err != nil {
 		t.Fatalf("resumed Execute: %v", err)
 	}
 	if resumed.received == nil || resumed.received.SurfaceIndex != checkpoint.SurfaceIndex ||

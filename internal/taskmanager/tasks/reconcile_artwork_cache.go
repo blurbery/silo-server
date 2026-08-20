@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -13,6 +14,12 @@ import (
 	"github.com/Silo-Server/silo-server/internal/s3client"
 	"github.com/Silo-Server/silo-server/internal/taskmanager"
 )
+
+// ErrArtworkReconcileManualRunRequired prevents a storage-location change from
+// mutating artwork records on a scheduler trigger. An administrator must first
+// migrate the existing objects, then explicitly run the task if they intend
+// missing records to be re-queued or cleared.
+var ErrArtworkReconcileManualRunRequired = errors.New("artwork storage changed; manual reconcile required")
 
 // ArtworkStorageIdentityKey is the server_settings key holding the storage
 // identity fingerprint of the public S3 bucket the artwork cache was last
@@ -79,9 +86,9 @@ type BrandingAssetReconciler interface {
 
 // ReconcileArtworkCacheTask verifies cached artwork against the currently
 // configured public object storage and resets whatever is missing so the
-// image cache pipeline rebuilds it. Scheduled runs only fire when the storage
-// identity changed since the last completed reconcile; manual runs always
-// sweep, which doubles as recovery from bucket data loss.
+// image cache pipeline rebuilds it. Scheduled triggers never start this
+// mutating sweep after a storage change; an administrator must run it manually
+// after migrating objects or when intentionally recovering from bucket loss.
 type ReconcileArtworkCacheTask struct {
 	runner   ArtworkReconcileRunner
 	settings ArtworkReconcileSettingsStore
@@ -96,7 +103,7 @@ func NewReconcileArtworkCacheTask(runner ArtworkReconcileRunner, settings Artwor
 func (t *ReconcileArtworkCacheTask) Key() string  { return "reconcile_artwork_cache" }
 func (t *ReconcileArtworkCacheTask) Name() string { return "Reconcile Artwork Cache" }
 func (t *ReconcileArtworkCacheTask) Description() string {
-	return "Verifies cached artwork against object storage and re-caches anything missing (runs automatically after the storage provider changes)"
+	return "Manually verifies cached artwork against object storage; missing records may be re-queued or cleared across the full artwork library"
 }
 func (t *ReconcileArtworkCacheTask) Category() taskmanager.TaskCategory {
 	return taskmanager.TaskCategoryMetadata
@@ -109,8 +116,10 @@ func (t *ReconcileArtworkCacheTask) DefaultTriggers() []taskmanager.TriggerConfi
 	}
 }
 
-// ShouldRun suppresses the startup trigger while the storage identity is
-// unchanged. Manual RunTask calls bypass this and always sweep.
+// ShouldRun suppresses scheduled execution in every case. A changed storage
+// identity returns an actionable preflight error so the event is visible in
+// logs, but it must never launch a mutating sweep automatically. Manual
+// RunTask calls bypass this gate and remain the explicit recovery path.
 //
 // The startup trigger fires exactly once per process, so a transient settings
 // read failure here would postpone a needed reconcile until the next restart;
@@ -124,7 +133,13 @@ func (t *ReconcileArtworkCacheTask) ShouldRun(ctx context.Context) (bool, error)
 	if err != nil {
 		return false, fmt.Errorf("reading artwork storage identity: %w", err)
 	}
-	return stored != "" && stored != t.identity, nil
+	if stored == "" || stored == t.identity {
+		return false, nil
+	}
+	return false, fmt.Errorf(
+		"%w: migrate or copy the existing public artwork objects before running Reconcile Artwork Cache manually; a manual run may re-queue or clear the full artwork library",
+		ErrArtworkReconcileManualRunRequired,
+	)
 }
 
 func (t *ReconcileArtworkCacheTask) readStorageIdentity(ctx context.Context) (string, error) {
@@ -164,15 +179,15 @@ func (t *ReconcileArtworkCacheTask) Execute(ctx context.Context, progress taskma
 	}
 
 	// Only a clean, completed sweep certifies the current storage. Sweep
-	// errors mean rows were skipped unverified, so the fingerprint stays
-	// stale and the next startup retries; resets already applied this run
-	// are durable either way.
+	// errors mean rows were skipped unverified, so the fingerprint and saved
+	// checkpoint stay in place for an explicit manual retry; resets already
+	// applied this run are durable either way.
 	if stats.SweepErrors > 0 {
 		if data, marshalErr := json.Marshal(stats); marshalErr == nil {
 			progress.SetResultData(data)
 		}
 		return fmt.Errorf(
-			"artwork reconcile: %d rows skipped on storage errors (verified %d, re-queued %d, cleared %d); storage identity left uncertified so the next startup retries",
+			"artwork reconcile: %d rows skipped on storage errors (verified %d, re-queued %d, cleared %d); storage identity left uncertified; run Reconcile Artwork Cache manually to resume",
 			stats.SweepErrors, stats.Verified, stats.Requeued, stats.Cleared,
 		)
 	}

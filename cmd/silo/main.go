@@ -2140,10 +2140,10 @@ func main() {
 		}
 		if deps.S3Public != nil {
 			identity := tasks.ArtworkStorageIdentity(cfg.S3.Public.Endpoint, cfg.S3.Public.Bucket, cfg.S3.Public.KeyPrefix)
-			// Seed the fingerprint on first boot so an unchanged storage
-			// identity never triggers a sweep. On the boot after a provider
-			// change the stored (old) identity survives this call and the
-			// startup trigger runs the reconcile.
+			// Seed the fingerprint on first boot. After a provider change the
+			// stored (old) identity survives this call, so the startup preflight
+			// can warn without mutating artwork; an administrator must migrate
+			// objects and run the reconcile task explicitly.
 			if _, err := settingsRepo.SetIfAbsent(appCtx, tasks.ArtworkStorageIdentityKey, identity); err != nil {
 				slog.Warn("artwork reconcile: seeding storage identity failed", "error", err)
 			}
