@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/Silo-Server/silo-server/internal/database"
 )
 
 const (
@@ -520,43 +523,72 @@ func (r *SearchIndexEventRepository) UpdateStateAfterSync(ctx context.Context, p
 }
 
 type SearchIndexAdvisoryLock struct {
-	conn *pgxpool.Conn
-	key  int64
+	conn             *pgxpool.Conn
+	key              int64
+	releaseAdmission func()
+	closeOnce        sync.Once
+	closeErr         error
 }
 
 func (r *SearchIndexEventRepository) TryAdvisoryLock(ctx context.Context, key int64) (*SearchIndexAdvisoryLock, bool, error) {
 	if r == nil || r.pool == nil {
 		return nil, false, nil
 	}
+	releaseAdmission, err := database.AcquirePinnedConnectionSlot(ctx, r.pool)
+	if err != nil {
+		return nil, false, err
+	}
 	conn, err := r.pool.Acquire(ctx)
 	if err != nil {
+		releaseAdmission()
 		return nil, false, err
 	}
 	var locked bool
 	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&locked); err != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = conn.Conn().Close(closeCtx)
+		cancel()
 		conn.Release()
+		releaseAdmission()
 		return nil, false, err
 	}
 	if !locked {
 		conn.Release()
+		releaseAdmission()
 		return nil, false, nil
 	}
-	return &SearchIndexAdvisoryLock{conn: conn, key: key}, true, nil
+	return &SearchIndexAdvisoryLock{
+		conn:             conn,
+		key:              key,
+		releaseAdmission: releaseAdmission,
+	}, true, nil
 }
 
-func (l *SearchIndexAdvisoryLock) Close(ctx context.Context) error {
+func (l *SearchIndexAdvisoryLock) Close(_ context.Context) error {
 	if l == nil || l.conn == nil {
 		return nil
 	}
-	defer l.conn.Release()
-	var unlocked bool
-	if err := l.conn.QueryRow(ctx, `SELECT pg_advisory_unlock($1)`, l.key).Scan(&unlocked); err != nil {
-		return err
-	}
-	if !unlocked {
-		return fmt.Errorf("search index advisory lock %d was not held", l.key)
-	}
-	return nil
+	l.closeOnce.Do(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		var unlocked bool
+		err := l.conn.QueryRow(cleanupCtx, `SELECT pg_advisory_unlock($1)`, l.key).Scan(&unlocked)
+		cancel()
+		if err != nil || !unlocked {
+			if err != nil {
+				l.closeErr = err
+			} else {
+				l.closeErr = fmt.Errorf("search index advisory lock %d was not held", l.key)
+			}
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = l.conn.Conn().Close(closeCtx)
+			closeCancel()
+		}
+		l.conn.Release()
+		if l.releaseAdmission != nil {
+			l.releaseAdmission()
+		}
+	})
+	return l.closeErr
 }
 
 func isSearchIndexSchemaUnavailable(err error) bool {
