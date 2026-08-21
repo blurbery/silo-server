@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAdminCollectionEditorPath,
   buildTMDBPresetSourceInput,
+  changedCollectionLibraryIDs,
   parseTMDBPresetSourceConfig,
   toAdminCollectionBuilderValue,
   toAdminCollectionRequest,
@@ -62,6 +63,11 @@ describe("AdminCollections helpers", () => {
     expect(buildAdminCollectionEditorPath("col-9", 4)).toBe(
       "/admin/collections/col-9/edit?libraryId=4",
     );
+  });
+
+  it("omits unchanged collection library scope from partial updates", () => {
+    expect(changedCollectionLibraryIDs([2, 1], [1, 2])).toBeUndefined();
+    expect(changedCollectionLibraryIDs([1], [1, 2])).toEqual([1, 2]);
   });
 
   it("parses a generic tmdb preset source config", () => {

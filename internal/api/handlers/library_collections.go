@@ -1383,6 +1383,11 @@ func (h *LibraryCollectionHandler) HandleUpdateAdminCollection(w http.ResponseWr
 			writeError(w, http.StatusNotFound, "not_found", "Collection group not found")
 			return
 		}
+		slog.ErrorContext(r.Context(), "failed to update admin library collection",
+			"component", "api",
+			"collection_id", collectionID,
+			"error", updateErr,
+		)
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update collection")
 		return
 	}
