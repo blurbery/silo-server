@@ -2325,7 +2325,9 @@ func (s *MetadataService) mergeAndPersist(
 
 	// Apply best images.
 	if isCanonicalWrite {
-		applyBestImages(item, images, mergeMode, req.Language)
+		if !isFieldLocked(locked, FieldImages) {
+			applyBestImages(item, images, mergeMode, req.Language)
+		}
 		item.PosterThumbhash = mergedImageThumbhash(
 			existingImagePath(existingItem, ImagePoster),
 			existingImageThumbhash(existingItem, ImagePoster),
@@ -6735,7 +6737,7 @@ func applyBestImages(item *models.MediaItem, images []RemoteImage, mode MergeMod
 
 	selectBest := func(imageType ImageType, filters []func(RemoteImage) bool) *best {
 		for _, img := range images {
-			if img.Type == imageType && img.URL != "" && isLocalImageSourcePath(img.URL) {
+			if img.Type == imageType && img.URL != "" && isLocalImageSourcePath(img.URL) && isWordmarkLogoCandidate(img) {
 				return &best{url: img.URL, rating: img.Rating, providerID: img.ProviderID}
 			}
 		}
@@ -6743,7 +6745,7 @@ func applyBestImages(item *models.MediaItem, images []RemoteImage, mode MergeMod
 		for _, accept := range filters {
 			candidate := &best{}
 			for _, img := range images {
-				if img.Type != imageType || img.URL == "" || !accept(img) {
+				if img.Type != imageType || img.URL == "" || !isWordmarkLogoCandidate(img) || !accept(img) {
 					continue
 				}
 				if candidate.url == "" {
@@ -6836,7 +6838,40 @@ func applyBestImages(item *models.MediaItem, images []RemoteImage, mode MergeMod
 	}
 	applyIfBetter(&item.PosterPath, bestByType[ImagePoster])
 	applyIfBetter(&item.BackdropPath, bestByType[ImageBackdrop])
-	applyIfBetter(&item.LogoPath, bestByType[ImageLogo])
+	if bestByType[ImageLogo].url == "" && mode == MergeReplaceUnlocked && itemHasRejectedTVDBLogo(item) {
+		// A user-triggered refresh must not preserve illustrated TVDB clear-art
+		// when no eligible wordmark replacement exists.
+		item.LogoPath = ""
+		item.LogoSourcePath = ""
+	} else {
+		applyIfBetter(&item.LogoPath, bestByType[ImageLogo])
+	}
+}
+
+// isWordmarkLogoCandidate limits remote logo selection to sources whose
+// provider contract represents logos as dedicated wordmarks. TVDB currently
+// reports illustrated clear-art (title plus characters or props) as ImageLogo,
+// and RemoteImage has no signal that can distinguish it from a clear logo.
+// Local sidecars stay authoritative; TMDB's dedicated logo collection is the
+// only supported remote wordmark source until providers expose a stronger kind.
+func isWordmarkLogoCandidate(img RemoteImage) bool {
+	if img.Type != ImageLogo || isLocalImageSourcePath(img.URL) {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(img.ProviderID), "tmdb")
+}
+
+func itemHasRejectedTVDBLogo(item *models.MediaItem) bool {
+	if item == nil {
+		return false
+	}
+	return isTVDBLogoPath(item.LogoSourcePath) || isTVDBLogoPath(item.LogoPath)
+}
+
+func isTVDBLogoPath(path string) bool {
+	path = strings.ToLower(strings.TrimSpace(path))
+	return strings.HasPrefix(path, "tvdb://") ||
+		(strings.HasPrefix(path, "tvdb/") && strings.Contains(path, "/logo/"))
 }
 
 type itemArtworkField struct {
@@ -6859,6 +6894,13 @@ func itemArtworkFields(item *models.MediaItem) []itemArtworkField {
 
 func prepareItemImagesForQueue(item, existing *models.MediaItem) {
 	for _, field := range itemArtworkFields(item) {
+		// applyBestImages intentionally clears rejected TVDB clear-art on a
+		// manual refresh when no wordmark replacement exists. Do not let the
+		// generic cached-art preservation path restore that rejected logo.
+		if field.imageType == ImageLogo && *field.path == "" && itemHasRejectedTVDBLogo(existing) {
+			*field.source = ""
+			continue
+		}
 		existingPath := existingImagePath(existing, field.imageType)
 		existingThumbhash := existingImageThumbhash(existing, field.imageType)
 		existingSource := existingImageSourcePath(existing, field.imageType)
@@ -7159,7 +7201,11 @@ func (s *MetadataService) FetchItemImages(ctx context.Context, providerIDs map[s
 			providerErrors[p.Slug()] = err.Error()
 			continue
 		}
-		allImages = append(allImages, images...)
+		for _, image := range images {
+			if isWordmarkLogoCandidate(image) {
+				allImages = append(allImages, image)
+			}
+		}
 	}
 
 	// Sort by rating descending (popularity).
@@ -7168,6 +7214,57 @@ func (s *MetadataService) FetchItemImages(ctx context.Context, providerIDs map[s
 	})
 
 	return allImages, providerErrors, nil
+}
+
+// FetchSeasonImages queries the configured season provider chain and returns
+// only the primary poster reported for the requested season by each provider.
+// The existing plugin image contract cannot request alternate season artwork,
+// but GetSeasons is already scoped to the parent series and preserves season 0
+// for Specials.
+func (s *MetadataService) FetchSeasonImages(ctx context.Context, providerIDs map[string]string, language string, folderID int, seasonNumber int) ([]RemoteImage, map[string]string, error) {
+	chain, err := s.resolveChainCached(ctx, folderID, "season")
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolving provider chain: %w", err)
+	}
+
+	var images []RemoteImage
+	providerErrors := make(map[string]string)
+	seen := make(map[string]struct{})
+
+	for _, p := range chain {
+		ep, ok := p.(EpisodeProvider)
+		if !ok {
+			continue
+		}
+		seasons, err := ep.GetSeasons(ctx, SeasonsRequest{
+			ProviderIDs: providerIDs,
+			ContentType: "series",
+			Language:    language,
+		})
+		if err != nil {
+			slog.WarnContext(ctx, "fetch season images: provider error", "component", "metadata",
+				"provider", p.Slug(), "season", seasonNumber, "error", err)
+			providerErrors[p.Slug()] = err.Error()
+			continue
+		}
+		for _, season := range seasons {
+			if season.SeasonNumber != seasonNumber || season.PosterPath == "" {
+				continue
+			}
+			if _, duplicate := seen[season.PosterPath]; duplicate {
+				break
+			}
+			seen[season.PosterPath] = struct{}{}
+			images = append(images, RemoteImage{
+				ProviderID: p.Slug(),
+				URL:        season.PosterPath,
+				Type:       ImagePoster,
+			})
+			break
+		}
+	}
+
+	return images, providerErrors, nil
 }
 
 // ApplyItemImage downloads a single image, caches it to S3, and returns
