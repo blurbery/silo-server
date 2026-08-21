@@ -63,6 +63,54 @@ describe("ItemCard SortMeta", () => {
     expect(markup).toContain("2026");
   });
 
+  it("shows a right-aligned watched badge for completed movies and series", () => {
+    for (const type of ["movie", "series"] as const) {
+      const markup = renderCard({
+        item: {
+          ...baseItem,
+          type,
+          user_state: {
+            played: true,
+            is_favorite: false,
+            in_watchlist: false,
+          },
+        },
+      });
+
+      expect(markup).toContain(">Watched</span>");
+      expect(markup).toContain("ml-auto");
+      expect(markup).toContain("2023");
+    }
+  });
+
+  it("does not show the card watched badge for unplayed or non-root media", () => {
+    const unplayedMovie = renderCard({
+      item: {
+        ...baseItem,
+        type: "movie",
+        user_state: {
+          played: false,
+          is_favorite: false,
+          in_watchlist: false,
+        },
+      },
+    });
+    const playedEpisode = renderCard({
+      item: {
+        ...baseItem,
+        type: "episode",
+        user_state: {
+          played: true,
+          is_favorite: false,
+          in_watchlist: false,
+        },
+      },
+    });
+
+    expect(unplayedMovie).not.toContain(">Watched</span>");
+    expect(playedEpisode).not.toContain(">Watched</span>");
+  });
+
   it("falls back to default label when last_air_date is null", () => {
     const markup = renderCard({
       sortField: "last_air_date",

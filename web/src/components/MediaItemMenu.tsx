@@ -1,16 +1,28 @@
 import { useEffect, useMemo, useState } from "react";
-import { MoreVertical, RefreshCw } from "lucide-react";
+import { LoaderCircle, MoreVertical, Pencil, RefreshCw, Search } from "lucide-react";
 import { useLocation } from "react-router";
 import { useViewTransitionNavigate } from "@/hooks/useViewTransition";
 import type { ItemDetail, MediaItemUserState } from "@/api/types";
-import { useIsActingAdmin } from "@/hooks/useIsActingAdmin";
+import { useOptionalAuth } from "@/hooks/useAuth";
+import { useCurrentProfile } from "@/hooks/useCurrentProfile";
+import { useCatalogItemDetail } from "@/hooks/queries/catalogRead";
 import { useRefreshItemMetadata, useWatchedStateMutation } from "@/hooks/queries/items";
 import { type DismissHomeItemVariables, useDismissHomeItem } from "@/hooks/queries/homeDismissals";
 import { useToggleFavorite } from "@/hooks/queries/favorites";
 import { useToggleWatchlist } from "@/hooks/queries/watchlist";
 import { getWatchedActionLabel } from "@/pages/ItemDetail/watchedState";
+import EditMetadataDialog from "@/components/EditMetadataDialog";
 import MangaFilesDialog from "@/components/MangaFilesDialog";
+import MatchItemDialog from "@/components/MatchItemDialog";
 import RefreshMetadataDialog from "@/components/RefreshMetadataDialog";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,6 +33,11 @@ import {
 import { cn } from "@/lib/utils";
 import { useWatchPlaybackController } from "@/playback/watchPlaybackContext";
 import { buildMediaPlayHref } from "@/lib/mediaNavigation";
+import {
+  canCurateMetadata as canCurateMetadataForUser,
+  isActingAdmin as isActingAdminForUser,
+} from "@/lib/permissions";
+import { mediaItemMenuTriggerClassName } from "@/components/mediaItemMenuTrigger";
 
 type MediaItemType = ItemDetail["type"];
 
@@ -35,7 +52,9 @@ type MediaItemMenuEntry =
         | "dismissFromHome"
         | "viewDetails"
         | "viewPlayHistory"
-        | "refreshMetadata";
+        | "refreshMetadata"
+        | "editMetadata"
+        | "matchItem";
       label: string;
     }
   | { kind: "separator" };
@@ -45,6 +64,7 @@ interface BuildMediaItemMenuModelOptions {
   userState?: MediaItemUserState;
   hasPartialProgress?: boolean;
   isAdmin: boolean;
+  canCurateMetadata?: boolean;
   showCollectionActions?: boolean;
   dismissLabel?: string;
 }
@@ -66,6 +86,7 @@ export function buildMediaItemMenuModel({
   userState,
   hasPartialProgress = false,
   isAdmin,
+  canCurateMetadata = isAdmin,
   showCollectionActions = true,
   dismissLabel,
 }: BuildMediaItemMenuModelOptions): MediaItemMenuEntry[] {
@@ -111,22 +132,41 @@ export function buildMediaItemMenuModel({
     entries.push({ kind: "action", key: "viewDetails", label: "View Details" });
   }
 
-  if (isAdmin) {
+  if (isAdmin || canCurateMetadata) {
     if (entries.length > 0) {
       entries.push({ kind: "separator" });
     }
-    entries.push(
-      {
+
+    if (isAdmin) {
+      entries.push({
         kind: "action",
         key: "viewPlayHistory",
         label: "View Play History",
-      },
-      {
+      });
+    }
+
+    if (canCurateMetadata) {
+      entries.push({
         kind: "action",
         key: "refreshMetadata",
         label: "Refresh Metadata",
-      },
-    );
+      });
+
+      if (mediaType === "movie" || mediaType === "series") {
+        entries.push(
+          {
+            kind: "action",
+            key: "editMetadata",
+            label: "Edit Metadata",
+          },
+          {
+            kind: "action",
+            key: "matchItem",
+            label: "Match Item",
+          },
+        );
+      }
+    }
   }
 
   if (dismissLabel) {
@@ -148,6 +188,72 @@ function stopMenuEvent(event: Pick<Event, "preventDefault" | "stopPropagation">)
   event.stopPropagation();
 }
 
+type MetadataAction = "edit" | "match";
+
+export function MetadataActionDialogHost({
+  action,
+  contentId,
+  libraryId,
+  onClose,
+}: {
+  action: MetadataAction;
+  contentId: string;
+  libraryId?: number;
+  onClose: () => void;
+}) {
+  const {
+    data: item,
+    error,
+    isFetching,
+    isLoading,
+    refetch,
+  } = useCatalogItemDetail(contentId, libraryId);
+
+  if (item) {
+    return action === "edit" ? (
+      <EditMetadataDialog item={item} open onOpenChange={(open) => !open && onClose()} />
+    ) : (
+      <MatchItemDialog
+        key={item.content_id}
+        item={libraryId === undefined ? item : { ...item, library_id: libraryId }}
+        open
+        onOpenChange={(open) => !open && onClose()}
+      />
+    );
+  }
+
+  const actionLabel = action === "edit" ? "Edit Metadata" : "Match Item";
+  const loading = isLoading || isFetching;
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>{actionLabel}</DialogTitle>
+          <DialogDescription>
+            {loading ? "Loading the latest item details…" : "The item details could not be loaded."}
+          </DialogDescription>
+        </DialogHeader>
+        {loading ? (
+          <div className="text-muted-foreground flex items-center gap-2 text-sm">
+            <LoaderCircle className="size-4 animate-spin" />
+            Loading…
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-muted-foreground text-sm">
+              {error instanceof Error ? error.message : "Please try again."}
+            </p>
+            <Button type="button" variant="outline" size="sm" onClick={() => void refetch()}>
+              Try Again
+            </Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function MediaItemMenu({
   contentId,
   mediaType,
@@ -161,10 +267,15 @@ export default function MediaItemMenu({
   const navigate = useViewTransitionNavigate();
   const location = useLocation();
   const playbackController = useWatchPlaybackController();
-  const isAdmin = useIsActingAdmin();
+  const user = useOptionalAuth()?.user;
+  const { profile: currentProfile, hasSelectedProfile } = useCurrentProfile();
+  const profileIsResolved = !hasSelectedProfile || Boolean(currentProfile);
+  const isAdmin = profileIsResolved && isActingAdminForUser(user, currentProfile);
+  const canCurateMetadata = profileIsResolved && canCurateMetadataForUser(user, currentProfile);
   const [currentUserState, setCurrentUserState] = useState(userState);
   const [refreshDialogOpen, setRefreshDialogOpen] = useState(false);
   const [filesDialogOpen, setFilesDialogOpen] = useState(false);
+  const [metadataAction, setMetadataAction] = useState<MetadataAction | null>(null);
 
   useEffect(() => {
     setCurrentUserState(userState);
@@ -199,6 +310,7 @@ export default function MediaItemMenu({
     userState: currentUserState,
     hasPartialProgress,
     isAdmin,
+    canCurateMetadata,
     showCollectionActions,
     dismissLabel,
   });
@@ -210,11 +322,7 @@ export default function MediaItemMenu({
     refreshMetadataMutation.isPending ||
     dismissHomeItemMutation.isPending;
 
-  const triggerClassName = cn(
-    "inline-flex items-center justify-center rounded-md border border-border/20 bg-background/60 text-foreground shadow-sm backdrop-blur-sm transition-[opacity,background-color] duration-150 hover:bg-background/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
-    variant === "wide" ? "size-9" : "size-8",
-    "opacity-100 md:opacity-0 md:group-hover/card:opacity-100 md:group-focus-within/card:opacity-100",
-  );
+  const triggerClassName = mediaItemMenuTriggerClassName(variant);
 
   async function handleAction(actionKey: Extract<MediaItemMenuEntry, { kind: "action" }>["key"]) {
     switch (actionKey) {
@@ -268,6 +376,14 @@ export default function MediaItemMenu({
         setRefreshDialogOpen(true);
         return;
       }
+      case "editMetadata": {
+        setMetadataAction("edit");
+        return;
+      }
+      case "matchItem": {
+        setMetadataAction("match");
+        return;
+      }
     }
   }
 
@@ -314,6 +430,8 @@ export default function MediaItemMenu({
                     {entry.key === "refreshMetadata" && refreshMetadataMutation.isPending ? (
                       <RefreshCw className="size-4 animate-spin" />
                     ) : null}
+                    {entry.key === "editMetadata" ? <Pencil className="size-4" /> : null}
+                    {entry.key === "matchItem" ? <Search className="size-4" /> : null}
                     {entry.label}
                   </DropdownMenuItem>
                 );
@@ -328,6 +446,14 @@ export default function MediaItemMenu({
         onConfirm={handleRefreshConfirm}
         isPending={refreshMetadataMutation.isPending}
       />
+      {metadataAction && (
+        <MetadataActionDialogHost
+          action={metadataAction}
+          contentId={contentId}
+          libraryId={libraryId}
+          onClose={() => setMetadataAction(null)}
+        />
+      )}
       {mediaType === "manga" && (
         <MangaFilesDialog
           contentId={contentId}

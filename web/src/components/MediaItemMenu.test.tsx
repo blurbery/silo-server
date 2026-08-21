@@ -1,5 +1,38 @@
-import { describe, expect, it } from "vitest";
-import { buildMediaItemMenuModel } from "./MediaItemMenu";
+import { renderToStaticMarkup } from "react-dom/server";
+import type { ItemDetail } from "@/api/types";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildMediaItemMenuModel, MetadataActionDialogHost } from "./MediaItemMenu";
+import { mediaItemMenuTriggerClassName } from "./mediaItemMenuTrigger";
+
+const mocks = vi.hoisted(() => ({
+  useCatalogItemDetail: vi.fn(),
+  editItem: vi.fn(),
+  matchItem: vi.fn(),
+}));
+
+vi.mock("@/hooks/queries/catalogRead", () => ({
+  useCatalogItemDetail: (...args: unknown[]) => mocks.useCatalogItemDetail(...args),
+}));
+
+vi.mock("@/components/EditMetadataDialog", () => ({
+  default: ({ item }: { item: ItemDetail }) => {
+    mocks.editItem(item);
+    return <div>Edit {item.title}</div>;
+  },
+}));
+
+vi.mock("@/components/MatchItemDialog", () => ({
+  default: ({ item }: { item: ItemDetail }) => {
+    mocks.matchItem(item);
+    return <div>Match {item.title}</div>;
+  },
+}));
+
+beforeEach(() => {
+  mocks.useCatalogItemDetail.mockReset();
+  mocks.editItem.mockReset();
+  mocks.matchItem.mockReset();
+});
 
 describe("buildMediaItemMenuModel", () => {
   it("returns watched/favorite/watchlist removal labels for active state", () => {
@@ -20,6 +53,8 @@ describe("buildMediaItemMenuModel", () => {
     expect(actions[3]?.label).toBe("Remove from Watchlist");
     expect(actions[4]?.label).toBe("View Play History");
     expect(actions[5]?.label).toBe("Refresh Metadata");
+    expect(actions[6]?.label).toBe("Edit Metadata");
+    expect(actions[7]?.label).toBe("Match Item");
     expect(model.some((item) => item.kind === "action" && item.label === "View Play History")).toBe(
       true,
     );
@@ -58,11 +93,13 @@ describe("buildMediaItemMenuModel", () => {
     });
     const actions = model.filter((item) => item.kind === "action");
 
-    expect(actions).toHaveLength(4);
+    expect(actions).toHaveLength(6);
     expect(actions[0]?.label).toBe("Play from Beginning");
     expect(actions[1]?.label).toBe("Mark Unwatched");
     expect(actions[2]?.label).toBe("View Play History");
     expect(actions[3]?.label).toBe("Refresh Metadata");
+    expect(actions[4]?.label).toBe("Edit Metadata");
+    expect(actions[5]?.label).toBe("Match Item");
   });
 
   it("omits admin actions for non-admin users", () => {
@@ -86,6 +123,30 @@ describe("buildMediaItemMenuModel", () => {
     expect(model.some((item) => item.kind === "action" && item.label === "Refresh Metadata")).toBe(
       false,
     );
+  });
+
+  it("shows metadata actions to a metadata curator without exposing play history", () => {
+    const model = buildMediaItemMenuModel({
+      mediaType: "series",
+      isAdmin: false,
+      canCurateMetadata: true,
+    });
+    const labels = model.filter((item) => item.kind === "action").map((item) => item.label);
+
+    expect(labels).toEqual(["Refresh Metadata", "Edit Metadata", "Match Item"]);
+    expect(labels).not.toContain("View Play History");
+  });
+
+  it("limits edit and match card actions to movies and series", () => {
+    const model = buildMediaItemMenuModel({
+      mediaType: "episode",
+      isAdmin: true,
+    });
+    const labels = model.filter((item) => item.kind === "action").map((item) => item.label);
+
+    expect(labels).toContain("Refresh Metadata");
+    expect(labels).not.toContain("Edit Metadata");
+    expect(labels).not.toContain("Match Item");
   });
 
   it("shows a continue watching dismissal action when provided", () => {
@@ -212,5 +273,59 @@ describe("buildMediaItemMenuModel", () => {
     const labels = model.filter((item) => item.kind === "action").map((item) => item.label);
 
     expect(labels).toContain("Mark Unread");
+  });
+});
+
+describe("MediaItemMenu metadata dialogs", () => {
+  const detail = {
+    content_id: "series-1",
+    type: "series",
+    title: "Silo",
+    year: 2023,
+  } as ItemDetail;
+
+  it("loads the exact item detail and passes it to Edit Metadata", () => {
+    mocks.useCatalogItemDetail.mockReturnValue({ data: detail });
+
+    const markup = renderToStaticMarkup(
+      <MetadataActionDialogHost
+        action="edit"
+        contentId="series-1"
+        libraryId={12}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(mocks.useCatalogItemDetail).toHaveBeenCalledWith("series-1", 12);
+    expect(mocks.editItem).toHaveBeenCalledWith(detail);
+    expect(markup).toContain("Edit Silo");
+  });
+
+  it("passes the full item and library context to Match Item", () => {
+    mocks.useCatalogItemDetail.mockReturnValue({ data: detail });
+
+    const markup = renderToStaticMarkup(
+      <MetadataActionDialogHost
+        action="match"
+        contentId="series-1"
+        libraryId={12}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(mocks.useCatalogItemDetail).toHaveBeenCalledWith("series-1", 12);
+    expect(mocks.matchItem).toHaveBeenCalledWith({ ...detail, library_id: 12 });
+    expect(markup).toContain("Match Silo");
+  });
+});
+
+describe("MediaItemMenu trigger visibility", () => {
+  it("uses open state and keyboard focus without keeping a mouse-closed card focused", () => {
+    const className = mediaItemMenuTriggerClassName();
+
+    expect(className).toContain("md:group-hover/card:opacity-100");
+    expect(className).toContain("md:data-[state=open]:opacity-100");
+    expect(className).toContain("md:focus-visible:opacity-100");
+    expect(className).not.toContain("group-focus-within");
   });
 });

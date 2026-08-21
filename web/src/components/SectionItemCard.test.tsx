@@ -75,6 +75,71 @@ describe("SectionItemCard", () => {
     expect(markup).toContain("S22E10");
   });
 
+  it("shows a right-aligned watched badge for completed movies and series", () => {
+    for (const type of ["movie", "series"] as const) {
+      const markup = renderToStaticMarkup(
+        <SectionItemCard
+          item={{
+            content_id: `${type}-1`,
+            type,
+            title: type === "movie" ? "Movie A" : "Series A",
+            year: 2024,
+            genres: ["Drama"],
+            status: "matched",
+            rating_imdb: 8.2,
+            overview: "Overview",
+            poster_url: "",
+            poster_thumbhash: "",
+            backdrop_url: "",
+            backdrop_thumbhash: "",
+            logo_url: "",
+            user_state: {
+              played: true,
+              is_favorite: false,
+              in_watchlist: false,
+            },
+          }}
+        />,
+      );
+
+      expect(markup).toContain(">Watched</span>");
+      expect(markup).toContain("ml-auto");
+      expect(markup).toContain("2024");
+    }
+  });
+
+  it("does not show the card watched badge for a played episode", () => {
+    const markup = renderToStaticMarkup(
+      <SectionItemCard
+        item={{
+          content_id: "episode-2",
+          type: "episode",
+          title: "Episode A",
+          series_title: "Series A",
+          season_number: 1,
+          episode_number: 2,
+          year: 2024,
+          genres: ["Drama"],
+          status: "matched",
+          rating_imdb: 8.2,
+          overview: "Overview",
+          poster_url: "",
+          poster_thumbhash: "",
+          backdrop_url: "",
+          backdrop_thumbhash: "",
+          logo_url: "",
+          user_state: {
+            played: true,
+            is_favorite: false,
+            in_watchlist: false,
+          },
+        }}
+      />,
+    );
+
+    expect(markup).not.toContain(">Watched</span>");
+  });
+
   it("renders premiere metadata when an upcoming event is present", () => {
     const markup = renderToStaticMarkup(
       <SectionItemCard
@@ -100,6 +165,11 @@ describe("SectionItemCard", () => {
             season_number: 2,
             badges: ["season_premiere"],
           },
+          user_state: {
+            played: true,
+            is_favorite: false,
+            in_watchlist: false,
+          },
         }}
       />,
     );
@@ -109,5 +179,6 @@ describe("SectionItemCard", () => {
     expect(markup).toContain("Season 2 · Back Again");
     expect(markup).toContain("Wed, Apr 8");
     expect(markup).toContain("8:00 PM");
+    expect(markup).toContain(">Watched</span>");
   });
 });

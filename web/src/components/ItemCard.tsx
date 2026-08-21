@@ -11,6 +11,7 @@ import { buildEpisodeCardLabels } from "@/lib/episodeCardLabels";
 import { formatDate as formatPreferredDate } from "@/lib/datetime";
 import { formatBitrate } from "@/lib/mediaFormat";
 import { useUICustomization } from "@/hooks/useUICustomization";
+import CardWatchedBadge from "@/components/CardWatchedBadge";
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -315,8 +316,11 @@ export default function ItemCard({
             </div>
           ) : null}
           {showMetadata ? (
-            <div className="text-muted-foreground mt-1 text-[11px] font-medium tracking-[0.14em] uppercase">
-              <SortMeta item={item} sortField={sortField} />
+            <div className="text-muted-foreground mt-1 flex min-w-0 items-center gap-2 text-[11px] font-medium tracking-[0.14em] uppercase">
+              <span className="min-w-0 truncate">
+                <SortMeta item={item} sortField={sortField} />
+              </span>
+              <CardWatchedBadge mediaType={item.type} played={item.user_state?.played} />
             </div>
           ) : null}
         </ViewTransitionLink>
