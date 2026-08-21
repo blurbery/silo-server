@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/Silo-Server/silo-server/internal/database"
 )
 
 const downloadColumns = `id, user_id, profile_id, device_id, media_file_id, content_id, episode_id, batch_id,
@@ -42,11 +45,37 @@ const downloadQuotaLockClassID = 0x646c6f61 // "dloa"
 // used only as its holder — fn's own statements run through the pool and
 // commit before the lock releases, so the next holder sees them.
 func (r *Repository) WithUserQuotaLock(ctx context.Context, userID int, fn func(ctx context.Context) error) error {
-	tx, err := r.pool.Begin(ctx)
+	releaseAdmission, err := database.AcquirePinnedConnectionSlot(ctx, r.pool)
 	if err != nil {
+		return fmt.Errorf("acquiring download quota lock admission: %w", err)
+	}
+	conn, err := r.pool.Acquire(ctx)
+	if err != nil {
+		releaseAdmission()
+		return fmt.Errorf("acquiring download quota lock connection: %w", err)
+	}
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		conn.Release()
+		releaseAdmission()
 		return fmt.Errorf("begin download quota lock: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			rollbackCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			err := tx.Rollback(rollbackCtx)
+			cancel()
+			if err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+				closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				_ = conn.Conn().Close(closeCtx)
+				closeCancel()
+			}
+			conn.Release()
+			releaseAdmission()
+		})
+	}
+	defer release()
 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, downloadQuotaLockClassID, userID); err != nil {
 		return fmt.Errorf("acquiring download quota lock for user %d: %w", userID, err)

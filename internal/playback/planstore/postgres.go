@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/Silo-Server/silo-server/internal/database"
 	"github.com/Silo-Server/silo-server/internal/playback"
 )
 
@@ -30,21 +31,23 @@ func (s *Postgres) SessionLockCapacity() int {
 	if s == nil || s.db == nil {
 		return 0
 	}
-	capacity := int(s.db.Config().MaxConns) / 2
-	if capacity < 1 {
-		capacity = 1
-	}
-	return capacity
+	return database.PinnedConnectionCapacity(s.db)
 }
 
 func (s *Postgres) AcquireSessionLock(ctx context.Context, sessionID string) (func(), error) {
+	releaseAdmission, err := database.AcquirePinnedConnectionSlot(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
 	conn, err := s.db.Acquire(ctx)
 	if err != nil {
+		releaseAdmission()
 		return nil, err
 	}
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		conn.Release()
+		releaseAdmission()
 		return nil, err
 	}
 	release := func() {
@@ -60,6 +63,7 @@ func (s *Postgres) AcquireSessionLock(ctx context.Context, sessionID string) (fu
 			closeCancel()
 		}
 		conn.Release()
+		releaseAdmission()
 	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, sessionID); err != nil {
 		release()
