@@ -73,7 +73,7 @@ func TestArtworkSweepSurfacesUseIndexablePaginationKeys(t *testing.T) {
 func TestCollectionPosterSurfaceUsesCoordinatedRevalidation(t *testing.T) {
 	var collectionPoster artworkSweepSurface
 	for _, surface := range artworkSweepSurfaces() {
-		if surface.name == "collection posters" {
+		if surface.name == artworkCollectionPostersName {
 			collectionPoster = surface
 			break
 		}
@@ -131,7 +131,7 @@ func TestResetCollectionPosterIfStillMissingRevalidates(t *testing.T) {
 
 	var surface artworkSweepSurface
 	for _, candidate := range artworkSweepSurfaces() {
-		if candidate.name == "collection posters" {
+		if candidate.name == artworkCollectionPostersName {
 			surface = candidate
 			break
 		}

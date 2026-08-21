@@ -33,6 +33,8 @@ const (
 	artworkReconcileHeadWorkers  = 16
 	artworkReconcileHeadTimeout  = 15 * time.Second
 	artworkReconcileErrorBudget  = 200
+	artworkCollectionPostersName = "collection posters"
+	artworkPosterURLColumn       = "poster_url"
 	// artworkReconcileBulkThreshold: when at least this fraction of sampled
 	// objects is missing, skip per-row verification for the large regenerable
 	// surfaces and reset every cached row.
@@ -277,9 +279,9 @@ func artworkSweepSurfaces() []artworkSweepSurface {
 		// (user collections), or the default tile (library posters); admins
 		// re-upload anything they want back. alwaysVerify protects surviving
 		// uploads from blind bulk resets.
-		{name: "collection posters", table: "library_collections", keyCols: []artworkSweepKey{textSweepKey("id")}, pathCol: "poster_url", clearSet: `poster_url = '', poster_thumbhash = '', poster_auto_generated = FALSE, poster_from_template = FALSE, updated_at = NOW()`, alwaysVerify: true, coordinatePosterMutation: true},
+		{name: artworkCollectionPostersName, table: "library_collections", keyCols: []artworkSweepKey{textSweepKey("id")}, pathCol: artworkPosterURLColumn, clearSet: `poster_url = '', poster_thumbhash = '', poster_auto_generated = FALSE, poster_from_template = FALSE, updated_at = NOW()`, alwaysVerify: true, coordinatePosterMutation: true},
 		{name: "collection backdrops", table: "library_collections", keyCols: []artworkSweepKey{textSweepKey("id")}, pathCol: "backdrop_url", clearSet: `backdrop_url = '', backdrop_thumbhash = '', updated_at = NOW()`, alwaysVerify: true},
-		{name: "user collection posters", table: "user_personal_collections", keyCols: []artworkSweepKey{textSweepKey("id")}, pathCol: "poster_url", clearSet: `poster_url = '', poster_thumbhash = '', updated_at = NOW()`, alwaysVerify: true},
+		{name: "user collection posters", table: "user_personal_collections", keyCols: []artworkSweepKey{textSweepKey("id")}, pathCol: artworkPosterURLColumn, clearSet: `poster_url = '', poster_thumbhash = '', updated_at = NOW()`, alwaysVerify: true},
 		{name: "library posters", table: "media_folders", keyCols: []artworkSweepKey{int32SweepKey("id")}, pathCol: posterPathColumn, clearSet: `poster_path = ''`, alwaysVerify: true},
 	}
 }
@@ -935,7 +937,7 @@ func (r *ArtworkCacheReconciler) verifyAndReset(ctx context.Context, s artworkSw
 		case v.err != nil:
 			stats.Errors++
 			stats.SweepErrors++
-			slog.Warn("artwork reconcile: object check failed; leaving row untouched",
+			slog.WarnContext(ctx, "artwork reconcile: object check failed; leaving row untouched",
 				"surface", s.name, "key", batch[i].path, "error", v.err)
 		case v.missing:
 			row := batch[i]
@@ -948,7 +950,7 @@ func (r *ArtworkCacheReconciler) verifyAndReset(ctx context.Context, s artworkSw
 				case result.storageErr != nil:
 					stats.Errors++
 					stats.SweepErrors++
-					slog.Warn("artwork reconcile: collection poster recheck failed; leaving row untouched",
+					slog.WarnContext(ctx, "artwork reconcile: collection poster recheck failed; leaving row untouched",
 						"surface", s.name, "key", row.path, "row", strings.Join(row.keys, "/"), "error", result.storageErr)
 				case result.present:
 					stats.Verified++
@@ -971,7 +973,7 @@ func (r *ArtworkCacheReconciler) verifyAndReset(ctx context.Context, s artworkSw
 				set = s.resetSet()
 			} else {
 				set = s.clearSet
-				slog.Warn("artwork reconcile: cached image missing with no re-downloadable source; cleared",
+				slog.WarnContext(ctx, "artwork reconcile: cached image missing with no re-downloadable source; cleared",
 					"surface", s.name, "key", row.path, "row", strings.Join(row.keys, "/"))
 			}
 			pgBatch.Queue(fmt.Sprintf(`UPDATE %s SET %s WHERE %s AND %s = $%d`,
@@ -1135,7 +1137,7 @@ func (r *ArtworkCacheReconciler) reconcileChapterBatch(ctx context.Context, batc
 		if err := json.Unmarshal(f.raw, &f.chapters); err != nil {
 			stats.Errors++
 			stats.SweepErrors++
-			slog.Warn("artwork reconcile: unparseable chapters JSON; skipping file", "file_id", f.id, "error", err)
+			slog.WarnContext(ctx, "artwork reconcile: unparseable chapters JSON; skipping file", "file_id", f.id, "error", err)
 			f.chapters = nil
 			continue
 		}
@@ -1161,7 +1163,7 @@ func (r *ArtworkCacheReconciler) reconcileChapterBatch(ctx context.Context, batc
 		case v.err != nil:
 			stats.Errors++
 			stats.SweepErrors++
-			slog.Warn("artwork reconcile: chapter thumbnail check failed; leaving chapter untouched",
+			slog.WarnContext(ctx, "artwork reconcile: chapter thumbnail check failed; leaving chapter untouched",
 				"file_id", batch[ref.file].id, "key", keys[vi], "error", v.err)
 		case v.missing:
 			ch := batch[ref.file].chapters[ref.chapter]
