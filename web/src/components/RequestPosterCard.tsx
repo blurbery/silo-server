@@ -90,6 +90,12 @@ function DiscoverCard({
               reserveLibrarySpace={Boolean(item.library_content_id)}
             />
           )}
+          {requestable && onRequest && (
+            <div
+              data-testid="request-poster-hover-overlay"
+              className="pointer-events-none absolute inset-0 translate-y-2 bg-gradient-to-t from-black/85 via-black/45 to-transparent opacity-0 transition-all duration-200 ease-out group-focus-within/req-card:translate-y-0 group-focus-within/req-card:opacity-100 group-hover/req-card:translate-y-0 group-hover/req-card:opacity-100"
+            />
+          )}
         </PosterFrame>
 
         <CardMeta
@@ -101,7 +107,7 @@ function DiscoverCard({
       </Link>
 
       {requestable && onRequest && (
-        <div className="pointer-events-none absolute inset-x-0 top-0 flex aspect-[2/3] translate-y-2 items-end justify-center bg-gradient-to-t from-black/85 via-black/45 to-transparent p-3 opacity-0 transition-all duration-200 ease-out group-focus-within/req-card:translate-y-0 group-focus-within/req-card:opacity-100 group-hover/req-card:translate-y-0 group-hover/req-card:opacity-100">
+        <div className="pointer-events-none absolute top-0 left-0 flex aspect-[2/3] w-full translate-y-2 items-end justify-center pb-3 opacity-0 transition-all duration-200 ease-out group-focus-within/req-card:translate-y-0 group-focus-within/req-card:opacity-100 group-hover/req-card:translate-y-0 group-hover/req-card:opacity-100">
           <button
             type="button"
             disabled={Boolean(isSubmitting)}

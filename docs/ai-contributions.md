@@ -64,6 +64,19 @@ Technical notes, after the reproduction. The
 [issue forms](https://github.com/Silo-Server/silo-server/issues/new/choose)
 enforce the required fields.
 
+## Prose pass
+
+Before submitting, run a final readability pass over the pull request or issue
+body using the `unslop` skill at
+[.claude/skills/unslop/SKILL.md](../.claude/skills/unslop/SKILL.md). Claude Code
+agents can invoke it directly; any other tool or a human author can read it as
+plain markdown and apply it. Cut filler and promotional framing, lead with the
+outcome, and prefer concrete claims over adjectives.
+
+This is a readability step, not concealment. It must not alter facts, pasted
+command output, or logs, and it does not loosen the disclosure requirement
+above in any way.
+
 ## Integrity and enforcement
 
 > [!WARNING]
