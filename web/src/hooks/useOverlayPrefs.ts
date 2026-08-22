@@ -24,7 +24,7 @@ interface OverlayConfig {
 function useOverlayConfig() {
   return useQuery({
     queryKey: settingsKeys.overlayConfig(),
-    queryFn: () => api<OverlayConfig>("/settings/overlay-config"),
+    queryFn: () => api<OverlayConfig>("/settings/overlay-config", { cache: "no-store" }),
     staleTime: 60_000,
   });
 }
