@@ -365,7 +365,7 @@ export default function ActionBar({
               <MoreVertical className="size-[18px]" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-max min-w-0">
+          <DropdownMenuContent align="end" className="w-max max-w-[calc(100vw-2rem)] min-w-0">
             {restartHref && (
               <DropdownMenuItem
                 onSelect={() => {

@@ -32,7 +32,7 @@ describe("ActionBar detail menu", () => {
     await userEvent.click(screen.getByTitle("More"));
 
     const menu = screen.getByRole("menu");
-    expect(menu).toHaveClass("w-max", "min-w-0");
+    expect(menu).toHaveClass("w-max", "max-w-[calc(100vw-2rem)]", "min-w-0");
     expect(menu).not.toHaveClass("w-56");
     for (const item of screen.getAllByRole("menuitem")) {
       expect(item.querySelector("svg"), item.textContent ?? "menu item").toBeTruthy();

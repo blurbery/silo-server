@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import OverlaySettings from "./OverlaySettings";
@@ -19,7 +20,29 @@ vi.mock("@/hooks/useSettingsForm", () => ({
 }));
 
 vi.mock("@/components/ui/select", () => ({
-  Select: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Select: ({
+    children,
+    disabled = false,
+    onValueChange,
+    value,
+  }: {
+    children: ReactNode;
+    disabled?: boolean;
+    onValueChange?: (value: string) => void;
+    value?: string;
+  }) => (
+    <div>
+      <button
+        type="button"
+        data-testid="select-control"
+        disabled={disabled}
+        onClick={() => onValueChange?.(value ?? "")}
+      >
+        Select
+      </button>
+      {children}
+    </div>
+  ),
   SelectContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   SelectItem: ({ children, value }: { children: ReactNode; value: string }) => (
     <div data-value={value}>{children}</div>
@@ -29,7 +52,24 @@ vi.mock("@/components/ui/select", () => ({
 }));
 
 vi.mock("@/components/ui/switch", () => ({
-  Switch: () => <button type="button">Toggle</button>,
+  Switch: ({
+    checked,
+    disabled = false,
+    onCheckedChange,
+  }: {
+    checked: boolean;
+    disabled?: boolean;
+    onCheckedChange?: (checked: boolean) => void;
+  }) => (
+    <button
+      type="button"
+      data-testid="overlay-switch"
+      disabled={disabled}
+      onClick={() => onCheckedChange?.(!checked)}
+    >
+      Toggle
+    </button>
+  ),
 }));
 
 function makeForm() {
@@ -92,5 +132,23 @@ describe("OverlaySettings", () => {
 
     expect(markup).toContain("Movie preview");
     expect(markup).not.toContain("data-overlay-id");
+  });
+
+  it("prevents disabled overlay controls from changing defaults", () => {
+    values["overlays.enabled"] = "false";
+    render(<OverlaySettings />);
+
+    const selectControls = screen.getAllByTestId("select-control");
+    const overlaySwitches = screen.getAllByTestId("overlay-switch");
+    const defaultOverlaySwitches = overlaySwitches.slice(1);
+
+    expect(selectControls.every((control) => control.hasAttribute("disabled"))).toBe(true);
+    expect(overlaySwitches[0]).not.toHaveAttribute("disabled");
+    expect(defaultOverlaySwitches.every((control) => control.hasAttribute("disabled"))).toBe(true);
+
+    selectControls.forEach((control) => fireEvent.click(control));
+    defaultOverlaySwitches.forEach((control) => fireEvent.click(control));
+
+    expect(mocks.setValue).not.toHaveBeenCalled();
   });
 });

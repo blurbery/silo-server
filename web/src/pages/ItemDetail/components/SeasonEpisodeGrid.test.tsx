@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import SeasonEpisodeGrid from "./SeasonEpisodeGrid";
 
 const capturedMenuProps: Record<string, unknown>[] = [];
@@ -17,9 +17,11 @@ vi.mock("@/hooks/useOverlayPrefs", () => ({
 }));
 
 describe("SeasonEpisodeGrid", () => {
-  it("enables the watched shortcut on episode cards", () => {
+  beforeEach(() => {
     capturedMenuProps.length = 0;
+  });
 
+  it("enables the watched shortcut on episode cards", () => {
     render(
       <MemoryRouter>
         <SeasonEpisodeGrid

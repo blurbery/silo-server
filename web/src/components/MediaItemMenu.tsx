@@ -349,6 +349,16 @@ function CardQuickActionButton({
         );
         if (movement > 10) return;
 
+        const bounds = event.currentTarget.getBoundingClientRect();
+        const releasedOutside =
+          bounds.width > 0 &&
+          bounds.height > 0 &&
+          (event.clientX < bounds.left ||
+            event.clientX > bounds.right ||
+            event.clientY < bounds.top ||
+            event.clientY > bounds.bottom);
+        if (releasedOutside) return;
+
         event.preventDefault();
         event.stopPropagation();
         activate();
@@ -812,7 +822,7 @@ export default function MediaItemMenu({
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
-              className="w-max min-w-0"
+              className="w-max max-w-[calc(100vw-2rem)] min-w-0"
               onPointerDownOutside={() => {
                 lastMenuInteractionRef.current = "pointer";
               }}
