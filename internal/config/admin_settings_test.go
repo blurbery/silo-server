@@ -26,9 +26,6 @@ func TestEffectiveAdminSettingsUsesRuntimeDefaults(t *testing.T) {
 	if got := effective["theme.catalog_url"]; got != DefaultThemeCatalogURL {
 		t.Fatalf("theme.catalog_url = %q, want %q", got, DefaultThemeCatalogURL)
 	}
-	if got := effective[WebWatchedIndicatorSettingKey]; got != DefaultWebWatchedIndicatorStyle {
-		t.Fatalf("%s = %q, want %q", WebWatchedIndicatorSettingKey, got, DefaultWebWatchedIndicatorStyle)
-	}
 	if got := effective["server.log_level"]; got != "debug" {
 		t.Fatalf("server.log_level = %q, want debug", got)
 	}
@@ -230,7 +227,6 @@ func TestNormalizeAdminSettingRejectsInvalidValues(t *testing.T) {
 		{key: "theme.catalog_url", value: "http://raw.githubusercontent.com/Silo-Server/silo-themes/main/catalog.json"},
 		{key: "theme.catalog_url", value: "https://example.com/catalog.json"},
 		{key: "redis.url", value: "not-a-url"},
-		{key: WebWatchedIndicatorSettingKey, value: "badge"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.key, func(t *testing.T) {
@@ -238,16 +234,6 @@ func TestNormalizeAdminSettingRejectsInvalidValues(t *testing.T) {
 				t.Fatalf("NormalizeAdminSetting(%q, %q) returned nil error", tc.key, tc.value)
 			}
 		})
-	}
-}
-
-func TestNormalizeAdminSettingCanonicalizesWebWatchedIndicatorStyle(t *testing.T) {
-	got, err := NormalizeAdminSetting(WebWatchedIndicatorSettingKey, "  CHECK  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "check" {
-		t.Fatalf("normalized watched indicator = %q, want check", got)
 	}
 }
 

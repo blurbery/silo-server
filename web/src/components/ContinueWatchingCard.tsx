@@ -287,9 +287,13 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
           }
           libraryId={props.libraryId}
           userState={
-            "sectionItem" in props && props.sectionItem ? props.sectionItem.user_state : undefined
+            "sectionItem" in props && props.sectionItem
+              ? props.sectionItem.user_state
+              : props.detail.user_state
           }
           variant={variant}
+          showWatchedShortcut
+          showFavoriteShortcut={false}
           dismissAction={dismissAction}
           hasPartialProgress={hasPartialProgress}
         />

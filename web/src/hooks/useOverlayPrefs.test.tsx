@@ -36,7 +36,7 @@ function createWrapper() {
   };
 }
 
-describe("useOverlayPrefs web watched indicator", () => {
+describe("useOverlayPrefs", () => {
   beforeEach(() => {
     mocks.api.mockReset();
     mocks.setValue.mockReset();
@@ -44,26 +44,18 @@ describe("useOverlayPrefs web watched indicator", () => {
 
   afterEach(cleanup);
 
-  it("reads the server-wide web style from overlay config", async () => {
-    mocks.api.mockResolvedValue({ enabled: true, watched_indicator: "eye" });
+  it("reads the server-wide overlay configuration", async () => {
+    mocks.api.mockResolvedValue({ enabled: true });
     const { result } = renderHook(() => useOverlayPrefs(), { wrapper: createWrapper() });
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     expect(mocks.api).toHaveBeenCalledWith("/settings/overlay-config");
-    expect(result.current.watchedIndicatorStyle).toBe("eye");
+    expect(result.current.enabled).toBe(true);
+    expect(result.current).not.toHaveProperty("watchedIndicatorStyle");
   });
 
-  it("falls back to the rounded pill for older or malformed responses", async () => {
-    mocks.api.mockResolvedValue({ enabled: true, watched_indicator: "unknown" });
-    const { result } = renderHook(() => useOverlayPrefs(), { wrapper: createWrapper() });
-
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-    expect(result.current.watchedIndicatorStyle).toBe("pill");
-  });
-
-  it("refreshes the shared web configuration immediately after an admin save", async () => {
+  it("refreshes the shared overlay configuration immediately after an admin save", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
     });
@@ -74,7 +66,7 @@ describe("useOverlayPrefs web watched indicator", () => {
     const { result } = renderHook(() => useUpdateServerSettings(), { wrapper });
 
     await act(async () => {
-      await result.current.mutateAsync({ "ui.web_watched_indicator": "check" });
+      await result.current.mutateAsync({ "defaults.card_overlays": "{}" });
     });
 
     expect(invalidateQueries).toHaveBeenCalledWith({

@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/Silo-Server/silo-server/internal/config"
 )
 
 func readOverlayConfig(t *testing.T, handler *SettingsHandler) overlayConfigResponse {
@@ -26,26 +24,22 @@ func readOverlayConfig(t *testing.T, handler *SettingsHandler) overlayConfigResp
 	return response
 }
 
-func TestGetOverlayConfigIncludesDefaultWebWatchedIndicator(t *testing.T) {
+func TestGetOverlayConfigIncludesDisabledWebWatchedIndicator(t *testing.T) {
 	response := readOverlayConfig(t, NewSettingsHandler(nil))
 	if !response.Enabled {
 		t.Fatal("overlays enabled = false, want true")
 	}
-	if response.WatchedIndicator != config.DefaultWebWatchedIndicatorStyle {
-		t.Fatalf(
-			"watched indicator = %q, want %q",
-			response.WatchedIndicator,
-			config.DefaultWebWatchedIndicatorStyle,
-		)
+	if response.WatchedIndicator != "none" {
+		t.Fatalf("watched indicator = %q, want none", response.WatchedIndicator)
 	}
 }
 
-func TestGetOverlayConfigIncludesConfiguredWebWatchedIndicator(t *testing.T) {
+func TestGetOverlayConfigIgnoresStaleWebWatchedIndicatorSetting(t *testing.T) {
 	handler := NewSettingsHandler(nil)
 	handler.SetServerSettings(&fakeServerSettingsStore{values: map[string]string{
-		"overlays.enabled":                   "false",
-		"defaults.card_overlays":             `{"preset":"classic"}`,
-		config.WebWatchedIndicatorSettingKey: "eye",
+		"overlays.enabled":         "false",
+		"defaults.card_overlays":   `{"preset":"classic"}`,
+		"ui.web_watched_indicator": "eye",
 	}})
 
 	response := readOverlayConfig(t, handler)
@@ -55,23 +49,7 @@ func TestGetOverlayConfigIncludesConfiguredWebWatchedIndicator(t *testing.T) {
 	if response.Defaults != `{"preset":"classic"}` {
 		t.Fatalf("defaults = %q", response.Defaults)
 	}
-	if response.WatchedIndicator != "eye" {
-		t.Fatalf("watched indicator = %q, want eye", response.WatchedIndicator)
-	}
-}
-
-func TestGetOverlayConfigFallsBackFromInvalidWebWatchedIndicator(t *testing.T) {
-	handler := NewSettingsHandler(nil)
-	handler.SetServerSettings(&fakeServerSettingsStore{values: map[string]string{
-		config.WebWatchedIndicatorSettingKey: "invalid",
-	}})
-
-	response := readOverlayConfig(t, handler)
-	if response.WatchedIndicator != config.DefaultWebWatchedIndicatorStyle {
-		t.Fatalf(
-			"watched indicator = %q, want fallback %q",
-			response.WatchedIndicator,
-			config.DefaultWebWatchedIndicatorStyle,
-		)
+	if response.WatchedIndicator != "none" {
+		t.Fatalf("watched indicator = %q, want none", response.WatchedIndicator)
 	}
 }

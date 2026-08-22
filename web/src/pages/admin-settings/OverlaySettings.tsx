@@ -28,30 +28,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  parseWebWatchedIndicatorStyle,
-  WEB_WATCHED_INDICATOR_OPTIONS,
-  WEB_WATCHED_INDICATOR_SETTING_KEY,
-  type WebWatchedIndicatorStyle,
-} from "@/lib/watchedIndicator";
 
-const KEYS = ["overlays.enabled", "defaults.card_overlays", WEB_WATCHED_INDICATOR_SETTING_KEY];
+const KEYS = ["overlays.enabled", "defaults.card_overlays"];
 
 interface DefaultsEditorProps {
   value: string;
   onChange: (value: string) => void;
   overlaysEnabled: boolean;
-  watchedIndicatorStyle: WebWatchedIndicatorStyle;
-  onWatchedIndicatorChange: (value: WebWatchedIndicatorStyle) => void;
 }
 
-function DefaultsEditor({
-  value,
-  onChange,
-  overlaysEnabled,
-  watchedIndicatorStyle,
-  onWatchedIndicatorChange,
-}: DefaultsEditorProps) {
+function DefaultsEditor({ value, onChange, overlaysEnabled }: DefaultsEditorProps) {
   const prefs = parseOverlayPrefs(value || null);
 
   const updateItem = (id: OverlayId, patch: Partial<CardOverlayPrefs["items"][OverlayId]>) => {
@@ -68,47 +54,24 @@ function DefaultsEditor({
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className={`space-y-2 ${overlaysEnabled ? "" : "opacity-50"}`}>
-          <Label className="text-sm font-medium">Default style preset</Label>
-          <Select
-            value={prefs.preset}
-            disabled={!overlaysEnabled}
-            onValueChange={(v) => setPreset(v as PresetId)}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PRESET_IDS.map((id) => (
-                <SelectItem key={id} value={id}>
-                  {OVERLAY_PRESETS[id].label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-2">
-          <Label className="text-sm font-medium">Watched indicator</Label>
-          <Select
-            value={watchedIndicatorStyle}
-            onValueChange={(value) => onWatchedIndicatorChange(value as WebWatchedIndicatorStyle)}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {WEB_WATCHED_INDICATOR_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className="text-muted-foreground text-xs">
-            Applies to watched movies and completed series for every web user.
-          </p>
-        </div>
+      <div className={`space-y-2 ${overlaysEnabled ? "" : "opacity-50"}`}>
+        <Label className="text-sm font-medium">Default style preset</Label>
+        <Select
+          value={prefs.preset}
+          disabled={!overlaysEnabled}
+          onValueChange={(v) => setPreset(v as PresetId)}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {PRESET_IDS.map((id) => (
+              <SelectItem key={id} value={id}>
+                {OVERLAY_PRESETS[id].label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
       <div className={overlaysEnabled ? "" : "pointer-events-none opacity-50"}>
         {OVERLAY_CATEGORIES.map((category) => {
@@ -177,17 +140,13 @@ export default function OverlaySettings() {
   const previewPrefs = parseOverlayPrefs(
     defaultsValue || serializeOverlayPrefs(buildDefaultPrefs()),
   );
-  const watchedIndicatorStyle = parseWebWatchedIndicatorStyle(
-    form.getValue(WEB_WATCHED_INDICATOR_SETTING_KEY),
-  );
-
   return (
     <div className="flex h-full flex-col">
       <div className="mb-6 space-y-2">
         <h2 className="text-xl font-semibold tracking-tight">Card Overlays</h2>
         <p className="text-muted-foreground text-sm leading-relaxed">
-          Configure poster badge defaults and the watched indicator used by the web app. Users can
-          customize poster badges; the watched indicator style applies server-wide.
+          Configure poster badge defaults used by the web app. Users can customize poster badges for
+          their profile.
         </p>
       </div>
 
@@ -204,8 +163,7 @@ export default function OverlaySettings() {
 
         <FieldGroup label="Default Configuration">
           <p className="text-muted-foreground mb-4 text-xs">
-            Poster defaults apply to users who have not customized their overlay settings. Watched
-            indicator styling applies to every web user.
+            Poster defaults apply to users who have not customized their overlay settings.
           </p>
           <div className="flex flex-col gap-6 lg:flex-row">
             <div className="flex-1">
@@ -213,10 +171,6 @@ export default function OverlaySettings() {
                 value={defaultsValue || serializeOverlayPrefs(buildDefaultPrefs())}
                 onChange={(v) => form.setValue("defaults.card_overlays", v)}
                 overlaysEnabled={overlaysEnabled}
-                watchedIndicatorStyle={watchedIndicatorStyle}
-                onWatchedIndicatorChange={(value) =>
-                  form.setValue(WEB_WATCHED_INDICATOR_SETTING_KEY, value)
-                }
               />
             </div>
             <div className="flex items-start justify-center lg:w-[180px]">
@@ -225,7 +179,6 @@ export default function OverlaySettings() {
                 size="sm"
                 variant="movie"
                 showPosterOverlays={overlaysEnabled}
-                watchedIndicatorStyle={watchedIndicatorStyle}
               />
             </div>
           </div>
