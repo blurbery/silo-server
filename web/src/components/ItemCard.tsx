@@ -315,7 +315,7 @@ export default function ItemCard({
             </div>
           ) : null}
           {showMetadata ? (
-            <div className="text-muted-foreground mt-1 text-[11px] font-medium tracking-[0.14em] uppercase">
+            <div className="text-muted-foreground mt-1 truncate text-[11px] font-medium tracking-[0.14em] uppercase">
               <SortMeta item={item} sortField={sortField} />
             </div>
           ) : null}

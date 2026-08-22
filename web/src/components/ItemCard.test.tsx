@@ -1,10 +1,17 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router";
 import ItemCard from "@/components/ItemCard";
 
+const mocks = vi.hoisted(() => ({
+  mediaItemMenu: vi.fn(),
+}));
+
 vi.mock("@/components/MediaItemMenu", () => ({
-  default: () => null,
+  default: (props: unknown) => {
+    mocks.mediaItemMenu(props);
+    return null;
+  },
 }));
 
 vi.mock("@/lib/thumbhash", () => ({
@@ -35,6 +42,10 @@ const baseItem = {
   backdrop_thumbhash: "",
 };
 
+beforeEach(() => {
+  mocks.mediaItemMenu.mockReset();
+});
+
 describe("ItemCard SortMeta", () => {
   it("encodes item links while preserving library context", () => {
     const markup = renderCard({
@@ -48,6 +59,27 @@ describe("ItemCard SortMeta", () => {
     });
 
     expect(markup).toContain('href="/item/ebook%201%2Fisbn%3A978?libraryId=12"');
+  });
+
+  it("passes root watched state to the poster action menu", () => {
+    const userState = {
+      played: true,
+      is_favorite: true,
+      in_watchlist: false,
+    };
+
+    renderCard({
+      item: { ...baseItem, content_id: "movie-1", type: "movie", user_state: userState },
+    });
+
+    expect(mocks.mediaItemMenu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contentId: "movie-1",
+        mediaType: "movie",
+        userState,
+        variant: "poster",
+      }),
+    );
   });
 
   it("renders the series last air date when sorted by last_air_date", () => {

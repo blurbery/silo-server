@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   editItem: vi.fn(),
   matchItem: vi.fn(),
   toggleFavorite: vi.fn(),
+  toggleWatched: vi.fn(),
+  posterSize: "standard" as "compact" | "standard" | "large",
   authState: undefined as { user: { role: "admin" | "user" } } | undefined,
 }));
 
@@ -46,7 +48,14 @@ vi.mock("@/hooks/queries/watchlist", () => ({
 
 vi.mock("@/hooks/queries/items", () => ({
   useRefreshItemMetadata: () => ({ isPending: false, mutate: vi.fn() }),
-  useWatchedStateMutation: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useWatchedStateMutation: () => ({
+    isPending: false,
+    mutateAsync: (...args: unknown[]) => mocks.toggleWatched(...args),
+  }),
+}));
+
+vi.mock("@/hooks/useUICustomization", () => ({
+  useUICustomization: () => ({ cardPresentation: { poster_size: mocks.posterSize } }),
 }));
 
 vi.mock("@/hooks/queries/homeDismissals", () => ({
@@ -79,6 +88,9 @@ beforeEach(() => {
   mocks.matchItem.mockReset();
   mocks.toggleFavorite.mockReset();
   mocks.toggleFavorite.mockResolvedValue(undefined);
+  mocks.toggleWatched.mockReset();
+  mocks.toggleWatched.mockResolvedValue(undefined);
+  mocks.posterSize = "standard";
   mocks.authState = undefined;
 });
 
@@ -376,6 +388,8 @@ describe("MediaItemMenu trigger visibility", () => {
     expect(className).toContain("pointer-fine:focus-visible:opacity-100");
     expect(className).not.toContain("md:opacity-0");
     expect(className).not.toContain("group-focus-within");
+    expect(className).toContain("size-6");
+    expect(className).toContain("sm:size-8");
   });
 
   it("drops pointer focus when the trigger closes the menu so hover exit can hide it", async () => {
@@ -469,6 +483,198 @@ describe("MediaItemMenu trigger visibility", () => {
     expect(button.className).toContain("cursor-pointer");
     expect(button.className).not.toContain("cursor-wait");
     expect(button.parentElement?.className).toContain("left-2.5");
+  });
+
+  it("shows matching eye state in the hover control and three-dot menu", async () => {
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    const shortcut = screen.getByRole("button", { name: "Mark Watched" });
+    expect(shortcut).toHaveAttribute("aria-pressed", "false");
+    expect(shortcut.querySelector(".lucide-eye-off")).toBeTruthy();
+    expect(shortcut.className).not.toContain("cursor-wait");
+    expect(shortcut.parentElement?.className).toContain("z-20");
+
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    expect(
+      screen.getByRole("menuitem", { name: "Mark Watched" }).querySelector(".lucide-eye-off"),
+    ).toBeTruthy();
+  });
+
+  it("optimistically marks watched, syncs the menu, and reverses the state", async () => {
+    let resolveWatched!: () => void;
+    mocks.toggleWatched.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveWatched = resolve;
+      }),
+    );
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark Watched" }));
+
+    expect(mocks.toggleWatched).toHaveBeenCalledWith(true);
+    const watchedShortcut = await screen.findByRole("button", { name: "Mark Unwatched" });
+    expect(watchedShortcut).toHaveAttribute("aria-pressed", "true");
+    expect(watchedShortcut.className).toContain("text-emerald-400");
+    expect(watchedShortcut.querySelector(".lucide-eye")).toBeTruthy();
+    expect(screen.getByTestId("watched-burst")).toBeTruthy();
+
+    resolveWatched();
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    expect(
+      screen.getByRole("menuitem", { name: "Mark Unwatched" }).querySelector(".lucide-eye"),
+    ).toHaveClass("text-emerald-400");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Mark Unwatched" }));
+
+    expect(mocks.toggleWatched).toHaveBeenLastCalledWith(false);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Mark Watched" })).toHaveAttribute(
+        "aria-pressed",
+        "false",
+      );
+    });
+  });
+
+  it("rolls the watched eye back when the request fails", async () => {
+    mocks.toggleWatched.mockRejectedValueOnce(new Error("request failed"));
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark Watched" }));
+
+    await waitFor(() => {
+      const shortcut = screen.getByRole("button", { name: "Mark Watched" });
+      expect(shortcut).toHaveAttribute("aria-pressed", "false");
+      expect(shortcut.querySelector(".lucide-eye-off")).toBeTruthy();
+    });
+  });
+
+  it("uses the swipe-safe pointer path for the watched shortcut", async () => {
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    const shortcut = screen.getByRole("button", { name: "Mark Watched" });
+    fireEvent.pointerDown(shortcut, { pointerId: 12, button: 0, clientX: 20, clientY: 30 });
+    fireEvent.pointerMove(shortcut, { pointerId: 12, clientX: 44, clientY: 30 });
+    fireEvent.pointerUp(shortcut, { pointerId: 12, button: 0, clientX: 24, clientY: 30 });
+    expect(mocks.toggleWatched).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(shortcut, { pointerId: 13, button: 0, clientX: 20, clientY: 30 });
+    fireEvent.pointerUp(shortcut, { pointerId: 13, button: 0, clientX: 25, clientY: 35 });
+    expect(mocks.toggleWatched).toHaveBeenCalledWith(true);
+    await screen.findByRole("button", { name: "Mark Unwatched" });
+  });
+
+  it("shows the eye on opted-in wide cards and responsively compacts poster controls", () => {
+    const { rerender } = render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="wide"
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Mark Watched" })).toBeNull();
+
+    rerender(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="wide"
+          showWatchedShortcut
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("button", { name: "Mark Watched" }).className).toContain("size-9");
+
+    mocks.posterSize = "compact";
+    rerender(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    for (const button of screen.getAllByRole("button")) {
+      expect(button.className).toContain("size-6");
+      expect(button.className).toContain("sm:size-7");
+    }
+    const quickActionClasses =
+      screen.getByRole("button", { name: "Mark Watched" }).parentElement?.className.split(/\s+/) ??
+      [];
+    expect(quickActionClasses).toContain("left-1.5");
+    expect(quickActionClasses).toContain("sm:left-2");
+  });
+
+  it("limits automatic poster eyes to movies and series", () => {
+    const { rerender } = render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="episode-1"
+          mediaType="episode"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Mark Watched" })).toBeNull();
+
+    rerender(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="episode-1"
+          mediaType="episode"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+          showWatchedShortcut
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("button", { name: "Mark Watched" })).toBeTruthy();
   });
 
   it("uses matching action icons and sizes the menu to its longest entry", async () => {
@@ -693,5 +899,25 @@ describe("MediaItemMenu trigger visibility", () => {
     );
 
     expect(screen.queryByRole("button", { name: "Add to favorites" })).toBeNull();
+  });
+
+  it("can hide the poster heart without removing the favorite menu action", async () => {
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+          showFavoriteShortcut={false}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Add to favorites" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Mark Watched" })).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    expect(screen.getByRole("menuitem", { name: "Add to Favorites" })).toBeTruthy();
   });
 });

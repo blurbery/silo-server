@@ -218,6 +218,7 @@ export const settingsKeys = {
   // their own key (effectiveSettingsQueryKey), so one invalidation of that
   // prefix covers every scope and batch.
   all: ["settings"] as const,
+  overlayConfig: () => ["settings", "overlay-config"] as const,
   plugins: () => ["settings", "plugins"] as const,
   pluginDetail: (installationId: number) => ["settings", "plugins", installationId] as const,
 };

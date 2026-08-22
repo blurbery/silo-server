@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
+  Eye,
+  EyeOff,
   FileText,
   Heart,
   History,
@@ -51,6 +53,7 @@ import {
   isActingAdmin as isActingAdminForUser,
 } from "@/lib/permissions";
 import { mediaItemMenuTriggerClassName } from "@/components/mediaItemMenuTrigger";
+import { useUICustomization } from "@/hooks/useUICustomization";
 
 type MediaItemType = ItemDetail["type"];
 
@@ -92,8 +95,12 @@ interface MediaItemMenuProps {
   variant?: "poster" | "wide";
   /** When false, hides favorites and watchlist actions (e.g. for episodes). Defaults to true. */
   showCollectionActions?: boolean;
+  /** Hides only the poster heart shortcut while retaining collection actions in the menu. */
+  showFavoriteShortcut?: boolean;
   dismissAction?: DismissHomeItemVariables;
   hasPartialProgress?: boolean;
+  /** Enables the watched shortcut on wide cards such as Continue Watching. */
+  showWatchedShortcut?: boolean;
 }
 
 export function buildMediaItemMenuModel({
@@ -216,7 +223,11 @@ function MediaItemMenuActionIcon({
     case "playFromBeginning":
       return <RotateCcw aria-hidden="true" className="size-4" />;
     case "toggleWatched":
-      return <Check aria-hidden="true" className="size-4" />;
+      return userState?.played ? (
+        <Eye aria-hidden="true" className="size-4 text-emerald-400" />
+      ) : (
+        <EyeOff aria-hidden="true" className="size-4" />
+      );
     case "toggleFavorite":
       return (
         <Heart
@@ -247,14 +258,24 @@ function MediaItemMenuActionIcon({
   }
 }
 
-export function PosterCardFavoriteButton({
-  isFavorite,
+function CardQuickActionButton({
+  pressed,
   isPending,
-  onToggle,
+  label,
+  className,
+  burstClassName,
+  burstTestId,
+  onActivate,
+  children,
 }: {
-  isFavorite: boolean;
+  pressed: boolean;
   isPending: boolean;
-  onToggle: () => void;
+  label: string;
+  className?: string;
+  burstClassName: string;
+  burstTestId: string;
+  onActivate: () => void;
+  children: (isAnimating: boolean) => ReactNode;
 }) {
   const [isAnimating, setIsAnimating] = useState(false);
   const pointerStartRef = useRef<{
@@ -263,13 +284,12 @@ export function PosterCardFavoriteButton({
     clientY: number;
     maxMovement: number;
   } | null>(null);
-  const label = isFavorite ? "Remove from favorites" : "Add to favorites";
 
-  const activateFavorite = useCallback(() => {
+  const activate = useCallback(() => {
     if (isPending) return;
-    if (!isFavorite) setIsAnimating(true);
-    onToggle();
-  }, [isFavorite, isPending, onToggle]);
+    if (!pressed) setIsAnimating(true);
+    onActivate();
+  }, [isPending, onActivate, pressed]);
 
   useEffect(() => {
     if (!isAnimating) return;
@@ -278,96 +298,168 @@ export function PosterCardFavoriteButton({
   }, [isAnimating]);
 
   return (
-    <div
-      className="absolute bottom-2.5 left-2.5 z-20"
-      onClick={stopMenuEvent}
-      onPointerDown={stopMenuEvent}
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={pressed}
+      title={label}
+      disabled={isPending}
+      className={cn("relative cursor-pointer overflow-visible disabled:opacity-70", className)}
+      onPointerDown={(event) => {
+        if (event.button !== 0) {
+          pointerStartRef.current = null;
+          return;
+        }
+        pointerStartRef.current = {
+          pointerId: event.pointerId,
+          clientX: event.clientX,
+          clientY: event.clientY,
+          maxMovement: 0,
+        };
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+      }}
+      onPointerMove={(event) => {
+        const pointerStart = pointerStartRef.current;
+        if (!pointerStart || pointerStart.pointerId !== event.pointerId) return;
+
+        pointerStart.maxMovement = Math.max(
+          pointerStart.maxMovement,
+          Math.abs(event.clientX - pointerStart.clientX),
+          Math.abs(event.clientY - pointerStart.clientY),
+        );
+      }}
+      onPointerUp={(event) => {
+        const pointerStart = pointerStartRef.current;
+        pointerStartRef.current = null;
+        if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+        if (!pointerStart || pointerStart.pointerId !== event.pointerId) return;
+
+        const movement = Math.max(
+          pointerStart.maxMovement,
+          Math.abs(event.clientX - pointerStart.clientX),
+          Math.abs(event.clientY - pointerStart.clientY),
+        );
+        if (movement > 10) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        activate();
+      }}
+      onPointerCancel={(event) => {
+        pointerStartRef.current = null;
+        if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+      }}
+      onLostPointerCapture={() => {
+        pointerStartRef.current = null;
+      }}
+      onClick={(event) => {
+        stopMenuEvent(event);
+        // Embla consumes the click following a carousel drag. Pointer taps are
+        // handled on pointerup above; detail=0 preserves keyboard/AT activation.
+        if (event.detail === 0) activate();
+      }}
     >
-      <button
-        type="button"
-        aria-label={label}
-        aria-pressed={isFavorite}
-        title={label}
-        disabled={isPending}
-        className={cn(
-          mediaItemMenuTriggerClassName("poster"),
-          "relative cursor-pointer overflow-visible disabled:opacity-70",
-          isFavorite && "text-red-500 hover:text-red-400",
-        )}
-        onPointerDown={(event) => {
-          if (event.button !== 0) {
-            pointerStartRef.current = null;
-            return;
-          }
-          pointerStartRef.current = {
-            pointerId: event.pointerId,
-            clientX: event.clientX,
-            clientY: event.clientY,
-            maxMovement: 0,
-          };
-          event.currentTarget.setPointerCapture?.(event.pointerId);
-        }}
-        onPointerMove={(event) => {
-          const pointerStart = pointerStartRef.current;
-          if (!pointerStart || pointerStart.pointerId !== event.pointerId) return;
+      {isAnimating && (
+        <span
+          aria-hidden="true"
+          data-testid={burstTestId}
+          className={cn(
+            "absolute top-1/2 left-1/2 size-7 -translate-x-1/2 -translate-y-1/2 animate-ping rounded-full motion-reduce:hidden",
+            burstClassName,
+          )}
+        />
+      )}
+      {children(isAnimating)}
+    </button>
+  );
+}
 
-          pointerStart.maxMovement = Math.max(
-            pointerStart.maxMovement,
-            Math.abs(event.clientX - pointerStart.clientX),
-            Math.abs(event.clientY - pointerStart.clientY),
-          );
-        }}
-        onPointerUp={(event) => {
-          const pointerStart = pointerStartRef.current;
-          pointerStartRef.current = null;
-          if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-            event.currentTarget.releasePointerCapture(event.pointerId);
-          }
-          if (!pointerStart || pointerStart.pointerId !== event.pointerId) return;
+export function PosterCardFavoriteButton({
+  isFavorite,
+  isPending,
+  compact = false,
+  onToggle,
+}: {
+  isFavorite: boolean;
+  isPending: boolean;
+  compact?: boolean;
+  onToggle: () => void;
+}) {
+  const label = isFavorite ? "Remove from favorites" : "Add to favorites";
 
-          const movement = Math.max(
-            pointerStart.maxMovement,
-            Math.abs(event.clientX - pointerStart.clientX),
-            Math.abs(event.clientY - pointerStart.clientY),
-          );
-          if (movement > 10) return;
-
-          event.preventDefault();
-          event.stopPropagation();
-          activateFavorite();
-        }}
-        onPointerCancel={(event) => {
-          pointerStartRef.current = null;
-          if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-            event.currentTarget.releasePointerCapture(event.pointerId);
-          }
-        }}
-        onLostPointerCapture={() => {
-          pointerStartRef.current = null;
-        }}
-        onClick={(event) => {
-          stopMenuEvent(event);
-          // Embla consumes the click following a carousel drag. Pointer taps are
-          // handled on pointerup above; detail=0 preserves keyboard/AT activation.
-          if (event.detail === 0) activateFavorite();
-        }}
-      >
-        {isAnimating && (
-          <span
-            aria-hidden="true"
-            data-testid="favorite-burst"
-            className="absolute top-1/2 left-1/2 size-7 -translate-x-1/2 -translate-y-1/2 animate-ping rounded-full bg-red-500/30 motion-reduce:hidden"
-          />
-        )}
+  return (
+    <CardQuickActionButton
+      pressed={isFavorite}
+      isPending={isPending}
+      label={label}
+      className={cn(
+        mediaItemMenuTriggerClassName("poster", compact),
+        isFavorite && "text-red-500 hover:text-red-400",
+      )}
+      burstClassName="bg-red-500/30"
+      burstTestId="favorite-burst"
+      onActivate={onToggle}
+    >
+      {(isAnimating) => (
         <Heart
           className={cn(
-            "relative size-4 transition-[transform,color,fill] duration-300 ease-out motion-reduce:transition-none",
+            "relative transition-[transform,color,fill] duration-300 ease-out motion-reduce:transition-none",
+            compact ? "size-3 sm:size-3.5" : "size-3 sm:size-4",
             isFavorite && "scale-110 fill-red-500 text-red-500",
             isAnimating && "scale-125",
           )}
         />
-      </button>
-    </div>
+      )}
+    </CardQuickActionButton>
+  );
+}
+
+function WatchedQuickActionButton({
+  mediaType,
+  isWatched,
+  isPending,
+  variant,
+  compact,
+  onToggle,
+}: {
+  mediaType: MediaItemType;
+  isWatched: boolean;
+  isPending: boolean;
+  variant: "poster" | "wide";
+  compact: boolean;
+  onToggle: () => void;
+}) {
+  const label = getWatchedActionLabel({ type: mediaType, user_data: { played: isWatched } });
+  const Icon = isWatched ? Eye : EyeOff;
+
+  return (
+    <CardQuickActionButton
+      pressed={isWatched}
+      isPending={isPending}
+      label={label}
+      className={cn(
+        mediaItemMenuTriggerClassName(variant, compact),
+        isWatched && "text-emerald-400 hover:text-emerald-300",
+      )}
+      burstClassName="bg-emerald-400/30"
+      burstTestId="watched-burst"
+      onActivate={onToggle}
+    >
+      {(isAnimating) => (
+        <Icon
+          className={cn(
+            "relative transition-[transform,color] duration-300 ease-out motion-reduce:transition-none",
+            variant === "wide" ? "size-5" : compact ? "size-3 sm:size-3.5" : "size-3 sm:size-4",
+            isWatched && "scale-110",
+            isAnimating && "scale-125",
+          )}
+        />
+      )}
+    </CardQuickActionButton>
   );
 }
 
@@ -444,8 +536,10 @@ export default function MediaItemMenu({
   userState,
   variant = "poster",
   showCollectionActions = true,
+  showFavoriteShortcut = true,
   dismissAction,
   hasPartialProgress = false,
+  showWatchedShortcut = false,
 }: MediaItemMenuProps) {
   const navigate = useViewTransitionNavigate();
   const location = useLocation();
@@ -455,6 +549,7 @@ export default function MediaItemMenu({
   const profileIsResolved = !hasSelectedProfile || Boolean(currentProfile);
   const isAdmin = profileIsResolved && isActingAdminForUser(user, currentProfile);
   const canCurateMetadata = profileIsResolved && canCurateMetadataForUser(user, currentProfile);
+  const { cardPresentation } = useUICustomization();
   const [currentUserState, setCurrentUserState] = useState(userState);
   const [refreshDialogOpen, setRefreshDialogOpen] = useState(false);
   const [filesDialogOpen, setFilesDialogOpen] = useState(false);
@@ -502,7 +597,16 @@ export default function MediaItemMenu({
   });
   const showPosterFavorite =
     variant === "poster" &&
+    showFavoriteShortcut &&
     model.some((entry) => entry.kind === "action" && entry.key === "toggleFavorite");
+  const hasWatchedAction = model.some(
+    (entry) => entry.kind === "action" && entry.key === "toggleWatched",
+  );
+  const rootPosterSupportsWatchedShortcut =
+    variant === "poster" && (mediaType === "movie" || mediaType === "series");
+  const showWatchedQuickAction =
+    hasWatchedAction && (rootPosterSupportsWatchedShortcut || showWatchedShortcut);
+  const compact = variant === "poster" && cardPresentation.poster_size === "compact";
 
   const isPending =
     watchedMutation.isPending ||
@@ -511,7 +615,19 @@ export default function MediaItemMenu({
     refreshMetadataMutation.isPending ||
     dismissHomeItemMutation.isPending;
 
-  const triggerClassName = mediaItemMenuTriggerClassName(variant);
+  const triggerClassName = mediaItemMenuTriggerClassName(variant, compact);
+
+  async function handleWatchedToggle() {
+    if (!currentUserState || watchedMutation.isPending) return;
+    const wasPlayed = currentUserState.played;
+    const nextPlayed = !wasPlayed;
+    setCurrentUserState((previous) => (previous ? { ...previous, played: nextPlayed } : previous));
+    try {
+      await watchedMutation.mutateAsync(nextPlayed);
+    } catch {
+      setCurrentUserState((previous) => (previous ? { ...previous, played: wasPlayed } : previous));
+    }
+  }
 
   async function handleFavoriteToggle() {
     if (!currentUserState || favoriteMutation.isPending) return;
@@ -543,10 +659,7 @@ export default function MediaItemMenu({
         return;
       }
       case "toggleWatched": {
-        if (!currentUserState) return;
-        const nextPlayed = !currentUserState.played;
-        await watchedMutation.mutateAsync(nextPlayed);
-        setCurrentUserState((prev) => (prev ? { ...prev, played: nextPlayed } : prev));
+        await handleWatchedToggle();
         return;
       }
       case "toggleFavorite": {
@@ -596,26 +709,62 @@ export default function MediaItemMenu({
 
   return (
     <>
-      {showPosterFavorite && currentUserState && (
-        <PosterCardFavoriteButton
-          isFavorite={currentUserState.is_favorite}
-          isPending={favoriteMutation.isPending}
-          onToggle={() => {
-            void handleFavoriteToggle();
-          }}
-        />
+      {(showWatchedQuickAction || showPosterFavorite) && currentUserState && (
+        <div
+          className={cn(
+            "absolute z-20 flex items-center",
+            variant === "wide"
+              ? "bottom-3 left-3 gap-1.5"
+              : compact
+                ? "bottom-1.5 left-1.5 gap-0.5 sm:bottom-2 sm:left-2 sm:gap-1"
+                : "bottom-1.5 left-1.5 gap-0.5 sm:bottom-2.5 sm:left-2.5 sm:gap-1.5",
+          )}
+          onClick={stopMenuEvent}
+          onPointerDown={stopMenuEvent}
+        >
+          {showWatchedQuickAction && (
+            <WatchedQuickActionButton
+              mediaType={mediaType}
+              isWatched={currentUserState.played}
+              isPending={watchedMutation.isPending}
+              variant={variant}
+              compact={compact}
+              onToggle={() => {
+                void handleWatchedToggle();
+              }}
+            />
+          )}
+          {showPosterFavorite && (
+            <PosterCardFavoriteButton
+              isFavorite={currentUserState.is_favorite}
+              isPending={favoriteMutation.isPending}
+              compact={compact}
+              onToggle={() => {
+                void handleFavoriteToggle();
+              }}
+            />
+          )}
+        </div>
       )}
       <div
         className={cn(
           "absolute z-20",
-          variant === "wide" ? "right-3 bottom-3" : "right-2.5 bottom-2.5",
+          variant === "wide"
+            ? "right-3 bottom-3"
+            : compact
+              ? "right-1.5 bottom-1.5 sm:right-2 sm:bottom-2"
+              : "right-1.5 bottom-1.5 sm:right-2.5 sm:bottom-2.5",
         )}
         onClick={stopMenuEvent}
         onPointerDown={stopMenuEvent}
       >
         {model.length === 0 ? (
           <button type="button" aria-label="More actions" disabled className={triggerClassName}>
-            <MoreVertical className={variant === "wide" ? "size-5" : "size-4"} />
+            <MoreVertical
+              className={
+                variant === "wide" ? "size-5" : compact ? "size-3 sm:size-3.5" : "size-3 sm:size-4"
+              }
+            />
           </button>
         ) : (
           <DropdownMenu
@@ -644,7 +793,15 @@ export default function MediaItemMenu({
                   lastMenuInteractionRef.current = "keyboard";
                 }}
               >
-                <MoreVertical className={variant === "wide" ? "size-5" : "size-4"} />
+                <MoreVertical
+                  className={
+                    variant === "wide"
+                      ? "size-5"
+                      : compact
+                        ? "size-3 sm:size-3.5"
+                        : "size-3 sm:size-4"
+                  }
+                />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent

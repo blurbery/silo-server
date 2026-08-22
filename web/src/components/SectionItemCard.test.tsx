@@ -109,5 +109,6 @@ describe("SectionItemCard", () => {
     expect(markup).toContain("Season 2 · Back Again");
     expect(markup).toContain("Wed, Apr 8");
     expect(markup).toContain("8:00 PM");
+    expect(markup).not.toContain(">Watched</span>");
   });
 });

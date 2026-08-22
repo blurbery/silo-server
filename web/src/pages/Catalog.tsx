@@ -403,7 +403,6 @@ function CatalogResults({
           pageSize={limit}
           loading={catalogQuery.isLoading}
           onVisibleRangeChange={handleVisibleRangeChange}
-          watchedIndicatorIconOnly={state.source === "favorites" || state.source === "watchlist"}
           selectionMode={isHistorySource && selectionMode}
           selectedIds={selectedIds}
           onToggleSelect={toggleHistorySelection}

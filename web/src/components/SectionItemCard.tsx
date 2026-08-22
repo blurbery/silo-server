@@ -113,9 +113,11 @@ export default function SectionItemCard({ item, libraryId }: SectionItemCardProp
                   {subtitle}
                 </div>
               )}
-              <div className="mt-1.5 flex items-center gap-1.5 text-[11px] font-medium">
-                <span className="text-foreground">{airDateLabel}</span>
-                {airTimeLabel && <span className="text-muted-foreground">{airTimeLabel}</span>}
+              <div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[11px] font-medium">
+                <span className="text-foreground shrink-0">{airDateLabel}</span>
+                {airTimeLabel && (
+                  <span className="text-muted-foreground min-w-0 truncate">{airTimeLabel}</span>
+                )}
               </div>
             </>
           ) : showMetadata && episodeLabels ? (
@@ -136,7 +138,7 @@ export default function SectionItemCard({ item, libraryId }: SectionItemCardProp
                 .join(" · ")}
             </div>
           ) : showMetadata ? (
-            <div className="text-muted-foreground mt-1 text-[11px] font-medium tracking-[0.14em] uppercase">
+            <div className="text-muted-foreground mt-1 truncate text-[11px] font-medium tracking-[0.14em] uppercase">
               {item.year ? `${item.year}` : ""} {item.type === "series" ? "Series" : ""}
             </div>
           ) : null}

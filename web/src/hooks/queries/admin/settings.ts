@@ -10,7 +10,7 @@ import type {
   JellyfinCompatStatus,
   JellyfinCompatWebInstallRequest,
 } from "@/api/types";
-import { adminKeys, compatKeys, themeKeys } from "../keys";
+import { adminKeys, compatKeys, settingsKeys, themeKeys } from "../keys";
 import { toast } from "sonner";
 
 type ServerSettings = Record<string, string>;
@@ -18,6 +18,10 @@ type ServerSettings = Record<string, string>;
 interface SensitiveStatusResponse {
   configured: string[];
   managed_by_env?: string[];
+}
+
+function affectsOverlayConfig(key: string) {
+  return key === "overlays.enabled" || key === "defaults.card_overlays";
 }
 
 export interface CatalogSearchStatus {
@@ -128,6 +132,11 @@ export function useUpdateServerSettings() {
           queryClient.invalidateQueries({ queryKey: themeKeys.branding() }),
         );
       }
+      if (keys.some(affectsOverlayConfig)) {
+        invalidations.push(
+          queryClient.invalidateQueries({ queryKey: settingsKeys.overlayConfig() }),
+        );
+      }
       await Promise.all(invalidations);
     },
     onError: (err) => {
@@ -170,6 +179,11 @@ export function useUpdateServerSetting() {
         invalidations.push(
           queryClient.invalidateQueries({ queryKey: themeKeys.adminCss() }),
           queryClient.invalidateQueries({ queryKey: themeKeys.branding() }),
+        );
+      }
+      if (affectsOverlayConfig(variables.key)) {
+        invalidations.push(
+          queryClient.invalidateQueries({ queryKey: settingsKeys.overlayConfig() }),
         );
       }
       await Promise.all(invalidations);
