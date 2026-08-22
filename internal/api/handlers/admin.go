@@ -424,7 +424,7 @@ func cloneIntSlice(values []int) []int {
 }
 
 // roleAdmin is the server-wide admin account role.
-const roleAdmin = "admin"
+const roleAdmin = models.RoleAdmin
 
 // validateStreamLimits rejects negative concurrency caps. nil means "inherit
 // from the access group" and 0 means an explicit "unlimited" override, so only
@@ -485,6 +485,21 @@ func (h *AdminHandler) rejectScopedAPIKeyUpdate(
 		return nil, false
 	}
 
+	target, blocked := h.loadTargetUser(w, r, id)
+	if blocked {
+		return nil, true
+	}
+	if target.Role == roleAdmin {
+		writeError(w, http.StatusForbidden, "insufficient_scope",
+			"A scoped API key may not change the password or role of an admin account")
+		return nil, true
+	}
+	return target, false
+}
+
+// loadTargetUser reads the account an admin write targets, writing 404/500 on
+// failure. It reports whether it wrote a response.
+func (h *AdminHandler) loadTargetUser(w http.ResponseWriter, r *http.Request, id int) (*models.User, bool) {
 	target, err := h.userRepo.GetByID(r.Context(), id)
 	if err != nil {
 		if auth.IsNotFound(err) {
@@ -494,12 +509,44 @@ func (h *AdminHandler) rejectScopedAPIKeyUpdate(
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch user")
 		return nil, true
 	}
-	if target.Role == roleAdmin {
-		writeError(w, http.StatusForbidden, "insufficient_scope",
-			"A scoped API key may not change the password or role of an admin account")
-		return nil, true
-	}
 	return target, false
+}
+
+// rejectGroupedAdmin refuses an update that would leave an admin account in
+// an access group: a group named in the request together with the admin role,
+// or for an account that already holds it. Writes that only change the role
+// are not its concern — the repository clears the group on promote and falls
+// back to the default group on demote. It loads the target when the role is
+// not in the request and returns it for reuse as the pre-update snapshot.
+func (h *AdminHandler) rejectGroupedAdmin(
+	w http.ResponseWriter,
+	r *http.Request,
+	id int,
+	req *updateUserRequest,
+	current *models.User,
+) (*models.User, bool) {
+	if !req.AccessGroupID.Set || req.AccessGroupID.Value == nil {
+		return current, false
+	}
+	var role string
+	switch {
+	case req.Role != nil:
+		role = *req.Role
+	case current != nil:
+		role = current.Role
+	default:
+		var blocked bool
+		if current, blocked = h.loadTargetUser(w, r, id); blocked {
+			return nil, true
+		}
+		role = current.Role
+	}
+	if role == roleAdmin {
+		writeError(w, http.StatusUnprocessableEntity, "unprocessable_entity",
+			"Admin accounts cannot belong to an access group")
+		return current, true
+	}
+	return current, false
 }
 
 // clonePtr copies a policy override pointer so a response never aliases the
@@ -544,7 +591,7 @@ func (h *AdminHandler) groupPolicies(ctx context.Context) (map[int64]access.Grou
 // ungrouped (or the group row is gone — the FK clears membership on delete,
 // so a residual not-found is treated as ungrouped, not an error).
 func (h *AdminHandler) groupPolicyFor(ctx context.Context, u *models.User) (*access.GroupPolicy, error) {
-	if u == nil || u.AccessGroupID == nil || h == nil || h.AccessGroups == nil {
+	if !access.GroupApplies(u) || h == nil || h.AccessGroups == nil {
 		return nil, nil
 	}
 	group, err := h.AccessGroups.Get(ctx, *u.AccessGroupID)
@@ -559,7 +606,7 @@ func (h *AdminHandler) groupPolicyFor(ctx context.Context, u *models.User) (*acc
 }
 
 func lookupGroupPolicy(policies map[int64]access.GroupPolicy, u *models.User) *access.GroupPolicy {
-	if u == nil || u.AccessGroupID == nil {
+	if !access.GroupApplies(u) {
 		return nil
 	}
 	policy, ok := policies[*u.AccessGroupID]
@@ -690,6 +737,11 @@ func (h *AdminHandler) HandleCreateUser(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "bad_request", "Username, email, password, and role are required")
 		return
 	}
+	if req.Role == roleAdmin && req.AccessGroupID != nil {
+		writeError(w, http.StatusUnprocessableEntity, "unprocessable_entity",
+			"Admin accounts cannot belong to an access group")
+		return
+	}
 
 	var maxPlaybackQuality *string
 	if req.MaxPlaybackQuality != nil {
@@ -816,6 +868,10 @@ func (h *AdminHandler) HandleUpdateUser(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusUnprocessableEntity, "unprocessable_entity", "Invalid access_group_id")
 			return
 		}
+		currentUser, blocked = h.rejectGroupedAdmin(w, r, id, &req, currentUser)
+		if blocked {
+			return
+		}
 		if req.AccessGroupID.Value != nil {
 			if h.AccessGroups == nil {
 				writeError(w, http.StatusInternalServerError, "internal_error", "Access groups are not configured")
@@ -862,13 +918,7 @@ func (h *AdminHandler) HandleUpdateUser(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if currentUser == nil && updateMayRequireSessionRevocation(updateInput) {
-		currentUser, err = h.userRepo.GetByID(r.Context(), id)
-		if err != nil {
-			if auth.IsNotFound(err) {
-				writeError(w, http.StatusNotFound, "not_found", "User not found")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch user")
+		if currentUser, blocked = h.loadTargetUser(w, r, id); blocked {
 			return
 		}
 	}

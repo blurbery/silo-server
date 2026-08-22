@@ -295,7 +295,7 @@ function CreateInvitationForm({
       {
         email,
         role,
-        access_group_id: accessGroupID,
+        access_group_id: role === "admin" ? null : accessGroupID,
         library_ids: libraryIDs,
         create_profile: createProfile,
         show_tour: showTour,
@@ -356,8 +356,9 @@ function CreateInvitationForm({
         <div className="space-y-2">
           <Label>Access group</Label>
           <Select
-            value={accessGroupID === null ? "default" : String(accessGroupID)}
+            value={role === "admin" || accessGroupID === null ? "default" : String(accessGroupID)}
             onValueChange={(v) => setAccessGroupID(v === "default" ? null : Number(v))}
+            disabled={role === "admin"}
           >
             <SelectTrigger>
               <SelectValue />

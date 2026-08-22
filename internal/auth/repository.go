@@ -184,9 +184,13 @@ func (r *UserRepository) Create(ctx context.Context, input models.CreateUserInpu
 		cols = append(cols, "max_profiles")
 		args = append(args, *input.MaxProfiles)
 	}
-	if input.AccessGroupID != nil {
+	accessGroupID := input.AccessGroupID
+	if input.Role == models.RoleAdmin {
+		accessGroupID = nil
+	}
+	if accessGroupID != nil {
 		cols = append(cols, "access_group_id")
-		args = append(args, *input.AccessGroupID)
+		args = append(args, *accessGroupID)
 	}
 
 	// Build placeholders: $1, $2, ..., $N
@@ -197,7 +201,7 @@ func (r *UserRepository) Create(ctx context.Context, input models.CreateUserInpu
 	// Admins stay ungrouped: scope/action decisions are role-blind, so the
 	// default group's ceilings would cap the server owner (mirrors the
 	// exclusion in the assign_default_group_to_existing_users migration).
-	if input.AccessGroupID == nil && input.Role != "admin" {
+	if accessGroupID == nil && input.Role != models.RoleAdmin {
 		cols = append(cols, "access_group_id")
 		placeholders = append(placeholders, "(SELECT id FROM access_groups WHERE is_default)")
 	}
@@ -245,10 +249,45 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.
 // access_policy_revision. Values are pre-computed, so every entry is safe to
 // build even when set is false.
 type userUpdateColumn struct {
-	column            string
-	set               bool
-	value             any
+	column string
+	set    bool
+	value  any
+	// expr, when non-empty, is a SQL expression written in place of a bare
+	// bound value; it may reference the row's current columns. A "$?" inside
+	// it is replaced with the placeholder for value; without one, value is
+	// not bound.
+	expr              string
 	bumpsAccessPolicy bool
+}
+
+// accessGroupUpdateColumn decides what the write does to access_group_id.
+// Admin accounts are never grouped (see Create): granting the role clears the
+// group no matter what the caller passed, and taking the role away without
+// naming a group lands the account on the default group, as create does. A
+// group written on its own is checked against the row's role inside the same
+// statement, so a concurrent promotion cannot leave an admin grouped.
+func accessGroupUpdateColumn(input models.UpdateUserInput) userUpdateColumn {
+	const isAdmin = "role = '" + models.RoleAdmin + "'"
+	col := userUpdateColumn{column: "access_group_id", bumpsAccessPolicy: true}
+	switch {
+	case input.Role != nil && *input.Role == models.RoleAdmin:
+		col.set = true
+		col.value = (*int64)(nil)
+	case input.Role != nil && !input.AccessGroupID.Set:
+		col.set = true
+		col.expr = "CASE WHEN " + isAdmin +
+			" THEN (SELECT id FROM access_groups WHERE is_default) ELSE access_group_id END"
+	case input.Role == nil && input.AccessGroupID.Set && input.AccessGroupID.Value != nil:
+		col.set = true
+		col.value = input.AccessGroupID.Value
+		// The cast pins the parameter type; inside a CASE the driver would
+		// otherwise send it as text.
+		col.expr = "CASE WHEN " + isAdmin + " THEN NULL ELSE $?::bigint END"
+	default:
+		col.set = input.AccessGroupID.Set
+		col.value = input.AccessGroupID.Value
+	}
+	return col
 }
 
 // Update modifies a user's fields. Only non-nil fields in the input are updated.
@@ -308,7 +347,7 @@ func (r *UserRepository) Update(ctx context.Context, id int, input models.Update
 		{column: "download_allowed", set: input.DownloadAllowed.Set, value: input.DownloadAllowed.Value},
 		{column: "download_transcode_allowed", set: input.DownloadTranscodeAllowed.Set, value: input.DownloadTranscodeAllowed.Value},
 		{column: "requests_allowed", set: input.RequestsAllowed.Set, value: input.RequestsAllowed.Value},
-		{column: "access_group_id", set: input.AccessGroupID.Set, value: input.AccessGroupID.Value, bumpsAccessPolicy: true},
+		accessGroupUpdateColumn(input),
 	}
 
 	setClauses := []string{}
@@ -319,12 +358,22 @@ func (r *UserRepository) Update(ctx context.Context, id int, input models.Update
 		if !col.set {
 			continue
 		}
-		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", col.column, argIndex))
+		placeholder := fmt.Sprintf("$%d", argIndex)
+		rhs := placeholder
+		binds := true
+		if col.expr != "" {
+			binds = strings.Contains(col.expr, "$?")
+			rhs = "(" + strings.ReplaceAll(col.expr, "$?", placeholder) + ")"
+		}
+		setClauses = append(setClauses, fmt.Sprintf("%s = %s", col.column, rhs))
 		if col.bumpsAccessPolicy {
 			accessPolicyPredicates = append(
 				accessPolicyPredicates,
-				fmt.Sprintf("%s IS DISTINCT FROM $%d", col.column, argIndex),
+				fmt.Sprintf("%s IS DISTINCT FROM %s", col.column, rhs),
 			)
+		}
+		if !binds {
+			continue
 		}
 		args = append(args, col.value)
 		argIndex++

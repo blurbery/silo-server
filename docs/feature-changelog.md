@@ -1,5 +1,10 @@
 # Feature Changelog
 
+## 2026-08-21
+
+### Admin accounts are never capped by an access group
+An account promoted to admin kept its access group, so the Default Group's stream cap and library list still applied to it. Admins are now ungrouped everywhere: promoting clears the group, demoting lands the account on the default group unless the request names one, and `POST /admin/users`, `PUT /admin/users/{id}`, and `POST /admin/invitations` reject `role: "admin"` together with an `access_group_id` with `422`. Policy resolution ignores any group an admin row still carries, and a migration clears the admins that were grouped before this change.
+
 ## 2026-08-20
 
 ### Make featured heroes read like editorial summaries
