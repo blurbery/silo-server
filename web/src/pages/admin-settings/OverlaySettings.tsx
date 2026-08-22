@@ -99,7 +99,7 @@ function DefaultsEditor({ value, onChange, overlaysEnabled }: DefaultsEditorProp
                       <div className="flex items-center gap-2">
                         <Select
                           value={config.position}
-                          disabled={!config.enabled}
+                          disabled={!overlaysEnabled || !config.enabled}
                           onValueChange={(pos) =>
                             updateItem(def.id, { position: pos as OverlayPosition })
                           }
@@ -117,6 +117,7 @@ function DefaultsEditor({ value, onChange, overlaysEnabled }: DefaultsEditorProp
                         </Select>
                         <Switch
                           checked={config.enabled}
+                          disabled={!overlaysEnabled}
                           onCheckedChange={(checked) => updateItem(def.id, { enabled: checked })}
                         />
                       </div>

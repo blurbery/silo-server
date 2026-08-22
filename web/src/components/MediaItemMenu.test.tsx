@@ -709,6 +709,7 @@ describe("MediaItemMenu trigger visibility", () => {
 
     const menu = screen.getByRole("menu");
     expect(menu.className).toContain("w-max");
+    expect(menu.className).toContain("max-w-[calc(100vw-2rem)]");
     expect(menu.className).toContain("min-w-0");
     expect(menu.className).not.toContain("w-56");
     for (const item of screen.getAllByRole("menuitem")) {
@@ -777,6 +778,37 @@ describe("MediaItemMenu trigger visibility", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Remove from favorites" })).toBeTruthy();
     });
+  });
+
+  it("does not toggle when a captured pointer is released outside the button", () => {
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    const button = screen.getByRole("button", { name: "Add to favorites" });
+    vi.spyOn(button, "getBoundingClientRect").mockReturnValue({
+      bottom: 250,
+      height: 20,
+      left: 110,
+      right: 124,
+      top: 230,
+      width: 14,
+      x: 110,
+      y: 230,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.pointerDown(button, { pointerId: 8, button: 0, clientX: 120, clientY: 240 });
+    fireEvent.pointerUp(button, { pointerId: 8, button: 0, clientX: 128, clientY: 240 });
+
+    expect(mocks.toggleFavorite).not.toHaveBeenCalled();
   });
 
   it("does not favorite when a swipe returns near its starting point", () => {
