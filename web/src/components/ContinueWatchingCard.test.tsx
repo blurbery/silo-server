@@ -73,6 +73,11 @@ describe("ContinueWatchingCard", () => {
               backdrop_url: "/movie-backdrop.jpg",
               backdrop_thumbhash: "",
               logo_url: "",
+              user_state: {
+                played: true,
+                is_favorite: false,
+                in_watchlist: false,
+              },
             }}
           />
         </MemoryRouter>
@@ -81,6 +86,9 @@ describe("ContinueWatchingCard", () => {
 
     expect(markup).toContain('src="/movie-backdrop.jpg"');
     expect(markup).not.toContain('src="/movie-poster.jpg"');
+    expect(markup).toContain('aria-label="Mark Unwatched"');
+    expect(markup).toContain("lucide-eye");
+    expect(markup).toContain("text-emerald-400");
   });
 
   it("falls back to the poster when a movie has no backdrop", () => {
@@ -114,6 +122,47 @@ describe("ContinueWatchingCard", () => {
     );
 
     expect(markup).toContain('src="/movie-poster.jpg"');
+  });
+
+  it("shows only the watched eye shortcut on poster-shaped continue cards", () => {
+    const queryClient = new QueryClient();
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <ContinueWatchingCard
+            variant="poster"
+            sectionItem={{
+              content_id: "movie-poster-1",
+              type: "movie",
+              title: "Poster Movie",
+              year: 2025,
+              genres: [],
+              status: "matched",
+              rating_imdb: 7.2,
+              overview: "",
+              item_source: "continue_watching",
+              position_seconds: 300,
+              duration_seconds: 6000,
+              progress_updated_at: "2026-03-07T00:00:00Z",
+              poster_url: "/poster-movie.jpg",
+              poster_thumbhash: "",
+              backdrop_url: "/poster-movie-backdrop.jpg",
+              backdrop_thumbhash: "",
+              logo_url: "",
+              user_state: {
+                played: false,
+                is_favorite: false,
+                in_watchlist: false,
+              },
+            }}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain('aria-label="Mark Watched"');
+    expect(markup).toContain("lucide-eye-off");
+    expect(markup).not.toContain('aria-label="Add to favorites"');
   });
 
   it("links ebook continue rows to the reader and shows percent read", () => {
@@ -199,6 +248,11 @@ describe("ContinueWatchingCard", () => {
               series_title: "Breaking Bad",
               season_number: 1,
               episode_number: 1,
+              user_state: {
+                played: false,
+                is_favorite: false,
+                in_watchlist: false,
+              },
             }}
             progress={{
               media_item_id: "ep-001",
@@ -221,6 +275,8 @@ describe("ContinueWatchingCard", () => {
     expect(markup).toContain("Pilot");
     expect(markup).toContain("58 min left");
     expect(markup).toContain("More actions");
+    expect(markup).toContain('aria-label="Mark Watched"');
+    expect(markup).toContain("lucide-eye-off");
   });
 
   it("links the poster to the item page and reserves playback for the play button", () => {

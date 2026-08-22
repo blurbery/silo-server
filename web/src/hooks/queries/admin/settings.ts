@@ -12,7 +12,6 @@ import type {
 } from "@/api/types";
 import { adminKeys, compatKeys, settingsKeys, themeKeys } from "../keys";
 import { toast } from "sonner";
-import { WEB_WATCHED_INDICATOR_SETTING_KEY } from "@/lib/watchedIndicator";
 
 type ServerSettings = Record<string, string>;
 
@@ -22,11 +21,7 @@ interface SensitiveStatusResponse {
 }
 
 function affectsOverlayConfig(key: string) {
-  return (
-    key === "overlays.enabled" ||
-    key === "defaults.card_overlays" ||
-    key === WEB_WATCHED_INDICATOR_SETTING_KEY
-  );
+  return key === "overlays.enabled" || key === "defaults.card_overlays";
 }
 
 export interface CatalogSearchStatus {

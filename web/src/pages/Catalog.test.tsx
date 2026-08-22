@@ -116,7 +116,6 @@ vi.mock("@/components/ItemGrid", () => ({
     totalItems?: number;
     pageSize?: number;
     loading?: boolean;
-    watchedIndicatorIconOnly?: boolean;
     onVisibleRangeChange?: (start: number, end: number) => void;
   }) => {
     mockItemGrid(props);
@@ -246,31 +245,9 @@ describe("Catalog page", () => {
         totalItems: 1,
         pageSize: 60,
         onVisibleRangeChange: expect.any(Function),
-        watchedIndicatorIconOnly: false,
       }),
     );
   });
-
-  it.each(["favorites", "watchlist"])(
-    "uses icon-only watched indicators for the %s catalog",
-    (source) => {
-      appInitialEntries = [`/catalog?source=${source}`];
-      mockUseCatalogWindow.mockReturnValue({
-        data: { title: source, totalItems: 1, pages: new Map() },
-        isLoading: false,
-      });
-
-      renderToStaticMarkup(
-        <QueryClientProvider client={new QueryClient()}>
-          <App />
-        </QueryClientProvider>,
-      );
-
-      expect(mockItemGrid).toHaveBeenCalledWith(
-        expect.objectContaining({ watchedIndicatorIconOnly: true }),
-      );
-    },
-  );
 
   it("renders the search-first landing for empty query catalog routes", () => {
     appInitialEntries = ["/catalog?source=query"];

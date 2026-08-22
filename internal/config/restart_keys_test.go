@@ -49,7 +49,6 @@ func TestRestartRequired(t *testing.T) {
 		{"policy.editor_enabled", false},
 		{"allow_4k_transcode", false},
 		{"defaults.card_overlays", false},
-		{WebWatchedIndicatorSettingKey, false},
 		// Unknown keys default to live.
 		{"some.future_setting", false},
 	}

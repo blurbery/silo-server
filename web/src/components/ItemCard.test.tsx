@@ -1,10 +1,17 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router";
 import ItemCard from "@/components/ItemCard";
 
+const mocks = vi.hoisted(() => ({
+  mediaItemMenu: vi.fn(),
+}));
+
 vi.mock("@/components/MediaItemMenu", () => ({
-  default: () => null,
+  default: (props: unknown) => {
+    mocks.mediaItemMenu(props);
+    return null;
+  },
 }));
 
 vi.mock("@/lib/thumbhash", () => ({
@@ -35,6 +42,10 @@ const baseItem = {
   backdrop_thumbhash: "",
 };
 
+beforeEach(() => {
+  mocks.mediaItemMenu.mockReset();
+});
+
 describe("ItemCard SortMeta", () => {
   it("encodes item links while preserving library context", () => {
     const markup = renderCard({
@@ -50,6 +61,27 @@ describe("ItemCard SortMeta", () => {
     expect(markup).toContain('href="/item/ebook%201%2Fisbn%3A978?libraryId=12"');
   });
 
+  it("passes root watched state to the poster action menu", () => {
+    const userState = {
+      played: true,
+      is_favorite: true,
+      in_watchlist: false,
+    };
+
+    renderCard({
+      item: { ...baseItem, content_id: "movie-1", type: "movie", user_state: userState },
+    });
+
+    expect(mocks.mediaItemMenu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contentId: "movie-1",
+        mediaType: "movie",
+        userState,
+        variant: "poster",
+      }),
+    );
+  });
+
   it("renders the series last air date when sorted by last_air_date", () => {
     const markup = renderCard({
       sortField: "last_air_date",
@@ -61,74 +93,6 @@ describe("ItemCard SortMeta", () => {
 
     expect(markup).toContain("Mar");
     expect(markup).toContain("2026");
-  });
-
-  it("shows a right-aligned watched badge for completed movies and series", () => {
-    for (const type of ["movie", "series"] as const) {
-      const markup = renderCard({
-        item: {
-          ...baseItem,
-          type,
-          user_state: {
-            played: true,
-            is_favorite: false,
-            in_watchlist: false,
-          },
-        },
-      });
-
-      expect(markup).toContain(">Watched</span>");
-      expect(markup).toContain("ml-auto");
-      expect(markup).toContain("2023");
-    }
-  });
-
-  it("uses the icon-only watched indicator on constrained catalog cards", () => {
-    const markup = renderCard({
-      watchedIndicatorStyle: "pill",
-      watchedIndicatorIconOnly: true,
-      item: {
-        ...baseItem,
-        user_state: {
-          played: true,
-          is_favorite: true,
-          in_watchlist: false,
-        },
-      },
-    });
-
-    expect(markup).toContain('data-watched-indicator="icon-only"');
-    expect(markup).toContain("lucide-circle-check");
-    expect(markup).not.toContain(">Watched<");
-    expect(markup).toContain("2023");
-  });
-
-  it("does not show the card watched badge for unplayed or non-root media", () => {
-    const unplayedMovie = renderCard({
-      item: {
-        ...baseItem,
-        type: "movie",
-        user_state: {
-          played: false,
-          is_favorite: false,
-          in_watchlist: false,
-        },
-      },
-    });
-    const playedEpisode = renderCard({
-      item: {
-        ...baseItem,
-        type: "episode",
-        user_state: {
-          played: true,
-          is_favorite: false,
-          in_watchlist: false,
-        },
-      },
-    });
-
-    expect(unplayedMovie).not.toContain(">Watched</span>");
-    expect(playedEpisode).not.toContain(">Watched</span>");
   });
 
   it("falls back to default label when last_air_date is null", () => {

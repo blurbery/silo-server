@@ -12,7 +12,6 @@ interface SharedItemGridProps {
   loading?: boolean;
   sortField?: string;
   libraryId?: number;
-  watchedIndicatorIconOnly?: boolean;
   selectionMode?: boolean;
   selectedIds?: ReadonlySet<string>;
   onToggleSelect?: (item: BrowseItem) => void;
@@ -45,12 +44,11 @@ export default function ItemGrid(props: ItemGridProps) {
     loading,
     sortField,
     libraryId,
-    watchedIndicatorIconOnly = false,
     selectionMode = false,
     selectedIds,
     onToggleSelect,
   } = props;
-  const { prefs: overlayPrefs, watchedIndicatorStyle } = useOverlayPrefs();
+  const { prefs: overlayPrefs } = useOverlayPrefs();
   const { cardPresentation } = useUICustomization();
   const gridGap = cardPresentation.poster_size === "large" ? 16 : 12;
   const gridClasses = cardGridClasses(cardPresentation.poster_size);
@@ -167,8 +165,6 @@ export default function ItemGrid(props: ItemGridProps) {
                         libraryId={libraryId}
                         sortField={sortField}
                         overlayPrefs={overlayPrefs}
-                        watchedIndicatorStyle={watchedIndicatorStyle}
-                        watchedIndicatorIconOnly={watchedIndicatorIconOnly}
                         selectionMode={selectionMode}
                         selected={selectedIds?.has(item.content_id) ?? false}
                         onToggleSelect={onToggleSelect}

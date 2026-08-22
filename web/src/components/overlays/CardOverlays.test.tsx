@@ -113,11 +113,12 @@ describe("CardOverlays", () => {
     expect(container.querySelectorAll("span.inline-flex").length).toBe(3);
   });
 
-  it("lifts poster badges above the favorite and menu controls", () => {
+  it("keeps bottom badges below the action layer while lifting them clear of controls", () => {
     const prefs = prefsWithOnly("content_rating");
     prefs.items.content_rating = { ...prefs.items.content_rating, position: "bottom-left" };
     const left = render(<CardOverlays data={SAMPLE_MOVIE_DATA} prefs={prefs} />).container;
     expect(left.querySelector("div.bottom-2 > div.items-start.mb-10")).toBeTruthy();
+    expect(left.querySelector("div.bottom-2")?.className).toContain("z-10");
 
     prefs.items.content_rating = { ...prefs.items.content_rating, position: "bottom-right" };
     const poster = render(<CardOverlays data={SAMPLE_MOVIE_DATA} prefs={prefs} />).container;
