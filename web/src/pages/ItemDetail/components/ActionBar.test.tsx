@@ -47,17 +47,23 @@ function renderActionBar(overrides: Partial<ActionBarProps> = {}) {
 }
 
 describe("ActionBar", () => {
-  it.each(playBranches)("keeps the %s Play action responsive", (_, overrides) => {
-    renderActionBar(overrides);
+  it.each(playBranches)(
+    "keeps the %s Play action on a compositor-only hover path",
+    (_, overrides) => {
+      renderActionBar(overrides);
 
-    expect(screen.getByRole("button", { name: "Play" })).toHaveClass(
-      "cursor-pointer",
-      "transform-gpu",
-      "transition-none",
-    );
-  });
+      expect(screen.getByRole("button", { name: "Play" })).toHaveClass(
+        "cursor-pointer",
+        "transform-gpu",
+        "transition-transform",
+        "hover:bg-primary",
+        "motion-safe:hover:scale-[1.02]",
+        "motion-reduce:transition-none",
+      );
+    },
+  );
 
-  it("keeps the watched action responsive and shows pointers on enabled actions", () => {
+  it("keeps the watched action on a compositor-only hover path and shows pointers", () => {
     renderActionBar({
       watchedLabel: "Mark Watched",
       onToggleWatched: () => {},
@@ -67,7 +73,10 @@ describe("ActionBar", () => {
     expect(screen.getByRole("button", { name: "Mark Watched" })).toHaveClass(
       "cursor-pointer",
       "transform-gpu",
-      "transition-none",
+      "transition-transform",
+      "hover:bg-[color-mix(in_srgb,var(--surface)_40%,transparent)]",
+      "motion-safe:hover:scale-[1.02]",
+      "motion-reduce:transition-none",
     );
     expect(screen.getByTitle("Favorite")).toHaveClass("cursor-pointer");
     expect(screen.getByTitle("More")).toHaveClass("cursor-pointer");
