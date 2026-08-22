@@ -44,13 +44,13 @@ describe("useOverlayPrefs", () => {
 
   afterEach(cleanup);
 
-  it("reads the server-wide overlay configuration", async () => {
+  it("reads the server-wide overlay configuration without browser caching", async () => {
     mocks.api.mockResolvedValue({ enabled: true });
     const { result } = renderHook(() => useOverlayPrefs(), { wrapper: createWrapper() });
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    expect(mocks.api).toHaveBeenCalledWith("/settings/overlay-config");
+    expect(mocks.api).toHaveBeenCalledWith("/settings/overlay-config", { cache: "no-store" });
     expect(result.current.enabled).toBe(true);
     expect(result.current).not.toHaveProperty("watchedIndicatorStyle");
   });
