@@ -54,24 +54,26 @@ function DefaultsEditor({ value, onChange, overlaysEnabled }: DefaultsEditorProp
 
   return (
     <div className="space-y-6">
-      <div className={`space-y-2 ${overlaysEnabled ? "" : "opacity-50"}`}>
-        <Label className="text-sm font-medium">Default style preset</Label>
-        <Select
-          value={prefs.preset}
-          disabled={!overlaysEnabled}
-          onValueChange={(v) => setPreset(v as PresetId)}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {PRESET_IDS.map((id) => (
-              <SelectItem key={id} value={id}>
-                {OVERLAY_PRESETS[id].label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className={`space-y-2 ${overlaysEnabled ? "" : "opacity-50"}`}>
+          <Label className="text-sm font-medium">Default style preset</Label>
+          <Select
+            value={prefs.preset}
+            disabled={!overlaysEnabled}
+            onValueChange={(v) => setPreset(v as PresetId)}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PRESET_IDS.map((id) => (
+                <SelectItem key={id} value={id}>
+                  {OVERLAY_PRESETS[id].label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
       <div className={overlaysEnabled ? "" : "pointer-events-none opacity-50"}>
         {OVERLAY_CATEGORIES.map((category) => {

@@ -52,7 +52,11 @@ import {
   canCurateMetadata as canCurateMetadataForUser,
   isActingAdmin as isActingAdminForUser,
 } from "@/lib/permissions";
-import { mediaItemMenuTriggerClassName } from "@/components/mediaItemMenuTrigger";
+import {
+  mediaItemMenuIconClassName,
+  mediaItemMenuTriggerClassName,
+  type PosterActionDensity,
+} from "@/components/mediaItemMenuTrigger";
 import { useUICustomization } from "@/hooks/useUICustomization";
 
 type MediaItemType = ItemDetail["type"];
@@ -101,6 +105,8 @@ interface MediaItemMenuProps {
   hasPartialProgress?: boolean;
   /** Enables the watched shortcut on wide cards such as Continue Watching. */
   showWatchedShortcut?: boolean;
+  /** Uses smaller poster controls on narrow catalog cards. */
+  narrowPosterActions?: boolean;
 }
 
 export function buildMediaItemMenuModel({
@@ -381,12 +387,12 @@ function CardQuickActionButton({
 export function PosterCardFavoriteButton({
   isFavorite,
   isPending,
-  compact = false,
+  density = "standard",
   onToggle,
 }: {
   isFavorite: boolean;
   isPending: boolean;
-  compact?: boolean;
+  density?: PosterActionDensity;
   onToggle: () => void;
 }) {
   const label = isFavorite ? "Remove from favorites" : "Add to favorites";
@@ -397,7 +403,7 @@ export function PosterCardFavoriteButton({
       isPending={isPending}
       label={label}
       className={cn(
-        mediaItemMenuTriggerClassName("poster", compact),
+        mediaItemMenuTriggerClassName("poster", density),
         isFavorite && "text-red-500 hover:text-red-400",
       )}
       burstClassName="bg-red-500/30"
@@ -408,7 +414,7 @@ export function PosterCardFavoriteButton({
         <Heart
           className={cn(
             "relative transition-[transform,color,fill] duration-300 ease-out motion-reduce:transition-none",
-            compact ? "size-3 sm:size-3.5" : "size-3 sm:size-4",
+            mediaItemMenuIconClassName("poster", density),
             isFavorite && "scale-110 fill-red-500 text-red-500",
             isAnimating && "scale-125",
           )}
@@ -423,14 +429,14 @@ function WatchedQuickActionButton({
   isWatched,
   isPending,
   variant,
-  compact,
+  density,
   onToggle,
 }: {
   mediaType: MediaItemType;
   isWatched: boolean;
   isPending: boolean;
   variant: "poster" | "wide";
-  compact: boolean;
+  density: PosterActionDensity;
   onToggle: () => void;
 }) {
   const label = getWatchedActionLabel({ type: mediaType, user_data: { played: isWatched } });
@@ -442,7 +448,7 @@ function WatchedQuickActionButton({
       isPending={isPending}
       label={label}
       className={cn(
-        mediaItemMenuTriggerClassName(variant, compact),
+        mediaItemMenuTriggerClassName(variant, density),
         isWatched && "text-emerald-400 hover:text-emerald-300",
       )}
       burstClassName="bg-emerald-400/30"
@@ -453,7 +459,7 @@ function WatchedQuickActionButton({
         <Icon
           className={cn(
             "relative transition-[transform,color] duration-300 ease-out motion-reduce:transition-none",
-            variant === "wide" ? "size-5" : compact ? "size-3 sm:size-3.5" : "size-3 sm:size-4",
+            mediaItemMenuIconClassName(variant, density),
             isWatched && "scale-110",
             isAnimating && "scale-125",
           )}
@@ -540,6 +546,7 @@ export default function MediaItemMenu({
   dismissAction,
   hasPartialProgress = false,
   showWatchedShortcut = false,
+  narrowPosterActions = false,
 }: MediaItemMenuProps) {
   const navigate = useViewTransitionNavigate();
   const location = useLocation();
@@ -606,7 +613,12 @@ export default function MediaItemMenu({
     variant === "poster" && (mediaType === "movie" || mediaType === "series");
   const showWatchedQuickAction =
     hasWatchedAction && (rootPosterSupportsWatchedShortcut || showWatchedShortcut);
-  const compact = variant === "poster" && cardPresentation.poster_size === "compact";
+  const posterActionDensity: PosterActionDensity =
+    variant === "poster" && narrowPosterActions
+      ? "narrow"
+      : variant === "poster" && cardPresentation.poster_size === "compact"
+        ? "compact"
+        : "standard";
 
   const isPending =
     watchedMutation.isPending ||
@@ -615,7 +627,7 @@ export default function MediaItemMenu({
     refreshMetadataMutation.isPending ||
     dismissHomeItemMutation.isPending;
 
-  const triggerClassName = mediaItemMenuTriggerClassName(variant, compact);
+  const triggerClassName = mediaItemMenuTriggerClassName(variant, posterActionDensity);
 
   async function handleWatchedToggle() {
     if (!currentUserState || watchedMutation.isPending) return;
@@ -715,9 +727,11 @@ export default function MediaItemMenu({
             "absolute z-20 flex items-center",
             variant === "wide"
               ? "bottom-3 left-3 gap-1.5"
-              : compact
-                ? "bottom-1.5 left-1.5 gap-0.5 sm:bottom-2 sm:left-2 sm:gap-1"
-                : "bottom-1.5 left-1.5 gap-0.5 sm:bottom-2.5 sm:left-2.5 sm:gap-1.5",
+              : posterActionDensity === "narrow"
+                ? "bottom-1.5 left-1.5 gap-0.5"
+                : posterActionDensity === "compact"
+                  ? "bottom-1.5 left-1.5 gap-0.5 sm:bottom-2 sm:left-2 sm:gap-1"
+                  : "bottom-1.5 left-1.5 gap-0.5 sm:bottom-2.5 sm:left-2.5 sm:gap-1.5",
           )}
           onClick={stopMenuEvent}
           onPointerDown={stopMenuEvent}
@@ -728,7 +742,7 @@ export default function MediaItemMenu({
               isWatched={currentUserState.played}
               isPending={watchedMutation.isPending}
               variant={variant}
-              compact={compact}
+              density={posterActionDensity}
               onToggle={() => {
                 void handleWatchedToggle();
               }}
@@ -738,7 +752,7 @@ export default function MediaItemMenu({
             <PosterCardFavoriteButton
               isFavorite={currentUserState.is_favorite}
               isPending={favoriteMutation.isPending}
-              compact={compact}
+              density={posterActionDensity}
               onToggle={() => {
                 void handleFavoriteToggle();
               }}
@@ -751,20 +765,18 @@ export default function MediaItemMenu({
           "absolute z-20",
           variant === "wide"
             ? "right-3 bottom-3"
-            : compact
-              ? "right-1.5 bottom-1.5 sm:right-2 sm:bottom-2"
-              : "right-1.5 bottom-1.5 sm:right-2.5 sm:bottom-2.5",
+            : posterActionDensity === "narrow"
+              ? "right-1.5 bottom-1.5"
+              : posterActionDensity === "compact"
+                ? "right-1.5 bottom-1.5 sm:right-2 sm:bottom-2"
+                : "right-1.5 bottom-1.5 sm:right-2.5 sm:bottom-2.5",
         )}
         onClick={stopMenuEvent}
         onPointerDown={stopMenuEvent}
       >
         {model.length === 0 ? (
           <button type="button" aria-label="More actions" disabled className={triggerClassName}>
-            <MoreVertical
-              className={
-                variant === "wide" ? "size-5" : compact ? "size-3 sm:size-3.5" : "size-3 sm:size-4"
-              }
-            />
+            <MoreVertical className={mediaItemMenuIconClassName(variant, posterActionDensity)} />
           </button>
         ) : (
           <DropdownMenu
@@ -794,13 +806,7 @@ export default function MediaItemMenu({
                 }}
               >
                 <MoreVertical
-                  className={
-                    variant === "wide"
-                      ? "size-5"
-                      : compact
-                        ? "size-3 sm:size-3.5"
-                        : "size-3 sm:size-4"
-                  }
+                  className={mediaItemMenuIconClassName(variant, posterActionDensity)}
                 />
               </button>
             </DropdownMenuTrigger>
