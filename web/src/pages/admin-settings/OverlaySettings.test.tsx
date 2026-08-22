@@ -72,6 +72,12 @@ describe("OverlaySettings", () => {
     expect(markup).not.toContain("Watched indicator");
   });
 
+  it("keeps the preset selector at its previous responsive column width", () => {
+    const markup = renderPage();
+
+    expect(markup).toContain("sm:grid-cols-2");
+  });
+
   it("previews poster overlays without watched metadata", () => {
     const markup = renderPage();
 

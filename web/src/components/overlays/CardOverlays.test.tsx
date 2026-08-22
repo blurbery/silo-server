@@ -113,16 +113,17 @@ describe("CardOverlays", () => {
     expect(container.querySelectorAll("span.inline-flex").length).toBe(3);
   });
 
-  it("keeps bottom badges below the action layer while lifting them clear of controls", () => {
+  it("keeps poster badges in their selected bottom corners beneath the action layer", () => {
     const prefs = prefsWithOnly("content_rating");
     prefs.items.content_rating = { ...prefs.items.content_rating, position: "bottom-left" };
     const left = render(<CardOverlays data={SAMPLE_MOVIE_DATA} prefs={prefs} />).container;
-    expect(left.querySelector("div.bottom-2 > div.items-start.mb-10")).toBeTruthy();
+    expect(left.querySelector("div.bottom-2 > div.items-start")?.className).not.toContain("mb-");
     expect(left.querySelector("div.bottom-2")?.className).toContain("z-10");
 
     prefs.items.content_rating = { ...prefs.items.content_rating, position: "bottom-right" };
     const poster = render(<CardOverlays data={SAMPLE_MOVIE_DATA} prefs={prefs} />).container;
-    expect(poster.querySelector("div.bottom-2 > div.items-end.mb-10")).toBeTruthy();
+    expect(poster.querySelector("div.bottom-2 > div.items-end")?.className).not.toContain("mb-");
+
     const wide = render(
       <CardOverlays data={SAMPLE_MOVIE_DATA} prefs={prefs} variant="wide" />,
     ).container;

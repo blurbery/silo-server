@@ -82,6 +82,17 @@ describe("ItemCard SortMeta", () => {
     );
   });
 
+  it("passes narrow poster actions through to the menu", () => {
+    renderCard({
+      item: { ...baseItem, content_id: "movie-1", type: "movie" },
+      narrowPosterActions: true,
+    });
+
+    expect(mocks.mediaItemMenu).toHaveBeenCalledWith(
+      expect.objectContaining({ narrowPosterActions: true }),
+    );
+  });
+
   it("renders the series last air date when sorted by last_air_date", () => {
     const markup = renderCard({
       sortField: "last_air_date",

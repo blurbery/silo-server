@@ -598,7 +598,7 @@ describe("MediaItemMenu trigger visibility", () => {
     await screen.findByRole("button", { name: "Mark Unwatched" });
   });
 
-  it("shows the eye on opted-in wide cards and responsively compacts poster controls", () => {
+  it("shows the eye on opted-in wide cards and sizes narrow poster controls independently", () => {
     const { rerender } = render(
       <MemoryRouter>
         <MediaItemMenu
@@ -625,6 +625,29 @@ describe("MediaItemMenu trigger visibility", () => {
     );
     expect(screen.getByRole("button", { name: "Mark Watched" }).className).toContain("size-9");
 
+    rerender(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+          narrowPosterActions
+        />
+      </MemoryRouter>,
+    );
+
+    for (const button of screen.getAllByRole("button")) {
+      expect(button.className).toContain("size-6");
+      expect(button.className).not.toContain("sm:size-7");
+      expect(button.className).not.toContain("sm:size-8");
+    }
+    const quickActionClasses =
+      screen.getByRole("button", { name: "Mark Watched" }).parentElement?.className.split(/\s+/) ??
+      [];
+    expect(quickActionClasses).toContain("left-1.5");
+    expect(quickActionClasses).not.toContain("sm:left-2");
+
     mocks.posterSize = "compact";
     rerender(
       <MemoryRouter>
@@ -636,16 +659,7 @@ describe("MediaItemMenu trigger visibility", () => {
         />
       </MemoryRouter>,
     );
-
-    for (const button of screen.getAllByRole("button")) {
-      expect(button.className).toContain("size-6");
-      expect(button.className).toContain("sm:size-7");
-    }
-    const quickActionClasses =
-      screen.getByRole("button", { name: "Mark Watched" }).parentElement?.className.split(/\s+/) ??
-      [];
-    expect(quickActionClasses).toContain("left-1.5");
-    expect(quickActionClasses).toContain("sm:left-2");
+    expect(screen.getByRole("button", { name: "Mark Watched" }).className).toContain("sm:size-7");
   });
 
   it("limits automatic poster eyes to movies and series", () => {

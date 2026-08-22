@@ -12,6 +12,7 @@ interface SharedItemGridProps {
   loading?: boolean;
   sortField?: string;
   libraryId?: number;
+  narrowPosterActions?: boolean;
   selectionMode?: boolean;
   selectedIds?: ReadonlySet<string>;
   onToggleSelect?: (item: BrowseItem) => void;
@@ -44,6 +45,7 @@ export default function ItemGrid(props: ItemGridProps) {
     loading,
     sortField,
     libraryId,
+    narrowPosterActions = false,
     selectionMode = false,
     selectedIds,
     onToggleSelect,
@@ -165,6 +167,7 @@ export default function ItemGrid(props: ItemGridProps) {
                         libraryId={libraryId}
                         sortField={sortField}
                         overlayPrefs={overlayPrefs}
+                        narrowPosterActions={narrowPosterActions}
                         selectionMode={selectionMode}
                         selected={selectedIds?.has(item.content_id) ?? false}
                         onToggleSelect={onToggleSelect}

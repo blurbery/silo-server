@@ -116,6 +116,7 @@ vi.mock("@/components/ItemGrid", () => ({
     totalItems?: number;
     pageSize?: number;
     loading?: boolean;
+    narrowPosterActions?: boolean;
     onVisibleRangeChange?: (start: number, end: number) => void;
   }) => {
     mockItemGrid(props);
@@ -244,8 +245,31 @@ describe("Catalog page", () => {
       expect.objectContaining({
         totalItems: 1,
         pageSize: 60,
+        narrowPosterActions: false,
         onVisibleRangeChange: expect.any(Function),
       }),
+    );
+  });
+
+  it.each(["favorites", "watchlist"])("uses narrow poster actions for the %s catalog", (source) => {
+    appInitialEntries = [`/catalog?source=${source}`];
+    mockUseCatalogWindow.mockReturnValue({
+      data: {
+        title: source === "favorites" ? "Favorites" : "Watchlist",
+        totalItems: 1,
+        pages: new Map([[0, [{ content_id: "movie-1", title: "Heat", type: "movie" }]]]),
+      },
+      isLoading: false,
+    });
+
+    renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    expect(mockItemGrid).toHaveBeenCalledWith(
+      expect.objectContaining({ narrowPosterActions: true }),
     );
   });
 
