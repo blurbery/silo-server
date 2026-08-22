@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import EpisodeCarousel from "./EpisodeCarousel";
 
 const capturedMenuProps: Record<string, unknown>[] = [];
@@ -25,6 +25,10 @@ vi.mock("@/hooks/useCarouselEmbla", () => ({
 }));
 
 describe("EpisodeCarousel", () => {
+  beforeEach(() => {
+    capturedMenuProps.length = 0;
+  });
+
   it("places the watched circle-check beside the episode label instead of over the artwork", () => {
     render(
       <MemoryRouter>
@@ -82,8 +86,6 @@ describe("EpisodeCarousel", () => {
   });
 
   it("enables unwatched shortcuts without losing partial-progress restart eligibility", () => {
-    capturedMenuProps.length = 0;
-
     renderToStaticMarkup(
       <MemoryRouter>
         <EpisodeCarousel
