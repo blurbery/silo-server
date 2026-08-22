@@ -36,11 +36,6 @@ describe("SeasonEpisodeGrid", () => {
               still_url: "",
               still_thumbhash: "",
               files: [],
-              user_data: {
-                played: false,
-                position_seconds: 0,
-                duration_seconds: 1800,
-              },
             },
           ]}
         />
@@ -50,6 +45,11 @@ describe("SeasonEpisodeGrid", () => {
     expect(capturedMenuProps[0]).toMatchObject({
       contentId: "ep-1",
       mediaType: "episode",
+      userState: {
+        played: false,
+        is_favorite: false,
+        in_watchlist: false,
+      },
       showCollectionActions: false,
       showWatchedShortcut: true,
       hasPartialProgress: false,

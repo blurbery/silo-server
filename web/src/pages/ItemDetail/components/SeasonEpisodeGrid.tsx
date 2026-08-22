@@ -96,15 +96,11 @@ export default function SeasonEpisodeGrid({
               <MediaItemMenu
                 contentId={episode.content_id}
                 mediaType="episode"
-                userState={
-                  episode.user_data
-                    ? {
-                        played: episode.user_data.played,
-                        is_favorite: false,
-                        in_watchlist: false,
-                      }
-                    : undefined
-                }
+                userState={{
+                  played: episode.user_data?.played ?? false,
+                  is_favorite: false,
+                  in_watchlist: false,
+                }}
                 variant="wide"
                 showCollectionActions={false}
                 showWatchedShortcut

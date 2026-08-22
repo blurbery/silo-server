@@ -81,7 +81,7 @@ describe("EpisodeCarousel", () => {
     expect(screen.getAllByLabelText("Watched")).toHaveLength(1);
   });
 
-  it("enables the watched shortcut and passes restart eligibility to episode menus", () => {
+  it("enables unwatched shortcuts without losing partial-progress restart eligibility", () => {
     capturedMenuProps.length = 0;
 
     renderToStaticMarkup(
@@ -100,6 +100,18 @@ describe("EpisodeCarousel", () => {
               still_url: "",
               still_thumbhash: "",
               files: [],
+            },
+            {
+              content_id: "ep-2",
+              season_number: 1,
+              episode_number: 2,
+              title: "Next",
+              overview: "",
+              air_date: null,
+              runtime: 43,
+              still_url: "",
+              still_thumbhash: "",
+              files: [],
               user_data: {
                 played: false,
                 position_seconds: 120,
@@ -114,7 +126,22 @@ describe("EpisodeCarousel", () => {
     expect(capturedMenuProps[0]).toMatchObject({
       contentId: "ep-1",
       mediaType: "episode",
+      userState: {
+        played: false,
+        is_favorite: false,
+        in_watchlist: false,
+      },
       showCollectionActions: false,
+      showWatchedShortcut: true,
+      hasPartialProgress: false,
+    });
+    expect(capturedMenuProps[1]).toMatchObject({
+      contentId: "ep-2",
+      userState: {
+        played: false,
+        is_favorite: false,
+        in_watchlist: false,
+      },
       showWatchedShortcut: true,
       hasPartialProgress: true,
     });
