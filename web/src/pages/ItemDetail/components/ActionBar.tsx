@@ -287,7 +287,7 @@ export default function ActionBar({
           showPlayChoiceDialog ? (
             <Button
               onClick={openPlayChoiceDialog}
-              className="relative h-11 gap-2.5 overflow-hidden rounded-full px-8 text-[15px] font-bold tracking-wide shadow-md"
+              className="relative h-11 cursor-pointer gap-2.5 overflow-hidden rounded-full px-8 text-[15px] font-bold tracking-wide shadow-md"
             >
               <Play className="size-[18px] fill-current" />
               {displayedPlayLabel}
@@ -296,7 +296,7 @@ export default function ActionBar({
           ) : selectedVersion ? (
             <Button
               onClick={() => handleSelectedVersionPlay(false)}
-              className="relative h-11 gap-2.5 overflow-hidden rounded-full px-8 text-[15px] font-bold tracking-wide shadow-md"
+              className="relative h-11 cursor-pointer gap-2.5 overflow-hidden rounded-full px-8 text-[15px] font-bold tracking-wide shadow-md"
             >
               <Play className="size-[18px] fill-current" />
               {displayedPlayLabel}
@@ -305,7 +305,7 @@ export default function ActionBar({
           ) : (
             <Button
               onClick={() => startPlaybackFromHref(playHref)}
-              className="relative h-11 gap-2.5 overflow-hidden rounded-full px-8 text-[15px] font-bold tracking-wide shadow-md"
+              className="relative h-11 cursor-pointer gap-2.5 overflow-hidden rounded-full px-8 text-[15px] font-bold tracking-wide shadow-md"
             >
               <Play className="size-[18px] fill-current" />
               {displayedPlayLabel}
@@ -332,7 +332,7 @@ export default function ActionBar({
             variant="glass"
             onClick={onToggleWatched}
             disabled={isUpdatingWatched}
-            className="h-11 rounded-full px-5 text-[14px] font-semibold"
+            className="h-11 cursor-pointer rounded-full px-5 text-[14px] font-semibold"
           >
             <Check className="size-[18px]" />
             {watchedLabel}
@@ -346,7 +346,7 @@ export default function ActionBar({
             size="icon-lg"
             onClick={onToggleFavorite}
             title={isFavorite ? "Unfavorite" : "Favorite"}
-            className="size-11 rounded-full"
+            className="size-11 cursor-pointer rounded-full"
           >
             <Heart
               className={`size-[18px] transition-colors ${isFavorite ? "fill-current text-red-400" : ""}`}
@@ -360,7 +360,12 @@ export default function ActionBar({
 
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
-            <Button variant="glass" size="icon-lg" title="More" className="size-11 rounded-full">
+            <Button
+              variant="glass"
+              size="icon-lg"
+              title="More"
+              className="size-11 cursor-pointer rounded-full"
+            >
               <MoreVertical className="size-[18px]" />
             </Button>
           </DropdownMenuTrigger>
