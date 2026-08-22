@@ -7,6 +7,7 @@ import { SETTING_KEYS } from "@/lib/settingsContract";
 import { settingsKeys } from "@/hooks/queries/keys";
 import { storage } from "@/utils/storage";
 import { parseOverlayPrefs, serializeOverlayPrefs, type CardOverlayPrefs } from "@/lib/overlays";
+import { parseWebWatchedIndicatorStyle } from "@/lib/watchedIndicator";
 
 /** `ui.card_overlays` is profile-wide in the contract (no device scope). */
 const PROFILE_SCOPE: SettingIdentity = { scope: "profile" };
@@ -16,6 +17,7 @@ const OVERLAY_KEYS = [SETTING_KEYS.UI_CARD_OVERLAYS] as const;
 interface OverlayConfig {
   enabled: boolean;
   defaults?: string;
+  watched_indicator?: string;
 }
 
 // The admin kill switch and server-wide defaults live in server_settings, not
@@ -23,7 +25,7 @@ interface OverlayConfig {
 // values API.
 function useOverlayConfig() {
   return useQuery({
-    queryKey: [...settingsKeys.all, "overlay-config"] as const,
+    queryKey: settingsKeys.overlayConfig(),
     queryFn: () => api<OverlayConfig>("/settings/overlay-config"),
     staleTime: 60_000,
   });
@@ -52,6 +54,11 @@ export function useOverlayPrefs() {
 
   // Admin kill switch: if disabled server-wide, return null prefs
   const enabled = config?.enabled !== false;
+  // Suppress the indicator until the global choice is known, avoiding a
+  // flash of the default style when the server uses another option.
+  const watchedIndicatorStyle = configLoading
+    ? null
+    : parseWebWatchedIndicatorStyle(config?.watched_indicator);
 
   const setPrefs = useCallback(
     (next: CardOverlayPrefs) => {
@@ -79,5 +86,6 @@ export function useOverlayPrefs() {
     setPrefs,
     isLoading,
     enabled,
+    watchedIndicatorStyle,
   };
 }

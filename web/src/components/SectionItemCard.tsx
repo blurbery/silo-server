@@ -28,7 +28,7 @@ export default function SectionItemCard({ item, libraryId }: SectionItemCardProp
   const itemHref = `/item/${encodeURIComponent(item.content_id)}${
     libraryId ? `?libraryId=${libraryId}` : ""
   }`;
-  const { prefs: overlayPrefs } = useOverlayPrefs();
+  const { prefs: overlayPrefs, watchedIndicatorStyle } = useOverlayPrefs();
   const upcomingEvent = item.upcoming_event;
   const subtitle = upcomingEvent ? formatUpcomingSubtitle(upcomingEvent) : "";
   const airDateLabel = upcomingEvent ? formatUpcomingDate(upcomingEvent.air_date) : "";
@@ -119,7 +119,11 @@ export default function SectionItemCard({ item, libraryId }: SectionItemCardProp
                 {airTimeLabel && (
                   <span className="text-muted-foreground min-w-0 truncate">{airTimeLabel}</span>
                 )}
-                <CardWatchedBadge mediaType={item.type} played={item.user_state?.played} />
+                <CardWatchedBadge
+                  mediaType={item.type}
+                  played={item.user_state?.played}
+                  style={watchedIndicatorStyle}
+                />
               </div>
             </>
           ) : showMetadata && episodeLabels ? (
@@ -144,7 +148,11 @@ export default function SectionItemCard({ item, libraryId }: SectionItemCardProp
               <span className="min-w-0 truncate">
                 {item.year ? `${item.year}` : ""} {item.type === "series" ? "Series" : ""}
               </span>
-              <CardWatchedBadge mediaType={item.type} played={item.user_state?.played} />
+              <CardWatchedBadge
+                mediaType={item.type}
+                played={item.user_state?.played}
+                style={watchedIndicatorStyle}
+              />
             </div>
           ) : null}
         </ViewTransitionLink>

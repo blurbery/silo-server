@@ -12,6 +12,7 @@ import { formatDate as formatPreferredDate } from "@/lib/datetime";
 import { formatBitrate } from "@/lib/mediaFormat";
 import { useUICustomization } from "@/hooks/useUICustomization";
 import CardWatchedBadge from "@/components/CardWatchedBadge";
+import type { WebWatchedIndicatorStyle } from "@/lib/watchedIndicator";
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -171,6 +172,7 @@ export default function ItemCard({
   libraryId,
   sortField,
   overlayPrefs,
+  watchedIndicatorStyle,
   selectionMode = false,
   selected = false,
   onToggleSelect,
@@ -179,6 +181,7 @@ export default function ItemCard({
   libraryId?: number;
   sortField?: string;
   overlayPrefs?: CardOverlayPrefs | null;
+  watchedIndicatorStyle?: WebWatchedIndicatorStyle | null;
   selectionMode?: boolean;
   selected?: boolean;
   onToggleSelect?: (item: BrowseItem) => void;
@@ -320,7 +323,11 @@ export default function ItemCard({
               <span className="min-w-0 truncate">
                 <SortMeta item={item} sortField={sortField} />
               </span>
-              <CardWatchedBadge mediaType={item.type} played={item.user_state?.played} />
+              <CardWatchedBadge
+                mediaType={item.type}
+                played={item.user_state?.played}
+                style={watchedIndicatorStyle}
+              />
             </div>
           ) : null}
         </ViewTransitionLink>

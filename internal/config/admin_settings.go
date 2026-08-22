@@ -16,6 +16,15 @@ import (
 const cloudflareURLMode = "cloudflare_token"
 const chapterThumbnailSoftwareToneMapKey = "playback.chapter_thumbnail_software_tone_map_enabled"
 
+const (
+	// WebWatchedIndicatorSettingKey controls the watched marker rendered below
+	// movie and series cards in the web client. Native clients keep their own UI.
+	WebWatchedIndicatorSettingKey = "ui.web_watched_indicator"
+	// DefaultWebWatchedIndicatorStyle preserves the rounded indicator introduced
+	// before the server-wide selector existed.
+	DefaultWebWatchedIndicatorStyle = "pill"
+)
+
 // ArtworkStorageReconcileCheckpointKey is machine-managed task state. It is
 // stored alongside server settings for durability but must not be exposed or
 // edited through the administrator settings API.
@@ -157,6 +166,7 @@ var adminSettingDefaults = map[string]string{
 	"opslog.max_rows":                 "1000000",
 	"opslog.max_size_mb":              "1024",
 	"overlays.enabled":                "true",
+	WebWatchedIndicatorSettingKey:     DefaultWebWatchedIndicatorStyle,
 	"signup.enabled":                  "false",
 
 	"catalog.search.provider":                             "postgres",
@@ -396,6 +406,8 @@ func NormalizeAdminSetting(key, raw string) (string, error) {
 		return normalizeAdminEnum(key, value, "last", "all")
 	case "s3.public_url_auth":
 		return normalizeAdminEnum(key, value, "", "presigned", "public", "cloudflare_token")
+	case WebWatchedIndicatorSettingKey:
+		return NormalizeWebWatchedIndicatorStyle(value)
 
 	case "recommendations.embeddings_cron", "recommendations.taste_profiles_cron",
 		"recommendations.cowatch_cron", "recommendations.recommendations_cron":
@@ -436,6 +448,22 @@ func NormalizeAdminSetting(key, raw string) (string, error) {
 	}
 
 	return raw, nil
+}
+
+// NormalizeWebWatchedIndicatorStyle validates the web-only watched marker
+// choices shared by the admin write path and the public web configuration
+// response.
+func NormalizeWebWatchedIndicatorStyle(value string) (string, error) {
+	return normalizeAdminEnum(
+		WebWatchedIndicatorSettingKey,
+		strings.TrimSpace(value),
+		"pill",
+		"square",
+		"text",
+		"eye",
+		"check",
+		"none",
+	)
 }
 
 // AdminSettingsCapabilities describes durable bootstrap configuration that is
