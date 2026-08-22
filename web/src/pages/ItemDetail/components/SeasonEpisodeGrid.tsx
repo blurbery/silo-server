@@ -107,6 +107,7 @@ export default function SeasonEpisodeGrid({
                 }
                 variant="wide"
                 showCollectionActions={false}
+                showWatchedShortcut
                 hasPartialProgress={hasPartialProgress}
               />
             </div>
