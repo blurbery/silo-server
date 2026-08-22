@@ -383,9 +383,9 @@ describe("MediaItemMenu trigger visibility", () => {
   it("uses open state and keyboard focus without keeping a mouse-closed card focused", () => {
     const className = mediaItemMenuTriggerClassName();
 
-    expect(className).toContain("pointer-fine:group-hover/card:opacity-100");
-    expect(className).toContain("pointer-fine:data-[state=open]:opacity-100");
-    expect(className).toContain("pointer-fine:focus-visible:opacity-100");
+    expect(className).toContain("media-card-action-trigger");
+    expect(className).not.toContain("pointer-fine:");
+    expect(className).not.toContain("opacity-100");
     expect(className).not.toContain("md:opacity-0");
     expect(className).not.toContain("group-focus-within");
     expect(className).toContain("size-6");
@@ -479,7 +479,7 @@ describe("MediaItemMenu trigger visibility", () => {
 
     const button = screen.getByRole("button", { name: "Add to favorites" });
     expect(button.getAttribute("aria-pressed")).toBe("false");
-    expect(button.className).toContain("pointer-fine:group-hover/card:opacity-100");
+    expect(button.className).toContain("media-card-action-trigger");
     expect(button.className).toContain("cursor-pointer");
     expect(button.className).not.toContain("cursor-wait");
     expect(button.parentElement?.className).toContain("left-2.5");
@@ -776,6 +776,29 @@ describe("MediaItemMenu trigger visibility", () => {
     expect(mocks.toggleFavorite).toHaveBeenCalledTimes(1);
     expect(mocks.toggleFavorite).toHaveBeenCalledWith(false);
     await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Remove from favorites" })).toBeTruthy();
+    });
+  });
+
+  it("keeps watched and favorite actions working for an unpaired mouse click", async () => {
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark Watched" }), { detail: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "Add to favorites" }), { detail: 1 });
+
+    expect(mocks.toggleWatched).toHaveBeenCalledWith(true);
+    expect(mocks.toggleFavorite).toHaveBeenCalledWith(false);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Mark Unwatched" })).toBeTruthy();
       expect(screen.getByRole("button", { name: "Remove from favorites" })).toBeTruthy();
     });
   });
