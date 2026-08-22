@@ -173,6 +173,7 @@ export default function ItemCard({
   sortField,
   overlayPrefs,
   watchedIndicatorStyle,
+  watchedIndicatorIconOnly = false,
   selectionMode = false,
   selected = false,
   onToggleSelect,
@@ -182,6 +183,7 @@ export default function ItemCard({
   sortField?: string;
   overlayPrefs?: CardOverlayPrefs | null;
   watchedIndicatorStyle?: WebWatchedIndicatorStyle | null;
+  watchedIndicatorIconOnly?: boolean;
   selectionMode?: boolean;
   selected?: boolean;
   onToggleSelect?: (item: BrowseItem) => void;
@@ -327,6 +329,7 @@ export default function ItemCard({
                 mediaType={item.type}
                 played={item.user_state?.played}
                 style={watchedIndicatorStyle}
+                iconOnly={watchedIndicatorIconOnly}
               />
             </div>
           ) : null}

@@ -38,6 +38,30 @@ describe("CardWatchedBadge", () => {
     expect(renderBadge("none")).toBe("");
   });
 
+  it.each(["pill", "square", "text", "eye", "check"] as const)(
+    "uses the circle-check without text for the enabled %s style in icon-only mode",
+    (style) => {
+      const markup = renderToStaticMarkup(
+        <CardWatchedBadge mediaType="series" played style={style} iconOnly />,
+      );
+
+      expect(markup).toContain('data-watched-indicator="icon-only"');
+      expect(markup).toContain('role="img"');
+      expect(markup).toContain('aria-label="Watched"');
+      expect(markup).toContain("lucide-circle-check");
+      expect(markup).not.toContain(">Watched<");
+    },
+  );
+
+  it.each(["none", null] as const)(
+    "still hides the icon-only indicator for the %s backend state",
+    (style) => {
+      expect(
+        renderToStaticMarkup(<CardWatchedBadge mediaType="series" played style={style} iconOnly />),
+      ).toBe("");
+    },
+  );
+
   it("stays hidden while the server-wide style is loading", () => {
     expect(renderBadge(null)).toBe("");
   });

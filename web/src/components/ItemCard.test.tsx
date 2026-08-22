@@ -83,6 +83,26 @@ describe("ItemCard SortMeta", () => {
     }
   });
 
+  it("uses the icon-only watched indicator on constrained catalog cards", () => {
+    const markup = renderCard({
+      watchedIndicatorStyle: "pill",
+      watchedIndicatorIconOnly: true,
+      item: {
+        ...baseItem,
+        user_state: {
+          played: true,
+          is_favorite: true,
+          in_watchlist: false,
+        },
+      },
+    });
+
+    expect(markup).toContain('data-watched-indicator="icon-only"');
+    expect(markup).toContain("lucide-circle-check");
+    expect(markup).not.toContain(">Watched<");
+    expect(markup).toContain("2023");
+  });
+
   it("does not show the card watched badge for unplayed or non-root media", () => {
     const unplayedMovie = renderCard({
       item: {
