@@ -15,6 +15,7 @@ import (
 
 	apimw "github.com/Silo-Server/silo-server/internal/api/middleware"
 	"github.com/Silo-Server/silo-server/internal/cache"
+	"github.com/Silo-Server/silo-server/internal/config"
 	evt "github.com/Silo-Server/silo-server/internal/events"
 	"github.com/Silo-Server/silo-server/internal/settingscontract"
 	"github.com/Silo-Server/silo-server/internal/settingsmigrate"
@@ -1203,14 +1204,18 @@ func (h *SettingsHandler) resolveEffectiveSetting(
 
 // overlayConfigResponse is returned by GET /settings/overlay-config.
 type overlayConfigResponse struct {
-	Enabled  bool   `json:"enabled"`
-	Defaults string `json:"defaults,omitempty"`
+	Enabled          bool   `json:"enabled"`
+	Defaults         string `json:"defaults,omitempty"`
+	WatchedIndicator string `json:"watched_indicator"`
 }
 
 // HandleGetOverlayConfig returns the server-wide overlay configuration.
 // Available to all authenticated users (not admin-only).
 func (h *SettingsHandler) HandleGetOverlayConfig(w http.ResponseWriter, r *http.Request) {
-	resp := overlayConfigResponse{Enabled: true}
+	resp := overlayConfigResponse{
+		Enabled:          true,
+		WatchedIndicator: config.DefaultWebWatchedIndicatorStyle,
+	}
 
 	if h.serverSettings != nil {
 		if v, _ := h.serverSettings.Get(r.Context(), "overlays.enabled"); v == "false" {
@@ -1218,6 +1223,11 @@ func (h *SettingsHandler) HandleGetOverlayConfig(w http.ResponseWriter, r *http.
 		}
 		if v, _ := h.serverSettings.Get(r.Context(), "defaults.card_overlays"); v != "" {
 			resp.Defaults = v
+		}
+		if v, _ := h.serverSettings.Get(r.Context(), config.WebWatchedIndicatorSettingKey); v != "" {
+			if normalized, err := config.NormalizeWebWatchedIndicatorStyle(v); err == nil {
+				resp.WatchedIndicator = normalized
+			}
 		}
 	}
 
