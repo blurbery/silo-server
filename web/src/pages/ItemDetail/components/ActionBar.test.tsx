@@ -47,20 +47,28 @@ function renderActionBar(overrides: Partial<ActionBarProps> = {}) {
 }
 
 describe("ActionBar", () => {
-  it.each(playBranches)("shows the pointer cursor on the %s Play action", (_, overrides) => {
+  it.each(playBranches)("keeps the %s Play action responsive", (_, overrides) => {
     renderActionBar(overrides);
 
-    expect(screen.getByRole("button", { name: "Play" })).toHaveClass("cursor-pointer");
+    expect(screen.getByRole("button", { name: "Play" })).toHaveClass(
+      "cursor-pointer",
+      "transform-gpu",
+      "transition-none",
+    );
   });
 
-  it("shows the pointer cursor on the other enabled primary actions", () => {
+  it("keeps the watched action responsive and shows pointers on enabled actions", () => {
     renderActionBar({
       watchedLabel: "Mark Watched",
       onToggleWatched: () => {},
       onToggleFavorite: () => {},
     });
 
-    expect(screen.getByRole("button", { name: "Mark Watched" })).toHaveClass("cursor-pointer");
+    expect(screen.getByRole("button", { name: "Mark Watched" })).toHaveClass(
+      "cursor-pointer",
+      "transform-gpu",
+      "transition-none",
+    );
     expect(screen.getByTitle("Favorite")).toHaveClass("cursor-pointer");
     expect(screen.getByTitle("More")).toHaveClass("cursor-pointer");
   });
