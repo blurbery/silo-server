@@ -7,6 +7,7 @@ import {
   Captions,
   Download,
   FolderPlus,
+  History,
   Info,
   Loader2,
   MoreVertical,
@@ -369,7 +370,7 @@ export default function ActionBar({
               <MoreVertical className="size-[18px]" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuContent align="end" className="w-max min-w-0">
             {restartHref && (
               <DropdownMenuItem
                 onSelect={() => {
@@ -419,6 +420,7 @@ export default function ActionBar({
                       navigate(`/admin/history?media_item_id=${encodeURIComponent(contentId)}`)
                     }
                   >
+                    <History className="size-4" />
                     View Play History
                   </DropdownMenuItem>
                 )}
@@ -429,7 +431,7 @@ export default function ActionBar({
                       setRefreshDialogOpen(true);
                     }}
                   >
-                    {isRefreshing && <RefreshCw className="size-4 animate-spin" />}
+                    <RefreshCw className={`size-4 ${isRefreshing ? "animate-spin" : ""}`} />
                     Refresh Metadata
                   </DropdownMenuItem>
                 )}
