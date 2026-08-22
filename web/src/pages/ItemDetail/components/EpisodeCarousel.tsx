@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import { Link } from "react-router";
-import { Check, Play, ChevronLeft, ChevronRight } from "lucide-react";
+import { Play, ChevronLeft, ChevronRight } from "lucide-react";
 import type { EpisodeListItem } from "@/api/types";
+import { WatchedCheckIndicator } from "@/components/CardWatchedBadge";
 import { decodeThumbhash } from "@/lib/thumbhash";
 import { cn } from "@/lib/utils";
 import MediaItemMenu from "@/components/MediaItemMenu";
@@ -117,11 +118,6 @@ export default function EpisodeCarousel({
                               Now Viewing
                             </div>
                           )}
-                          {ep.user_data?.played && (
-                            <div className="absolute top-2 right-2 rounded-full bg-black/65 p-1.5 text-green-400">
-                              <Check className="size-4" />
-                            </div>
-                          )}
                           {progress != null && (
                             <div className="absolute inset-x-0 bottom-0 h-[3px] bg-black/40">
                               <div
@@ -155,9 +151,10 @@ export default function EpisodeCarousel({
                       aria-current={isCurrent ? "page" : undefined}
                       className="block"
                     >
-                      <p className="text-muted-foreground/70 mt-2 text-xs">
-                        Episode {ep.episode_number}
-                      </p>
+                      <div className="text-muted-foreground/70 mt-2 flex items-center gap-2 text-xs">
+                        <span>Episode {ep.episode_number}</span>
+                        {ep.user_data?.played && <WatchedCheckIndicator className="ml-auto" />}
+                      </div>
                       <p
                         className="truncate text-sm font-semibold"
                         style={isCurrent ? { color: "var(--primary)" } : undefined}

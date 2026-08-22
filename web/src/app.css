@@ -1904,27 +1904,6 @@
     transition: width var(--duration-normal) var(--ease-default);
   }
 
-  /* ── Watched Badge ───────────────────────────────────────── */
-  /* Checkmark badge overlay on fully-watched media cards.
-     Position: absolute top-right of card.
-     Usage: <div class="relative">
-              <img ... />
-              <div class="watched-badge"><Check /></div>
-            </div>                                              */
-  .watched-badge {
-    position: absolute;
-    top: 0.5rem;
-    right: 0.5rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.5rem;
-    height: 1.5rem;
-    border-radius: 9999px;
-    background-color: var(--primary);
-    color: var(--primary-foreground);
-  }
-
   /* ── Play Overlay ────────────────────────────────────────── */
   /* Semi-transparent play button centered on thumbnails.
      Usage: <div class="relative group">
