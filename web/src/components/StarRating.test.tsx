@@ -36,9 +36,14 @@ describe("StarRating", () => {
       "transform-gpu",
       "transition-[color,scale]",
       "duration-100",
+      "motion-safe:hover:scale-110",
+      "motion-reduce:transition-none",
     );
     expect(fourthStar).not.toHaveClass("transition-all");
-    expect(fourthStar.querySelector("svg")).toHaveClass("transition-[fill-opacity]");
+    expect(fourthStar.querySelector("svg")).toHaveClass(
+      "transition-[fill-opacity]",
+      "motion-reduce:transition-none",
+    );
 
     fireEvent.click(fourthStar);
     expect(onChange).toHaveBeenCalledWith(4);
