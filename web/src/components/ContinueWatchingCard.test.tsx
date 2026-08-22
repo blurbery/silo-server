@@ -47,6 +47,8 @@ describe("ContinueWatchingCard", () => {
 
     expect(markup).toContain('src="/episode-backdrop.jpg"');
     expect(markup).not.toContain('src="/season-poster.jpg"');
+    expect(markup).toContain("media-card-play-trigger");
+    expect(markup).not.toContain("pointer-fine:opacity-0");
   });
 
   it("prefers the backdrop image for movies (poster_url is a vertical poster)", () => {
