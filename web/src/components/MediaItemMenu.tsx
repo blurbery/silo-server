@@ -1,5 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import { LoaderCircle, MoreVertical, Pencil, RefreshCw, Search } from "lucide-react";
+import {
+  Check,
+  FileText,
+  Heart,
+  History,
+  LoaderCircle,
+  MoreVertical,
+  Pencil,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  X,
+} from "lucide-react";
 import { useLocation } from "react-router";
 import { useViewTransitionNavigate } from "@/hooks/useViewTransition";
 import type { ItemDetail, MediaItemUserState } from "@/api/types";
@@ -58,6 +71,8 @@ type MediaItemMenuEntry =
       label: string;
     }
   | { kind: "separator" };
+
+type MediaItemMenuActionKey = Extract<MediaItemMenuEntry, { kind: "action" }>["key"];
 
 interface BuildMediaItemMenuModelOptions {
   mediaType: MediaItemType;
@@ -188,6 +203,109 @@ function stopMenuEvent(event: Pick<Event, "preventDefault" | "stopPropagation">)
   event.stopPropagation();
 }
 
+function MediaItemMenuActionIcon({
+  actionKey,
+  userState,
+  isRefreshing,
+}: {
+  actionKey: MediaItemMenuActionKey;
+  userState?: MediaItemUserState;
+  isRefreshing: boolean;
+}) {
+  switch (actionKey) {
+    case "playFromBeginning":
+      return <RotateCcw aria-hidden="true" className="size-4" />;
+    case "toggleWatched":
+      return <Check aria-hidden="true" className="size-4" />;
+    case "toggleFavorite":
+      return (
+        <Heart
+          aria-hidden="true"
+          className={cn("size-4", userState?.is_favorite && "fill-current text-red-400")}
+        />
+      );
+    case "toggleWatchlist":
+      return userState?.in_watchlist ? (
+        <Check aria-hidden="true" className="size-4" />
+      ) : (
+        <Plus aria-hidden="true" className="size-4" />
+      );
+    case "dismissFromHome":
+      return <X aria-hidden="true" className="size-4" />;
+    case "viewDetails":
+      return <FileText aria-hidden="true" className="size-4" />;
+    case "viewPlayHistory":
+      return <History aria-hidden="true" className="size-4" />;
+    case "refreshMetadata":
+      return (
+        <RefreshCw aria-hidden="true" className={cn("size-4", isRefreshing && "animate-spin")} />
+      );
+    case "editMetadata":
+      return <Pencil aria-hidden="true" className="size-4" />;
+    case "matchItem":
+      return <Search aria-hidden="true" className="size-4" />;
+  }
+}
+
+export function PosterCardFavoriteButton({
+  isFavorite,
+  isPending,
+  onToggle,
+}: {
+  isFavorite: boolean;
+  isPending: boolean;
+  onToggle: () => void;
+}) {
+  const [isAnimating, setIsAnimating] = useState(false);
+  const label = isFavorite ? "Remove from favorites" : "Add to favorites";
+
+  useEffect(() => {
+    if (!isAnimating) return;
+    const timeout = window.setTimeout(() => setIsAnimating(false), 420);
+    return () => window.clearTimeout(timeout);
+  }, [isAnimating]);
+
+  return (
+    <div
+      className="absolute bottom-2.5 left-2.5 z-20"
+      onClick={stopMenuEvent}
+      onPointerDown={stopMenuEvent}
+    >
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={isFavorite}
+        title={label}
+        disabled={isPending}
+        className={cn(
+          mediaItemMenuTriggerClassName("poster"),
+          "relative cursor-pointer overflow-visible disabled:cursor-wait disabled:opacity-70",
+          isFavorite && "text-red-500 hover:text-red-400",
+        )}
+        onClick={() => {
+          if (!isFavorite) setIsAnimating(true);
+          onToggle();
+        }}
+      >
+        {isAnimating && (
+          <span
+            aria-hidden="true"
+            data-testid="favorite-burst"
+            className="absolute top-1/2 left-1/2 size-7 -translate-x-1/2 -translate-y-1/2 animate-ping rounded-full bg-red-500/30 motion-reduce:hidden"
+          />
+        )}
+        <Heart
+          className={cn(
+            "relative size-4 transition-[transform,color,fill] duration-300 ease-out motion-reduce:transition-none",
+            isFavorite && "scale-110 fill-red-500 text-red-500",
+            isAnimating && "scale-125",
+          )}
+        />
+      </button>
+    </div>
+  );
+}
+
 type MetadataAction = "edit" | "match";
 
 export function MetadataActionDialogHost({
@@ -314,6 +432,9 @@ export default function MediaItemMenu({
     showCollectionActions,
     dismissLabel,
   });
+  const showPosterFavorite =
+    variant === "poster" &&
+    model.some((entry) => entry.kind === "action" && entry.key === "toggleFavorite");
 
   const isPending =
     watchedMutation.isPending ||
@@ -324,7 +445,22 @@ export default function MediaItemMenu({
 
   const triggerClassName = mediaItemMenuTriggerClassName(variant);
 
-  async function handleAction(actionKey: Extract<MediaItemMenuEntry, { kind: "action" }>["key"]) {
+  async function handleFavoriteToggle() {
+    if (!currentUserState || favoriteMutation.isPending) return;
+    const wasFavorite = currentUserState.is_favorite;
+    setCurrentUserState((previous) =>
+      previous ? { ...previous, is_favorite: !wasFavorite } : previous,
+    );
+    try {
+      await favoriteMutation.mutateAsync(wasFavorite);
+    } catch {
+      setCurrentUserState((previous) =>
+        previous ? { ...previous, is_favorite: wasFavorite } : previous,
+      );
+    }
+  }
+
+  async function handleAction(actionKey: MediaItemMenuActionKey) {
     switch (actionKey) {
       case "playFromBeginning": {
         if (mediaType === "audiobook") {
@@ -346,9 +482,7 @@ export default function MediaItemMenu({
         return;
       }
       case "toggleFavorite": {
-        if (!currentUserState) return;
-        await favoriteMutation.mutateAsync(currentUserState.is_favorite);
-        setCurrentUserState((prev) => (prev ? { ...prev, is_favorite: !prev.is_favorite } : prev));
+        await handleFavoriteToggle();
         return;
       }
       case "toggleWatchlist": {
@@ -394,6 +528,15 @@ export default function MediaItemMenu({
 
   return (
     <>
+      {showPosterFavorite && currentUserState && (
+        <PosterCardFavoriteButton
+          isFavorite={currentUserState.is_favorite}
+          isPending={favoriteMutation.isPending}
+          onToggle={() => {
+            void handleFavoriteToggle();
+          }}
+        />
+      )}
       <div
         className={cn(
           "absolute z-20",
@@ -413,7 +556,7 @@ export default function MediaItemMenu({
                 <MoreVertical className={variant === "wide" ? "size-5" : "size-4"} />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuContent align="end" className="w-max min-w-0">
               {model.map((entry, index) => {
                 if (entry.kind === "separator") {
                   return <DropdownMenuSeparator key={`separator-${index}`} />;
@@ -427,11 +570,11 @@ export default function MediaItemMenu({
                       void handleAction(entry.key);
                     }}
                   >
-                    {entry.key === "refreshMetadata" && refreshMetadataMutation.isPending ? (
-                      <RefreshCw className="size-4 animate-spin" />
-                    ) : null}
-                    {entry.key === "editMetadata" ? <Pencil className="size-4" /> : null}
-                    {entry.key === "matchItem" ? <Search className="size-4" /> : null}
+                    <MediaItemMenuActionIcon
+                      actionKey={entry.key}
+                      userState={currentUserState}
+                      isRefreshing={refreshMetadataMutation.isPending}
+                    />
                     {entry.label}
                   </DropdownMenuItem>
                 );

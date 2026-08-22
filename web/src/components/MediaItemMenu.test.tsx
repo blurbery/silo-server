@@ -1,13 +1,18 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router";
 import type { ItemDetail } from "@/api/types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildMediaItemMenuModel, MetadataActionDialogHost } from "./MediaItemMenu";
+import MediaItemMenu, { buildMediaItemMenuModel, MetadataActionDialogHost } from "./MediaItemMenu";
 import { mediaItemMenuTriggerClassName } from "./mediaItemMenuTrigger";
 
 const mocks = vi.hoisted(() => ({
   useCatalogItemDetail: vi.fn(),
   editItem: vi.fn(),
   matchItem: vi.fn(),
+  toggleFavorite: vi.fn(),
+  authState: undefined as { user: { role: "admin" | "user" } } | undefined,
 }));
 
 vi.mock("@/hooks/queries/catalogRead", () => ({
@@ -28,10 +33,53 @@ vi.mock("@/components/MatchItemDialog", () => ({
   },
 }));
 
+vi.mock("@/hooks/queries/favorites", () => ({
+  useToggleFavorite: () => ({
+    isPending: false,
+    mutateAsync: (...args: unknown[]) => mocks.toggleFavorite(...args),
+  }),
+}));
+
+vi.mock("@/hooks/queries/watchlist", () => ({
+  useToggleWatchlist: () => ({ isPending: false, mutateAsync: vi.fn() }),
+}));
+
+vi.mock("@/hooks/queries/items", () => ({
+  useRefreshItemMetadata: () => ({ isPending: false, mutate: vi.fn() }),
+  useWatchedStateMutation: () => ({ isPending: false, mutateAsync: vi.fn() }),
+}));
+
+vi.mock("@/hooks/queries/homeDismissals", () => ({
+  useDismissHomeItem: () => ({ isPending: false, mutateAsync: vi.fn() }),
+}));
+
+vi.mock("@/hooks/useAuth", () => ({
+  useOptionalAuth: () => mocks.authState,
+}));
+
+vi.mock("@/hooks/useCurrentProfile", () => ({
+  useCurrentProfile: () => ({ profile: null, hasSelectedProfile: false }),
+}));
+
+vi.mock("@/hooks/useViewTransition", () => ({
+  useViewTransitionNavigate: () => vi.fn(),
+}));
+
+vi.mock("@/playback/watchPlaybackContext", () => ({
+  useWatchPlaybackController: () => ({ startPlayback: vi.fn() }),
+}));
+
+vi.mock("@/components/RefreshMetadataDialog", () => ({
+  default: () => null,
+}));
+
 beforeEach(() => {
   mocks.useCatalogItemDetail.mockReset();
   mocks.editItem.mockReset();
   mocks.matchItem.mockReset();
+  mocks.toggleFavorite.mockReset();
+  mocks.toggleFavorite.mockResolvedValue(undefined);
+  mocks.authState = undefined;
 });
 
 describe("buildMediaItemMenuModel", () => {
@@ -323,9 +371,207 @@ describe("MediaItemMenu trigger visibility", () => {
   it("uses open state and keyboard focus without keeping a mouse-closed card focused", () => {
     const className = mediaItemMenuTriggerClassName();
 
-    expect(className).toContain("md:group-hover/card:opacity-100");
-    expect(className).toContain("md:data-[state=open]:opacity-100");
-    expect(className).toContain("md:focus-visible:opacity-100");
+    expect(className).toContain("pointer-fine:group-hover/card:opacity-100");
+    expect(className).toContain("pointer-fine:data-[state=open]:opacity-100");
+    expect(className).toContain("pointer-fine:focus-visible:opacity-100");
+    expect(className).not.toContain("md:opacity-0");
     expect(className).not.toContain("group-focus-within");
+  });
+
+  it("renders a matching bottom-left favorite control for poster cards", () => {
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    const button = screen.getByRole("button", { name: "Add to favorites" });
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    expect(button.className).toContain("pointer-fine:group-hover/card:opacity-100");
+    expect(button.parentElement?.className).toContain("left-2.5");
+  });
+
+  it("uses matching action icons and sizes the menu to its longest entry", async () => {
+    mocks.authState = { user: { role: "admin" } };
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: true, is_favorite: true, in_watchlist: false }}
+          variant="poster"
+          dismissAction={{ itemId: "movie-1", surface: "continue_watching" }}
+        />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+
+    const menu = screen.getByRole("menu");
+    expect(menu.className).toContain("w-max");
+    expect(menu.className).toContain("min-w-0");
+    expect(menu.className).not.toContain("w-56");
+    for (const item of screen.getAllByRole("menuitem")) {
+      expect(item.querySelector("svg"), item.textContent ?? "menu item").toBeTruthy();
+    }
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Remove from Favorites" })
+        .querySelector(".lucide-heart"),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("menuitem", { name: "Add to Watchlist" }).querySelector(".lucide-plus"),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("menuitem", { name: "Edit Metadata" }).querySelector(".lucide-pencil"),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("menuitem", { name: "Match Item" }).querySelector(".lucide-search"),
+    ).toBeTruthy();
+  });
+
+  it("toggles through the shared favorite mutation and updates the heart immediately", async () => {
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add to favorites" }));
+
+    expect(mocks.toggleFavorite).toHaveBeenCalledWith(false);
+    expect(screen.getByTestId("favorite-burst")).toBeTruthy();
+    await waitFor(() => {
+      const button = screen.getByRole("button", { name: "Remove from favorites" });
+      expect(button.getAttribute("aria-pressed")).toBe("true");
+      expect(button.querySelector("svg")?.getAttribute("class")).toContain("fill-red-500");
+    });
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    expect(screen.getByRole("menuitem", { name: "Remove from Favorites" })).toBeTruthy();
+  });
+
+  it("keeps the poster heart in sync when favorite state changes through the menu", async () => {
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Add to Favorites" }));
+
+    expect(mocks.toggleFavorite).toHaveBeenCalledWith(false);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Remove from favorites" })).toBeTruthy();
+    });
+  });
+
+  it("unfavorites through the heart and updates the matching menu action", async () => {
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: true, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove from favorites" }));
+
+    expect(mocks.toggleFavorite).toHaveBeenCalledWith(true);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Add to favorites" })).toBeTruthy();
+    });
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    expect(screen.getByRole("menuitem", { name: "Add to Favorites" })).toBeTruthy();
+  });
+
+  it("unfavorites through the menu and clears the poster heart", async () => {
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: true, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Remove from Favorites" }));
+
+    expect(mocks.toggleFavorite).toHaveBeenCalledWith(true);
+    await waitFor(() => {
+      const button = screen.getByRole("button", { name: "Add to favorites" });
+      expect(button.getAttribute("aria-pressed")).toBe("false");
+      expect(button.querySelector("svg")?.getAttribute("class")).not.toContain("fill-red-500");
+    });
+  });
+
+  it("rolls the heart back when the favorite request fails", async () => {
+    mocks.toggleFavorite.mockRejectedValueOnce(new Error("request failed"));
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add to favorites" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Add to favorites" })).toBeTruthy();
+    });
+  });
+
+  it("keeps the favorite shortcut off wide cards and collection-disabled menus", () => {
+    const { rerender } = render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="wide"
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Add to favorites" })).toBeNull();
+
+    rerender(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+          showCollectionActions={false}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Add to favorites" })).toBeNull();
   });
 });
