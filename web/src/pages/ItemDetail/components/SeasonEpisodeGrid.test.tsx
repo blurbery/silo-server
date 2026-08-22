@@ -1,42 +1,29 @@
-import { renderToStaticMarkup } from "react-dom/server";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
-import EpisodeCarousel from "./EpisodeCarousel";
-
-const capturedMenuProps: Record<string, unknown>[] = [];
+import SeasonEpisodeGrid from "./SeasonEpisodeGrid";
 
 vi.mock("@/components/MediaItemMenu", () => ({
-  default: (props: Record<string, unknown>) => {
-    capturedMenuProps.push(props);
-    return <div />;
-  },
+  default: () => null,
 }));
 
-vi.mock("@/hooks/useCarouselEmbla", () => ({
-  useCarouselEmbla: () => ({
-    emblaApi: null,
-    emblaRef: { current: null },
-    canScrollPrev: false,
-    canScrollNext: false,
-    scrollPrev: () => {},
-    scrollNext: () => {},
-  }),
+vi.mock("@/hooks/useOverlayPrefs", () => ({
+  useOverlayPrefs: () => ({ prefs: null }),
 }));
 
-describe("EpisodeCarousel", () => {
+describe("SeasonEpisodeGrid", () => {
   it("places the watched circle-check beside the episode label instead of over the artwork", () => {
     render(
       <MemoryRouter>
-        <EpisodeCarousel
-          currentEpisodeNumber={2}
+        <SeasonEpisodeGrid
+          isLoading={false}
           episodes={[
             {
               content_id: "ep-1",
               season_number: 1,
               episode_number: 1,
               title: "Pilot",
-              overview: "",
+              overview: "A beginning.",
               air_date: null,
               runtime: 42,
               still_url: "",
@@ -53,7 +40,7 @@ describe("EpisodeCarousel", () => {
               season_number: 1,
               episode_number: 2,
               title: "Next",
-              overview: "",
+              overview: "Another episode.",
               air_date: null,
               runtime: 43,
               still_url: "",
@@ -76,45 +63,8 @@ describe("EpisodeCarousel", () => {
     expect(episodeLabel.parentElement).toContainElement(watchedIndicator);
     expect(watchedIndicator).toHaveAttribute("data-watched-indicator", "icon-only");
     expect(watchedIndicator.querySelector(".lucide-circle-check")).toBeTruthy();
-    expect(watchedIndicator.closest(".surface-panel-subtle")).toBeNull();
+    expect(watchedIndicator.closest(".media-card-image")).toBeNull();
     expect(screen.getByText("Episode 2").parentElement).not.toContainElement(watchedIndicator);
     expect(screen.getAllByLabelText("Watched")).toHaveLength(1);
-  });
-
-  it("passes partial-progress restart eligibility to episode menus", () => {
-    capturedMenuProps.length = 0;
-
-    renderToStaticMarkup(
-      <MemoryRouter>
-        <EpisodeCarousel
-          currentEpisodeNumber={1}
-          episodes={[
-            {
-              content_id: "ep-1",
-              season_number: 1,
-              episode_number: 1,
-              title: "Pilot",
-              overview: "",
-              air_date: null,
-              runtime: 42,
-              still_url: "",
-              still_thumbhash: "",
-              files: [],
-              user_data: {
-                played: false,
-                position_seconds: 120,
-                duration_seconds: 1800,
-              },
-            },
-          ]}
-        />
-      </MemoryRouter>,
-    );
-
-    expect(capturedMenuProps[0]).toMatchObject({
-      contentId: "ep-1",
-      mediaType: "episode",
-      hasPartialProgress: true,
-    });
   });
 });

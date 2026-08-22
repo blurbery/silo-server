@@ -4,11 +4,13 @@ import {
   DEFAULT_WEB_WATCHED_INDICATOR_STYLE,
   type WebWatchedIndicatorStyle,
 } from "@/lib/watchedIndicator";
+import { cn } from "@/lib/utils";
 
 interface CardWatchedBadgeProps {
   mediaType: ItemDetail["type"];
   played?: boolean;
   style?: WebWatchedIndicatorStyle | null;
+  iconOnly?: boolean;
 }
 
 const STYLE_CLASSES: Record<WebWatchedIndicatorStyle, string> = {
@@ -20,7 +22,25 @@ const STYLE_CLASSES: Record<WebWatchedIndicatorStyle, string> = {
   none: "",
 };
 
-export default function CardWatchedBadge({ mediaType, played, style }: CardWatchedBadgeProps) {
+export function WatchedCheckIndicator({ className }: { className?: string }) {
+  return (
+    <span
+      role="img"
+      aria-label="Watched"
+      data-watched-indicator="icon-only"
+      className={cn("text-muted-foreground inline-flex shrink-0 items-center", className)}
+    >
+      <CircleCheck aria-hidden="true" className="size-4" />
+    </span>
+  );
+}
+
+export default function CardWatchedBadge({
+  mediaType,
+  played,
+  style,
+  iconOnly = false,
+}: CardWatchedBadgeProps) {
   const resolvedStyle = style === undefined ? DEFAULT_WEB_WATCHED_INDICATOR_STYLE : style;
   if (
     !played ||
@@ -29,6 +49,10 @@ export default function CardWatchedBadge({ mediaType, played, style }: CardWatch
     resolvedStyle === "none"
   ) {
     return null;
+  }
+
+  if (iconOnly) {
+    return <WatchedCheckIndicator className="ml-auto" />;
   }
 
   return (

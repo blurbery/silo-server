@@ -311,7 +311,7 @@ Implementation cues:
 - Use `.media-card-image` for consistent rounded corners and surface background placeholder.
 - Hover should slightly scale and brighten, not dramatically lift.
 - Continue-watching cards add a `.progress-bar` at the bottom edge.
-- Watched items show a `.watched-badge` checkmark overlay.
+- Root movie and series cards use `CardWatchedBadge` for the configured watched indicator. Watched episodes place the muted circle-check beside the episode number below the thumbnail.
 
 ### Media Detail Page
 
