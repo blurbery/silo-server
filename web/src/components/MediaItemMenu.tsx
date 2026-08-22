@@ -290,6 +290,7 @@ function CardQuickActionButton({
     clientY: number;
     maxMovement: number;
   } | null>(null);
+  const suppressPointerClickRef = useRef(false);
 
   const activate = useCallback(() => {
     if (isPending) return;
@@ -342,6 +343,15 @@ function CardQuickActionButton({
         }
         if (!pointerStart || pointerStart.pointerId !== event.pointerId) return;
 
+        // A normal browser click follows pointerup. Handle the pointer release
+        // here so carousel swipes can be rejected, then suppress only that
+        // follow-up click. The timeout leaves an unpaired mouse/synthetic click
+        // available as a cross-browser fallback.
+        suppressPointerClickRef.current = true;
+        window.setTimeout(() => {
+          suppressPointerClickRef.current = false;
+        }, 0);
+
         const movement = Math.max(
           pointerStart.maxMovement,
           Math.abs(event.clientX - pointerStart.clientX),
@@ -374,9 +384,11 @@ function CardQuickActionButton({
       }}
       onClick={(event) => {
         stopMenuEvent(event);
-        // Embla consumes the click following a carousel drag. Pointer taps are
-        // handled on pointerup above; detail=0 preserves keyboard/AT activation.
-        if (event.detail === 0) activate();
+        if (suppressPointerClickRef.current) {
+          suppressPointerClickRef.current = false;
+          return;
+        }
+        activate();
       }}
     >
       {isAnimating && (

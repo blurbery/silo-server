@@ -268,7 +268,7 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
           to={card.watchHref}
           onClick={handleWatchClick}
           aria-label={`${card.type === "ebook" ? "Read" : "Play"} ${heading}`}
-          className="bg-primary text-primary-foreground absolute top-1/2 left-1/2 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full opacity-100 shadow-lg transition-all duration-200 hover:scale-110 hover:shadow-xl hover:brightness-110 active:scale-95 pointer-fine:pointer-events-none pointer-fine:opacity-0 pointer-fine:group-hover/media:pointer-events-auto pointer-fine:group-hover/media:opacity-100 pointer-fine:focus-visible:pointer-events-auto pointer-fine:focus-visible:opacity-100"
+          className="media-card-play-trigger bg-primary text-primary-foreground absolute top-1/2 left-1/2 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow-lg transition-all duration-200 hover:scale-110 hover:shadow-xl hover:brightness-110 active:scale-95"
         >
           {card.type === "ebook" ? (
             <BookOpen className="h-5 w-5" />
