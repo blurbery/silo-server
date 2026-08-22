@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   FileText,
@@ -257,7 +257,19 @@ export function PosterCardFavoriteButton({
   onToggle: () => void;
 }) {
   const [isAnimating, setIsAnimating] = useState(false);
+  const pointerStartRef = useRef<{
+    pointerId: number;
+    clientX: number;
+    clientY: number;
+    maxMovement: number;
+  } | null>(null);
   const label = isFavorite ? "Remove from favorites" : "Add to favorites";
+
+  const activateFavorite = useCallback(() => {
+    if (isPending) return;
+    if (!isFavorite) setIsAnimating(true);
+    onToggle();
+  }, [isFavorite, isPending, onToggle]);
 
   useEffect(() => {
     if (!isAnimating) return;
@@ -279,12 +291,65 @@ export function PosterCardFavoriteButton({
         disabled={isPending}
         className={cn(
           mediaItemMenuTriggerClassName("poster"),
-          "relative cursor-pointer overflow-visible disabled:cursor-wait disabled:opacity-70",
+          "relative cursor-pointer overflow-visible disabled:opacity-70",
           isFavorite && "text-red-500 hover:text-red-400",
         )}
-        onClick={() => {
-          if (!isFavorite) setIsAnimating(true);
-          onToggle();
+        onPointerDown={(event) => {
+          if (event.button !== 0) {
+            pointerStartRef.current = null;
+            return;
+          }
+          pointerStartRef.current = {
+            pointerId: event.pointerId,
+            clientX: event.clientX,
+            clientY: event.clientY,
+            maxMovement: 0,
+          };
+          event.currentTarget.setPointerCapture?.(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          const pointerStart = pointerStartRef.current;
+          if (!pointerStart || pointerStart.pointerId !== event.pointerId) return;
+
+          pointerStart.maxMovement = Math.max(
+            pointerStart.maxMovement,
+            Math.abs(event.clientX - pointerStart.clientX),
+            Math.abs(event.clientY - pointerStart.clientY),
+          );
+        }}
+        onPointerUp={(event) => {
+          const pointerStart = pointerStartRef.current;
+          pointerStartRef.current = null;
+          if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+          if (!pointerStart || pointerStart.pointerId !== event.pointerId) return;
+
+          const movement = Math.max(
+            pointerStart.maxMovement,
+            Math.abs(event.clientX - pointerStart.clientX),
+            Math.abs(event.clientY - pointerStart.clientY),
+          );
+          if (movement > 10) return;
+
+          event.preventDefault();
+          event.stopPropagation();
+          activateFavorite();
+        }}
+        onPointerCancel={(event) => {
+          pointerStartRef.current = null;
+          if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+        }}
+        onLostPointerCapture={() => {
+          pointerStartRef.current = null;
+        }}
+        onClick={(event) => {
+          stopMenuEvent(event);
+          // Embla consumes the click following a carousel drag. Pointer taps are
+          // handled on pointerup above; detail=0 preserves keyboard/AT activation.
+          if (event.detail === 0) activateFavorite();
         }}
       >
         {isAnimating && (
@@ -394,6 +459,9 @@ export default function MediaItemMenu({
   const [refreshDialogOpen, setRefreshDialogOpen] = useState(false);
   const [filesDialogOpen, setFilesDialogOpen] = useState(false);
   const [metadataAction, setMetadataAction] = useState<MetadataAction | null>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const lastMenuInteractionRef = useRef<"keyboard" | "pointer" | null>(null);
+  const pointerClosedMenuRef = useRef(false);
 
   useEffect(() => {
     setCurrentUserState(userState);
@@ -550,13 +618,55 @@ export default function MediaItemMenu({
             <MoreVertical className={variant === "wide" ? "size-5" : "size-4"} />
           </button>
         ) : (
-          <DropdownMenu modal={false}>
+          <DropdownMenu
+            modal={false}
+            onOpenChange={(open) => {
+              if (open) {
+                pointerClosedMenuRef.current = false;
+                lastMenuInteractionRef.current = null;
+                return;
+              }
+
+              pointerClosedMenuRef.current = lastMenuInteractionRef.current === "pointer";
+              lastMenuInteractionRef.current = null;
+            }}
+          >
             <DropdownMenuTrigger asChild>
-              <button type="button" aria-label="More actions" className={triggerClassName}>
+              <button
+                ref={menuTriggerRef}
+                type="button"
+                aria-label="More actions"
+                className={triggerClassName}
+                onPointerDown={() => {
+                  lastMenuInteractionRef.current = "pointer";
+                }}
+                onKeyDown={() => {
+                  lastMenuInteractionRef.current = "keyboard";
+                }}
+              >
                 <MoreVertical className={variant === "wide" ? "size-5" : "size-4"} />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-max min-w-0">
+            <DropdownMenuContent
+              align="end"
+              className="w-max min-w-0"
+              onPointerDownOutside={() => {
+                lastMenuInteractionRef.current = "pointer";
+              }}
+              onPointerDownCapture={() => {
+                lastMenuInteractionRef.current = "pointer";
+              }}
+              onKeyDownCapture={() => {
+                lastMenuInteractionRef.current = "keyboard";
+              }}
+              onCloseAutoFocus={(event) => {
+                if (pointerClosedMenuRef.current) {
+                  event.preventDefault();
+                  menuTriggerRef.current?.blur();
+                }
+                pointerClosedMenuRef.current = false;
+              }}
+            >
               {model.map((entry, index) => {
                 if (entry.kind === "separator") {
                   return <DropdownMenuSeparator key={`separator-${index}`} />;

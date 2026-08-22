@@ -378,6 +378,79 @@ describe("MediaItemMenu trigger visibility", () => {
     expect(className).not.toContain("group-focus-within");
   });
 
+  it("drops pointer focus when the trigger closes the menu so hover exit can hide it", async () => {
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    await userEvent.click(trigger);
+    expect(screen.getByRole("menu")).toBeTruthy();
+
+    await userEvent.click(trigger);
+
+    await waitFor(() => {
+      expect(trigger.getAttribute("data-state")).toBe("closed");
+      expect(document.activeElement).not.toBe(trigger);
+    });
+  });
+
+  it("returns focus to the trigger when a keyboard user closes the menu", async () => {
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    trigger.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByRole("menu")).toBeTruthy();
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(trigger);
+    });
+  });
+
+  it("still returns keyboard focus after a cancelled pointer press inside the menu", async () => {
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    trigger.focus();
+    await userEvent.keyboard("{Enter}");
+    const menuItem = screen.getByRole("menuitem", { name: "Mark Watched" });
+
+    fireEvent.pointerDown(menuItem, { pointerId: 3, button: 0 });
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(trigger);
+    });
+  });
+
   it("renders a matching bottom-left favorite control for poster cards", () => {
     render(
       <MemoryRouter>
@@ -393,6 +466,8 @@ describe("MediaItemMenu trigger visibility", () => {
     const button = screen.getByRole("button", { name: "Add to favorites" });
     expect(button.getAttribute("aria-pressed")).toBe("false");
     expect(button.className).toContain("pointer-fine:group-hover/card:opacity-100");
+    expect(button.className).toContain("cursor-pointer");
+    expect(button.className).not.toContain("cursor-wait");
     expect(button.parentElement?.className).toContain("left-2.5");
   });
 
@@ -447,8 +522,9 @@ describe("MediaItemMenu trigger visibility", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Add to favorites" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add to favorites" }));
 
+    expect(mocks.toggleFavorite).toHaveBeenCalledTimes(1);
     expect(mocks.toggleFavorite).toHaveBeenCalledWith(false);
     expect(screen.getByTestId("favorite-burst")).toBeTruthy();
     await waitFor(() => {
@@ -458,6 +534,50 @@ describe("MediaItemMenu trigger visibility", () => {
     });
     await userEvent.click(screen.getByRole("button", { name: "More actions" }));
     expect(screen.getByRole("menuitem", { name: "Remove from Favorites" })).toBeTruthy();
+  });
+
+  it("toggles on a short pointer release even when a carousel consumes the click", async () => {
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    const button = screen.getByRole("button", { name: "Add to favorites" });
+    fireEvent.pointerDown(button, { pointerId: 7, button: 0, clientX: 120, clientY: 240 });
+    fireEvent.pointerUp(button, { pointerId: 7, button: 0, clientX: 128, clientY: 248 });
+
+    expect(mocks.toggleFavorite).toHaveBeenCalledTimes(1);
+    expect(mocks.toggleFavorite).toHaveBeenCalledWith(false);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Remove from favorites" })).toBeTruthy();
+    });
+  });
+
+  it("does not favorite when a swipe returns near its starting point", () => {
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="poster"
+        />
+      </MemoryRouter>,
+    );
+
+    const button = screen.getByRole("button", { name: "Add to favorites" });
+    fireEvent.pointerDown(button, { pointerId: 9, button: 0, clientX: 120, clientY: 240 });
+    fireEvent.pointerMove(button, { pointerId: 9, clientX: 144, clientY: 240 });
+    fireEvent.pointerUp(button, { pointerId: 9, button: 0, clientX: 124, clientY: 240 });
+
+    expect(mocks.toggleFavorite).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Add to favorites" })).toBeTruthy();
   });
 
   it("keeps the poster heart in sync when favorite state changes through the menu", async () => {
