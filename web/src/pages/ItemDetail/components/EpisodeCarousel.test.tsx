@@ -81,7 +81,7 @@ describe("EpisodeCarousel", () => {
     expect(screen.getAllByLabelText("Watched")).toHaveLength(1);
   });
 
-  it("passes partial-progress restart eligibility to episode menus", () => {
+  it("enables the watched shortcut and passes restart eligibility to episode menus", () => {
     capturedMenuProps.length = 0;
 
     renderToStaticMarkup(
@@ -114,6 +114,8 @@ describe("EpisodeCarousel", () => {
     expect(capturedMenuProps[0]).toMatchObject({
       contentId: "ep-1",
       mediaType: "episode",
+      showCollectionActions: false,
+      showWatchedShortcut: true,
       hasPartialProgress: true,
     });
   });

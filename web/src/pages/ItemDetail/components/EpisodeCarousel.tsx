@@ -142,6 +142,7 @@ export default function EpisodeCarousel({
                         }
                         variant="wide"
                         showCollectionActions={false}
+                        showWatchedShortcut
                         hasPartialProgress={progress != null}
                       />
                     </div>
