@@ -169,6 +169,7 @@ type metadataEpisodeRepo interface {
 	GetByID(ctx context.Context, contentID string) (*models.Episode, error)
 	GetBySeriesAndNumber(ctx context.Context, seriesID string, season, episode int) (*models.Episode, error)
 	ListBySeriesAndAirDates(ctx context.Context, seriesID string, airDates []string) (map[string][]*models.Episode, error)
+	ListBySeriesAndNumbers(ctx context.Context, seriesID string, seasonNumbers, episodeNumbers []int32) ([]*models.Episode, error)
 	ListBySeries(ctx context.Context, seriesID string) ([]*models.Episode, error)
 	ListBySeasonID(ctx context.Context, seasonID string) ([]*models.Episode, error)
 	Upsert(ctx context.Context, ep *models.Episode) error
@@ -180,8 +181,23 @@ type metadataEpisodeRepo interface {
 type metadataSeasonRepo interface {
 	GetByID(ctx context.Context, contentID string) (*models.Season, error)
 	GetBySeriesAndNumber(ctx context.Context, seriesID string, seasonNum int) (*models.Season, error)
+	ListBySeriesAndNumbers(ctx context.Context, seriesID string, seasonNumbers []int32) ([]*models.Season, error)
 	Upsert(ctx context.Context, s *models.Season) error
 	BulkUpsert(ctx context.Context, seasons []*models.Season) error
+}
+
+type metadataSeasonLocalizationRepo interface {
+	Get(ctx context.Context, seasonContentID, language string) (*models.SeasonLocalization, error)
+	GetBySeasonIDs(ctx context.Context, seasonIDs []string, language string) (map[string]*models.SeasonLocalization, error)
+	Upsert(ctx context.Context, loc *models.SeasonLocalization) error
+	BulkUpsert(ctx context.Context, localizations []*models.SeasonLocalization) error
+}
+
+type metadataEpisodeLocalizationRepo interface {
+	Get(ctx context.Context, episodeContentID, language string) (*models.EpisodeLocalization, error)
+	GetByEpisodeIDs(ctx context.Context, episodeIDs []string, language string) (map[string]*models.EpisodeLocalization, error)
+	Upsert(ctx context.Context, loc *models.EpisodeLocalization) error
+	BulkUpsert(ctx context.Context, localizations []*models.EpisodeLocalization) error
 }
 
 // metadataFolderRepo defines folder repository methods used by MetadataService
@@ -393,8 +409,8 @@ type MetadataService struct {
 	folderRepo              metadataFolderRepo
 	itemLocalizationRepo    *catalog.MediaItemLocalizationRepository
 	itemAliasRepo           *catalog.ItemAliasRepository
-	seasonLocalizationRepo  *catalog.SeasonLocalizationRepository
-	episodeLocalizationRepo *catalog.EpisodeLocalizationRepository
+	seasonLocalizationRepo  metadataSeasonLocalizationRepo
+	episodeLocalizationRepo metadataEpisodeLocalizationRepo
 	autoTranslator          AutoTranslator // optional; set via SetAutoTranslator
 	personRepo              *catalog.PersonRepository
 	videoRepo               metadataVideoRepo
@@ -4366,6 +4382,10 @@ func providerChainContentLevel(contentType string) string {
 	}
 }
 
+func fitsPostgresInteger(value int) bool {
+	return value >= -1<<31 && value <= 1<<31-1
+}
+
 // persistSeasonsAndEpisodes creates/updates seasons and episodes in the DB.
 func (s *MetadataService) persistSeasonsAndEpisodes(
 	ctx context.Context,
@@ -4456,127 +4476,313 @@ func (s *MetadataService) persistSeasonsAndEpisodes(
 		})
 	}
 
-	// Phase 1: Upsert explicit seasons.
-	if len(seasons) > 0 {
+	type preparedSeasonWrite struct {
+		model         *models.Season
+		provider      SeasonResult
+		existing      *models.Season
+		artworkLocked bool
+	}
+	type preparedEpisodeWrite struct {
+		model    *models.Episode
+		provider EpisodeResult
+	}
+
+	// One targeted read replaces the per-season point lookups without loading
+	// unrelated seasons during a scoped refresh. If it fails, each phase falls
+	// back to the original point-read behavior so a transient prefetch failure
+	// cannot turn existing rows into new identities.
+	existingSeasons := make(map[int]*models.Season)
+	seasonsPrefetched := false
+	if len(seasons) > 0 || len(episodes) > 0 {
+		seasonNumberSet := make(map[int]struct{}, len(seasons)+len(episodes))
+		seasonNumbers := make([]int32, 0, len(seasons)+len(episodes))
+		seasonNumbersValid := true
+		addSeasonNumber := func(seasonNumber int) {
+			if _, ok := seasonNumberSet[seasonNumber]; ok {
+				return
+			}
+			seasonNumberSet[seasonNumber] = struct{}{}
+			if !fitsPostgresInteger(seasonNumber) {
+				seasonNumbersValid = false
+				return
+			}
+			seasonNumbers = append(seasonNumbers, int32(seasonNumber))
+		}
 		for _, season := range seasons {
-			existingSeason, err := s.seasonRepo.GetBySeriesAndNumber(ctx, seriesID, season.SeasonNumber)
-			if err != nil && !errors.Is(err, catalog.ErrSeasonNotFound) {
-				slog.WarnContext(ctx, "metadata: failed to load season before upsert", "component", "metadata",
-					"series_id", seriesID, "season", season.SeasonNumber, "error", err)
-				continue
-			}
-			providerSeason := season
-			providerSeason.PosterPath, providerSeason.PosterSourcePath = splitProviderImagePath(season.PosterPath)
-			if existingSeason != nil && isCanonicalWrite {
-				mergedSeason := seasonResultFromModel(existingSeason)
-				MergeSeasonResult(&providerSeason, &mergedSeason, mergeMode)
-				if imagesLocked && (existingSeason.PosterPath != "" || existingSeason.PosterSourcePath != "") {
-					mergedSeason.PosterPath = existingSeason.PosterPath
-					mergedSeason.PosterSourcePath = existingSeason.PosterSourcePath
-					mergedSeason.PosterThumbhash = existingSeason.PosterThumbhash
-				} else {
-					// preserveCachedArtwork sees the raw provider path so a local
-					// file:// source still routes into *_source_path here.
-					nextPath, nextThumbhash, nextSourcePath := preserveCachedArtwork(
-						season.PosterPath,
-						season.PosterThumbhash,
-						existingSeason.PosterPath,
-						existingSeason.PosterSourcePath,
-						existingSeason.PosterThumbhash,
-					)
-					mergedSeason.PosterPath = nextPath
-					mergedSeason.PosterThumbhash = nextThumbhash
-					mergedSeason.PosterSourcePath = nextSourcePath
-				}
-				providerSeason = mergedSeason
-			}
-			dbSeason := &models.Season{
-				SeriesID:                seriesID,
-				SeasonNumber:            providerSeason.SeasonNumber,
-				Title:                   providerSeason.Title,
-				DefaultMetadataLanguage: canonicalLanguage,
-				Overview:                providerSeason.Overview,
-				PosterPath:              providerSeason.PosterPath,
-				PosterSourcePath:        providerSeason.PosterSourcePath,
-				PosterThumbhash:         providerSeason.PosterThumbhash,
-				MetadataSource:          "provider",
-			}
-			if existingSeason != nil {
-				dbSeason.ContentID = existingSeason.ContentID
-				if !isCanonicalWrite {
-					dbSeason.Title = existingSeason.Title
-					dbSeason.Overview = existingSeason.Overview
-					dbSeason.PosterPath = existingSeason.PosterPath
-					dbSeason.PosterSourcePath = existingSeason.PosterSourcePath
-					dbSeason.PosterThumbhash = existingSeason.PosterThumbhash
-					dbSeason.DefaultMetadataLanguage = existingSeason.DefaultMetadataLanguage
-				}
+			addSeasonNumber(season.SeasonNumber)
+		}
+		for _, episode := range episodes {
+			addSeasonNumber(episode.SeasonNumber)
+		}
+
+		if seasonNumbersValid {
+			storedSeasons, err := s.seasonRepo.ListBySeriesAndNumbers(ctx, seriesID, seasonNumbers)
+			if err != nil {
+				slog.WarnContext(ctx, "metadata: failed to prefetch seasons before bulk upsert", "component", "metadata",
+					"series_id", seriesID, "error", err)
 			} else {
-				sid, genErr := deriveSeasonContentID(seriesID, providerSeason.SeasonNumber)
-				if genErr != nil {
-					slog.WarnContext(ctx, "metadata: failed to generate season id", "component", "metadata",
-						"series_id", seriesID, "season", season.SeasonNumber, "error", genErr)
-					continue
-				}
-				dbSeason.ContentID = sid
-			}
-			if providerSeason.AirDate != "" {
-				if t, parseErr := time.Parse("2006-01-02", providerSeason.AirDate); parseErr == nil {
-					dbSeason.AirDate = &t
+				seasonsPrefetched = true
+				for _, storedSeason := range storedSeasons {
+					if storedSeason != nil {
+						existingSeasons[storedSeason.SeasonNumber] = storedSeason
+					}
 				}
 			}
-			// An artwork-only season (poster but no season.nfo) would otherwise
-			// persist a blank title and then be skipped by fallback synthesis
-			// (which only fills not-yet-existing rows), so default it to the same
-			// "Season N"/"Specials" label synthesis uses. Graceful degradation.
-			if dbSeason.Title == "" {
-				dbSeason.Title = fallbackSeasonTitle(dbSeason.SeasonNumber)
+		}
+	}
+	loadSeason := func(seasonNumber int, forcePointRead bool) (*models.Season, error) {
+		if seasonsPrefetched && !forcePointRead {
+			if storedSeason := existingSeasons[seasonNumber]; storedSeason != nil {
+				return storedSeason, nil
 			}
-			if err := s.seasonRepo.Upsert(ctx, dbSeason); err != nil {
-				slog.WarnContext(ctx, "metadata: failed to upsert season", "component", "metadata",
-					"series_id", seriesID, "season", season.SeasonNumber, "error", err)
-				continue
+			return nil, catalog.ErrSeasonNotFound
+		}
+		return s.seasonRepo.GetBySeriesAndNumber(ctx, seriesID, seasonNumber)
+	}
+
+	prepareExplicitSeason := func(season SeasonResult, forcePointRead bool) (preparedSeasonWrite, bool) {
+		existingSeason, err := loadSeason(season.SeasonNumber, forcePointRead)
+		if err != nil && !errors.Is(err, catalog.ErrSeasonNotFound) {
+			slog.WarnContext(ctx, "metadata: failed to load season before upsert", "component", "metadata",
+				"series_id", seriesID, "season", season.SeasonNumber, "error", err)
+			return preparedSeasonWrite{}, false
+		}
+		providerSeason := season
+		providerSeason.PosterPath, providerSeason.PosterSourcePath = splitProviderImagePath(season.PosterPath)
+		if existingSeason != nil && isCanonicalWrite {
+			mergedSeason := seasonResultFromModel(existingSeason)
+			MergeSeasonResult(&providerSeason, &mergedSeason, mergeMode)
+			if imagesLocked && (existingSeason.PosterPath != "" || existingSeason.PosterSourcePath != "") {
+				mergedSeason.PosterPath = existingSeason.PosterPath
+				mergedSeason.PosterSourcePath = existingSeason.PosterSourcePath
+				mergedSeason.PosterThumbhash = existingSeason.PosterThumbhash
+			} else {
+				// preserveCachedArtwork sees the raw provider path so a local
+				// file:// source still routes into *_source_path here.
+				nextPath, nextThumbhash, nextSourcePath := preserveCachedArtwork(
+					season.PosterPath,
+					season.PosterThumbhash,
+					existingSeason.PosterPath,
+					existingSeason.PosterSourcePath,
+					existingSeason.PosterThumbhash,
+				)
+				mergedSeason.PosterPath = nextPath
+				mergedSeason.PosterThumbhash = nextThumbhash
+				mergedSeason.PosterSourcePath = nextSourcePath
 			}
-			seasonIDs[dbSeason.SeasonNumber] = dbSeason.ContentID
-			if !imagesLocked || existingSeason == nil || (existingSeason.PosterPath == "" && existingSeason.PosterSourcePath == "") {
-				addSeasonImageJob(dbSeason)
+			providerSeason = mergedSeason
+		}
+		dbSeason := &models.Season{
+			SeriesID:                seriesID,
+			SeasonNumber:            providerSeason.SeasonNumber,
+			Title:                   providerSeason.Title,
+			DefaultMetadataLanguage: canonicalLanguage,
+			Overview:                providerSeason.Overview,
+			PosterPath:              providerSeason.PosterPath,
+			PosterSourcePath:        providerSeason.PosterSourcePath,
+			PosterThumbhash:         providerSeason.PosterThumbhash,
+			MetadataSource:          "provider",
+		}
+		if existingSeason != nil {
+			dbSeason.ContentID = existingSeason.ContentID
+			if !isCanonicalWrite {
+				dbSeason.Title = existingSeason.Title
+				dbSeason.Overview = existingSeason.Overview
+				dbSeason.PosterPath = existingSeason.PosterPath
+				dbSeason.PosterSourcePath = existingSeason.PosterSourcePath
+				dbSeason.PosterThumbhash = existingSeason.PosterThumbhash
+				dbSeason.DefaultMetadataLanguage = existingSeason.DefaultMetadataLanguage
 			}
-			if !isCanonicalWrite && s.seasonLocalizationRepo != nil {
-				existingLoc, locErr := s.seasonLocalizationRepo.Get(ctx, dbSeason.ContentID, language)
-				if locErr != nil {
-					slog.WarnContext(ctx, "metadata: failed to load season localization", "component", "metadata",
-						"series_id", seriesID, "season", season.SeasonNumber, "error", locErr)
+		} else {
+			sid, genErr := deriveSeasonContentID(seriesID, providerSeason.SeasonNumber)
+			if genErr != nil {
+				slog.WarnContext(ctx, "metadata: failed to generate season id", "component", "metadata",
+					"series_id", seriesID, "season", season.SeasonNumber, "error", genErr)
+				return preparedSeasonWrite{}, false
+			}
+			dbSeason.ContentID = sid
+		}
+		if providerSeason.AirDate != "" {
+			if t, parseErr := time.Parse("2006-01-02", providerSeason.AirDate); parseErr == nil {
+				dbSeason.AirDate = &t
+			}
+		}
+		// An artwork-only season (poster but no season.nfo) would otherwise
+		// persist a blank title and then be skipped by fallback synthesis.
+		if dbSeason.Title == "" {
+			dbSeason.Title = fallbackSeasonTitle(dbSeason.SeasonNumber)
+		}
+		return preparedSeasonWrite{model: dbSeason, provider: providerSeason, existing: existingSeason}, true
+	}
+
+	finishExplicitSeasonSequential := func(write preparedSeasonWrite) {
+		dbSeason := write.model
+		seasonIDs[dbSeason.SeasonNumber] = dbSeason.ContentID
+		if !imagesLocked || write.existing == nil ||
+			(write.existing.PosterPath == "" && write.existing.PosterSourcePath == "") {
+			addSeasonImageJob(dbSeason)
+		}
+		if !isCanonicalWrite && s.seasonLocalizationRepo != nil {
+			existingLoc, locErr := s.seasonLocalizationRepo.Get(ctx, dbSeason.ContentID, language)
+			if locErr != nil {
+				slog.WarnContext(ctx, "metadata: failed to load season localization", "component", "metadata",
+					"series_id", seriesID, "season", dbSeason.SeasonNumber, "error", locErr)
+			}
+			loc := buildSeasonLocalizationRecord(
+				existingLoc,
+				dbSeason.ContentID,
+				language,
+				write.provider,
+				mergeMode,
+			)
+			if err := s.seasonLocalizationRepo.Upsert(ctx, loc); err != nil {
+				slog.WarnContext(ctx, "metadata: failed to upsert season localization", "component", "metadata",
+					"series_id", seriesID, "season", dbSeason.SeasonNumber, "error", err)
+			} else {
+				addSeasonLocalizationImageJob(dbSeason, loc)
+			}
+		}
+	}
+
+	upsertExplicitModel := func(write preparedSeasonWrite) bool {
+		if err := s.seasonRepo.Upsert(ctx, write.model); err != nil {
+			slog.WarnContext(ctx, "metadata: failed to upsert season", "component", "metadata",
+				"series_id", seriesID, "season", write.model.SeasonNumber, "error", err)
+			return false
+		}
+		return true
+	}
+
+	finishExplicitSeasons := func(writes []preparedSeasonWrite) {
+		for _, write := range writes {
+			seasonIDs[write.model.SeasonNumber] = write.model.ContentID
+		}
+
+		var localizations []*models.SeasonLocalization
+		localizationPersisted := make([]bool, len(writes))
+		if !isCanonicalWrite && s.seasonLocalizationRepo != nil && len(writes) > 0 {
+			seasonContentIDs := make([]string, len(writes))
+			for i, write := range writes {
+				seasonContentIDs[i] = write.model.ContentID
+			}
+			existingLocalizations, err := s.seasonLocalizationRepo.GetBySeasonIDs(ctx, seasonContentIDs, language)
+			if err != nil {
+				slog.WarnContext(ctx, "metadata: failed to batch load season localizations; falling back to point reads",
+					"component", "metadata", "series_id", seriesID, "count", len(writes), "error", err)
+				existingLocalizations = make(map[string]*models.SeasonLocalization, len(writes))
+				for _, write := range writes {
+					existingLoc, locErr := s.seasonLocalizationRepo.Get(ctx, write.model.ContentID, language)
+					if locErr != nil {
+						slog.WarnContext(ctx, "metadata: failed to load season localization", "component", "metadata",
+							"series_id", seriesID, "season", write.model.SeasonNumber, "error", locErr)
+						continue
+					}
+					existingLocalizations[write.model.ContentID] = existingLoc
 				}
-				loc := buildSeasonLocalizationRecord(
-					existingLoc,
-					dbSeason.ContentID,
+			}
+
+			localizations = make([]*models.SeasonLocalization, len(writes))
+			for i, write := range writes {
+				localizations[i] = buildSeasonLocalizationRecord(
+					existingLocalizations[write.model.ContentID],
+					write.model.ContentID,
 					language,
-					providerSeason,
+					write.provider,
 					mergeMode,
 				)
-				if err := s.seasonLocalizationRepo.Upsert(ctx, loc); err != nil {
-					slog.WarnContext(ctx, "metadata: failed to upsert season localization", "component", "metadata",
-						"series_id", seriesID, "season", season.SeasonNumber, "error", err)
+			}
+			if err := s.seasonLocalizationRepo.BulkUpsert(ctx, localizations); err != nil {
+				slog.WarnContext(ctx, "metadata: failed to bulk upsert season localizations; falling back to single-row writes",
+					"component", "metadata", "series_id", seriesID, "count", len(localizations), "error", err)
+				for i, loc := range localizations {
+					if err := s.seasonLocalizationRepo.Upsert(ctx, loc); err != nil {
+						slog.WarnContext(ctx, "metadata: failed to upsert season localization", "component", "metadata",
+							"series_id", seriesID, "season", writes[i].model.SeasonNumber, "error", err)
+						continue
+					}
+					localizationPersisted[i] = true
+				}
+			} else {
+				for i := range localizationPersisted {
+					localizationPersisted[i] = true
+				}
+			}
+		}
+
+		for i, write := range writes {
+			if !imagesLocked || write.existing == nil ||
+				(write.existing.PosterPath == "" && write.existing.PosterSourcePath == "") {
+				addSeasonImageJob(write.model)
+			}
+			if localizationPersisted[i] {
+				addSeasonLocalizationImageJob(write.model, localizations[i])
+			}
+		}
+	}
+
+	// Phase 1: Upsert explicit seasons. Duplicate natural keys are processed
+	// sequentially because PostgreSQL cannot affect one conflict row twice in a
+	// single INSERT, and the original path allowed last-writer behavior.
+	if len(seasons) > 0 {
+		seenSeasonNumbers := make(map[int]struct{}, len(seasons))
+		hasDuplicateSeason := false
+		for _, season := range seasons {
+			if _, ok := seenSeasonNumbers[season.SeasonNumber]; ok {
+				hasDuplicateSeason = true
+				break
+			}
+			seenSeasonNumbers[season.SeasonNumber] = struct{}{}
+		}
+
+		if hasDuplicateSeason {
+			for _, season := range seasons {
+				if write, ok := prepareExplicitSeason(season, true); ok {
+					if upsertExplicitModel(write) {
+						finishExplicitSeasonSequential(write)
+					}
+				}
+			}
+		} else {
+			writes := make([]preparedSeasonWrite, 0, len(seasons))
+			modelsToPersist := make([]*models.Season, 0, len(seasons))
+			for _, season := range seasons {
+				if write, ok := prepareExplicitSeason(season, false); ok {
+					writes = append(writes, write)
+					modelsToPersist = append(modelsToPersist, write.model)
+				}
+			}
+			if len(modelsToPersist) > 0 {
+				if err := s.seasonRepo.BulkUpsert(ctx, modelsToPersist); err != nil {
+					slog.WarnContext(ctx, "metadata: failed to bulk upsert seasons; falling back to single-row writes",
+						"component", "metadata", "series_id", seriesID, "count", len(modelsToPersist), "error", err)
+					successfulWrites := make([]preparedSeasonWrite, 0, len(writes))
+					for _, write := range writes {
+						if upsertExplicitModel(write) {
+							successfulWrites = append(successfulWrites, write)
+						}
+					}
+					finishExplicitSeasons(successfulWrites)
 				} else {
-					addSeasonLocalizationImageJob(dbSeason, loc)
+					finishExplicitSeasons(writes)
 				}
 			}
 		}
 	}
 
-	// Phase 2: Identify implicit seasons referenced by episodes but not returned
-	// explicitly by the provider.
+	// Phase 2: Persist implicit seasons referenced by episodes but absent from
+	// the successfully persisted explicit-season map. Keeping this as a second
+	// batch preserves the existing retry opportunity when an explicit write
+	// fails but an episode still references that season.
 	if len(episodes) > 0 {
 		implicitSeen := make(map[int]bool)
+		writes := make([]preparedSeasonWrite, 0)
+		modelsToPersist := make([]*models.Season, 0)
 		for _, ep := range episodes {
 			if _, ok := seasonIDs[ep.SeasonNumber]; ok || implicitSeen[ep.SeasonNumber] {
 				continue
 			}
 			implicitSeen[ep.SeasonNumber] = true
-			title := fmt.Sprintf("Season %d", ep.SeasonNumber)
-			if ep.SeasonNumber == 0 {
-				title = "Specials"
-			}
+			title := fallbackSeasonTitle(ep.SeasonNumber)
 			seasonModel := &models.Season{
 				SeriesID:                seriesID,
 				SeasonNumber:            ep.SeasonNumber,
@@ -4585,7 +4791,7 @@ func (s *MetadataService) persistSeasonsAndEpisodes(
 				MetadataSource:          "provider",
 			}
 			seasonArtworkLocked := false
-			if existingSeason, err := s.seasonRepo.GetBySeriesAndNumber(ctx, seriesID, ep.SeasonNumber); err == nil {
+			if existingSeason, err := loadSeason(ep.SeasonNumber, false); err == nil && existingSeason != nil {
 				seasonModel.ContentID = existingSeason.ContentID
 				seasonModel.DefaultMetadataLanguage = existingSeason.DefaultMetadataLanguage
 				if isCanonicalWrite {
@@ -4627,26 +4833,104 @@ func (s *MetadataService) persistSeasonsAndEpisodes(
 				}
 				seasonModel.ContentID = sid
 			}
-			if err := s.seasonRepo.Upsert(ctx, seasonModel); err != nil {
-				slog.WarnContext(ctx, "metadata: failed to upsert implicit season", "component", "metadata",
-					"series_id", seriesID, "season", ep.SeasonNumber, "error", err)
-				continue
+			write := preparedSeasonWrite{model: seasonModel, artworkLocked: seasonArtworkLocked}
+			writes = append(writes, write)
+			modelsToPersist = append(modelsToPersist, seasonModel)
+		}
+
+		finishImplicitSeason := func(write preparedSeasonWrite) {
+			seasonIDs[write.model.SeasonNumber] = write.model.ContentID
+			if !write.artworkLocked {
+				addSeasonImageJob(write.model)
 			}
-			seasonIDs[seasonModel.SeasonNumber] = seasonModel.ContentID
-			if !seasonArtworkLocked {
-				addSeasonImageJob(seasonModel)
+		}
+		upsertImplicitOne := func(write preparedSeasonWrite) {
+			if err := s.seasonRepo.Upsert(ctx, write.model); err != nil {
+				slog.WarnContext(ctx, "metadata: failed to upsert implicit season", "component", "metadata",
+					"series_id", seriesID, "season", write.model.SeasonNumber, "error", err)
+				return
+			}
+			finishImplicitSeason(write)
+		}
+
+		if len(modelsToPersist) > 0 {
+			if err := s.seasonRepo.BulkUpsert(ctx, modelsToPersist); err != nil {
+				slog.WarnContext(ctx, "metadata: failed to bulk upsert implicit seasons; falling back to single-row writes",
+					"component", "metadata", "series_id", seriesID, "count", len(modelsToPersist), "error", err)
+				for _, write := range writes {
+					upsertImplicitOne(write)
+				}
+			} else {
+				for _, write := range writes {
+					finishImplicitSeason(write)
+				}
 			}
 		}
 	}
 
-	// Phase 3: Upsert episodes.
+	// Phase 3: Prefetch the requested episode rows, including provider-only rows
+	// without episode_libraries membership, then persist the prepared models as
+	// one transaction-backed batch.
 	if len(episodes) > 0 {
+		seenEpisodeKeys := make(map[episodeResultKey]struct{}, len(episodes))
+		seasonNumbers := make([]int32, 0, len(episodes))
+		episodeNumbers := make([]int32, 0, len(episodes))
+		hasDuplicateEpisode := false
+		episodeNumbersValid := true
 		for _, ep := range episodes {
-			existingEpisode, err := s.episodeRepo.GetBySeriesAndNumber(ctx, seriesID, ep.SeasonNumber, ep.EpisodeNumber)
+			key := episodeResultKey{seasonNumber: ep.SeasonNumber, episodeNumber: ep.EpisodeNumber}
+			if _, ok := seenEpisodeKeys[key]; ok {
+				hasDuplicateEpisode = true
+				continue
+			}
+			seenEpisodeKeys[key] = struct{}{}
+			if !fitsPostgresInteger(ep.SeasonNumber) || !fitsPostgresInteger(ep.EpisodeNumber) {
+				episodeNumbersValid = false
+				continue
+			}
+			seasonNumbers = append(seasonNumbers, int32(ep.SeasonNumber))
+			episodeNumbers = append(episodeNumbers, int32(ep.EpisodeNumber))
+		}
+
+		existingEpisodes := make(map[episodeResultKey]*models.Episode)
+		episodesPrefetched := false
+		if !hasDuplicateEpisode && episodeNumbersValid {
+			storedEpisodes, err := s.episodeRepo.ListBySeriesAndNumbers(ctx, seriesID, seasonNumbers, episodeNumbers)
+			if err != nil {
+				slog.WarnContext(ctx, "metadata: failed to prefetch episodes before bulk upsert", "component", "metadata",
+					"series_id", seriesID, "error", err)
+			} else {
+				episodesPrefetched = true
+				for _, storedEpisode := range storedEpisodes {
+					if storedEpisode != nil {
+						existingEpisodes[episodeResultKey{
+							seasonNumber:  storedEpisode.SeasonNumber,
+							episodeNumber: storedEpisode.EpisodeNumber,
+						}] = storedEpisode
+					}
+				}
+			}
+		}
+		loadEpisode := func(ep EpisodeResult, forcePointRead bool) (*models.Episode, error) {
+			if episodesPrefetched && !forcePointRead {
+				storedEpisode := existingEpisodes[episodeResultKey{
+					seasonNumber:  ep.SeasonNumber,
+					episodeNumber: ep.EpisodeNumber,
+				}]
+				if storedEpisode != nil {
+					return storedEpisode, nil
+				}
+				return nil, catalog.ErrEpisodeNotFound
+			}
+			return s.episodeRepo.GetBySeriesAndNumber(ctx, seriesID, ep.SeasonNumber, ep.EpisodeNumber)
+		}
+
+		prepareEpisode := func(ep EpisodeResult, forcePointRead bool) (preparedEpisodeWrite, bool) {
+			existingEpisode, err := loadEpisode(ep, forcePointRead)
 			if err != nil && !errors.Is(err, catalog.ErrEpisodeNotFound) {
 				slog.WarnContext(ctx, "metadata: failed to load episode before upsert", "component", "metadata",
 					"series_id", seriesID, "season", ep.SeasonNumber, "episode", ep.EpisodeNumber, "error", err)
-				continue
+				return preparedEpisodeWrite{}, false
 			}
 			providerEpisode := ep
 			providerEpisode.StillPath, providerEpisode.StillSourcePath = splitProviderImagePath(ep.StillPath)
@@ -4700,7 +4984,7 @@ func (s *MetadataService) persistSeasonsAndEpisodes(
 					slog.WarnContext(ctx, "metadata: failed to generate episode id", "component", "metadata",
 						"series_id", seriesID, "season", ep.SeasonNumber,
 						"episode", ep.EpisodeNumber, "error", genErr)
-					continue
+					return preparedEpisodeWrite{}, false
 				}
 				dbEp.ContentID = eid
 			}
@@ -4717,41 +5001,126 @@ func (s *MetadataService) persistSeasonsAndEpisodes(
 				v := providerEpisode.Ratings.IMDB
 				dbEp.RatingIMDB = &v
 			}
-			// An artwork-only episode (a -thumb.jpg but no episode .nfo) would
-			// otherwise persist a blank title and then be skipped by fallback
-			// synthesis, so default it to the same "Episode N" label synthesis
-			// uses. Graceful degradation for partially curated libraries.
 			if dbEp.Title == "" {
 				dbEp.Title = fallbackEpisodeTitle(dbEp.EpisodeNumber)
 			}
-			if err := s.episodeRepo.Upsert(ctx, dbEp); err != nil {
-				slog.WarnContext(ctx, "metadata: failed to upsert episode", "component", "metadata",
-					"series_id", seriesID, "season", ep.SeasonNumber,
-					"episode", ep.EpisodeNumber, "error", err)
-				continue
-			}
-			addEpisodeImageJob(dbEp)
+			return preparedEpisodeWrite{model: dbEp, provider: providerEpisode}, true
+		}
+
+		finishEpisodeSequential := func(write preparedEpisodeWrite) {
+			addEpisodeImageJob(write.model)
 			if !isCanonicalWrite && s.episodeLocalizationRepo != nil {
-				existingLoc, locErr := s.episodeLocalizationRepo.Get(ctx, dbEp.ContentID, language)
+				existingLoc, locErr := s.episodeLocalizationRepo.Get(ctx, write.model.ContentID, language)
 				if locErr != nil {
 					slog.WarnContext(ctx, "metadata: failed to load episode localization", "component", "metadata",
-						"series_id", seriesID, "season", ep.SeasonNumber,
-						"episode", ep.EpisodeNumber, "error", locErr)
+						"series_id", seriesID, "season", write.model.SeasonNumber,
+						"episode", write.model.EpisodeNumber, "error", locErr)
 				}
 				if err := s.episodeLocalizationRepo.Upsert(ctx, buildEpisodeLocalizationRecord(
 					existingLoc,
-					dbEp.ContentID,
+					write.model.ContentID,
 					language,
-					providerEpisode,
+					write.provider,
 					mergeMode,
 				)); err != nil {
 					slog.WarnContext(ctx, "metadata: failed to upsert episode localization", "component", "metadata",
-						"series_id", seriesID, "season", ep.SeasonNumber,
-						"episode", ep.EpisodeNumber, "error", err)
+						"series_id", seriesID, "season", write.model.SeasonNumber,
+						"episode", write.model.EpisodeNumber, "error", err)
 				}
 			}
 		}
+		upsertEpisodeModel := func(write preparedEpisodeWrite) bool {
+			if err := s.episodeRepo.Upsert(ctx, write.model); err != nil {
+				slog.WarnContext(ctx, "metadata: failed to upsert episode", "component", "metadata",
+					"series_id", seriesID, "season", write.model.SeasonNumber,
+					"episode", write.model.EpisodeNumber, "error", err)
+				return false
+			}
+			return true
+		}
+		finishEpisodes := func(writes []preparedEpisodeWrite) {
+			if !isCanonicalWrite && s.episodeLocalizationRepo != nil && len(writes) > 0 {
+				episodeContentIDs := make([]string, len(writes))
+				for i, write := range writes {
+					episodeContentIDs[i] = write.model.ContentID
+				}
+				existingLocalizations, err := s.episodeLocalizationRepo.GetByEpisodeIDs(ctx, episodeContentIDs, language)
+				if err != nil {
+					slog.WarnContext(ctx, "metadata: failed to batch load episode localizations; falling back to point reads",
+						"component", "metadata", "series_id", seriesID, "count", len(writes), "error", err)
+					existingLocalizations = make(map[string]*models.EpisodeLocalization, len(writes))
+					for _, write := range writes {
+						existingLoc, locErr := s.episodeLocalizationRepo.Get(ctx, write.model.ContentID, language)
+						if locErr != nil {
+							slog.WarnContext(ctx, "metadata: failed to load episode localization", "component", "metadata",
+								"series_id", seriesID, "season", write.model.SeasonNumber,
+								"episode", write.model.EpisodeNumber, "error", locErr)
+							continue
+						}
+						existingLocalizations[write.model.ContentID] = existingLoc
+					}
+				}
 
+				localizations := make([]*models.EpisodeLocalization, len(writes))
+				for i, write := range writes {
+					localizations[i] = buildEpisodeLocalizationRecord(
+						existingLocalizations[write.model.ContentID],
+						write.model.ContentID,
+						language,
+						write.provider,
+						mergeMode,
+					)
+				}
+				if err := s.episodeLocalizationRepo.BulkUpsert(ctx, localizations); err != nil {
+					slog.WarnContext(ctx, "metadata: failed to bulk upsert episode localizations; falling back to single-row writes",
+						"component", "metadata", "series_id", seriesID, "count", len(localizations), "error", err)
+					for i, loc := range localizations {
+						if err := s.episodeLocalizationRepo.Upsert(ctx, loc); err != nil {
+							slog.WarnContext(ctx, "metadata: failed to upsert episode localization", "component", "metadata",
+								"series_id", seriesID, "season", writes[i].model.SeasonNumber,
+								"episode", writes[i].model.EpisodeNumber, "error", err)
+						}
+					}
+				}
+			}
+			for _, write := range writes {
+				addEpisodeImageJob(write.model)
+			}
+		}
+
+		if hasDuplicateEpisode {
+			for _, ep := range episodes {
+				if write, ok := prepareEpisode(ep, true); ok {
+					if upsertEpisodeModel(write) {
+						finishEpisodeSequential(write)
+					}
+				}
+			}
+		} else {
+			writes := make([]preparedEpisodeWrite, 0, len(episodes))
+			modelsToPersist := make([]*models.Episode, 0, len(episodes))
+			for _, ep := range episodes {
+				if write, ok := prepareEpisode(ep, false); ok {
+					writes = append(writes, write)
+					modelsToPersist = append(modelsToPersist, write.model)
+				}
+			}
+			if len(modelsToPersist) > 0 {
+				if err := s.episodeRepo.BulkUpsert(ctx, seriesID, modelsToPersist); err != nil {
+					slog.WarnContext(ctx, "metadata: failed to bulk upsert episodes; falling back to single-row writes",
+						"component", "metadata", "series_id", seriesID, "count", len(modelsToPersist), "error", err)
+					successfulWrites := make([]preparedEpisodeWrite, 0, len(writes))
+					for _, write := range writes {
+						if upsertEpisodeModel(write) {
+							successfulWrites = append(successfulWrites, write)
+						}
+					}
+					finishEpisodes(successfulWrites)
+				} else {
+					finishEpisodes(writes)
+				}
+			}
+		}
 	}
 
 	s.enqueueSeriesChildImages(ctx, seriesID, imageJobs)
