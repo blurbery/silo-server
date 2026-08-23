@@ -434,7 +434,7 @@ func TestPersistSeasonsAndEpisodes_LocalizedRefreshUsesBoundedBulkCalls(t *testi
 		episodes[i] = EpisodeResult{
 			SeasonNumber:  1,
 			EpisodeNumber: i + 1,
-			Title:         "Episode localise",
+			Title:         "Localized episode",
 		}
 	}
 	service.persistSeasonsAndEpisodes(
