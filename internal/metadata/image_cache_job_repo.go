@@ -769,7 +769,7 @@ func (r *ImageCacheJobRepository) DeleteSucceededBefore(ctx context.Context, bef
 
 const (
 	imageCacheDiscoverySurfaceCount = 10
-	imageCacheBackdropPathColumn     = "backdrop_path"
+	imageCacheBackdropPathColumn    = "backdrop_path"
 )
 
 func (r *ImageCacheJobRepository) EnqueueExistingProviderArtwork(ctx context.Context, cursor imageCacheDiscoveryCursor, limit int) (imageCacheDiscoveryPage, error) {
