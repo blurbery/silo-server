@@ -877,16 +877,23 @@ func (r *ImageCacheJobRepository) EnqueueExistingProviderArtwork(ctx context.Con
 }
 
 func imageCacheDiscoverySourceQuery(cursor imageCacheDiscoveryCursor, limit int) (string, []any) {
-	providerFilter := `LIKE '%://%' AND lower(%[1]s) NOT LIKE ALL (@nonProviderSchemes)`
-	uncachedFilter := `(%[1]s LIKE '%://%' OR coalesce(%[1]s, '') = '')`
+	providerFilter := func(column string) string {
+		return column + ` LIKE '%://%' AND lower(` + column + `) NOT LIKE ALL (@nonProviderSchemes)`
+	}
+	uncachedFilter := func(column string) string {
+		return `(` + column + ` LIKE '%://%' OR coalesce(` + column + `, '') = '')`
+	}
+	imageTypes := [...]string{ImageCacheImagePoster, ImageCacheImageBackdrop, ImageCacheImageLogo}
+	sourceColumns := [...]string{"poster_source_path", "backdrop_source_path", "logo_source_path"}
+	pathColumns := [...]string{"poster_path", "backdrop_path", "logo_path"}
 	textArgs := []any{limit, cursor.Key}
 	localizedArgs := []any{limit, cursor.Key, cursor.Subkey}
 
 	switch cursor.Surface {
 	case 0, 1, 2:
-		imageType := []string{ImageCacheImagePoster, ImageCacheImageBackdrop, ImageCacheImageLogo}[cursor.Surface]
-		sourceColumn := []string{"poster_source_path", "backdrop_source_path", "logo_source_path"}[cursor.Surface]
-		pathColumn := []string{"poster_path", "backdrop_path", "logo_path"}[cursor.Surface]
+		imageType := imageTypes[cursor.Surface]
+		sourceColumn := sourceColumns[cursor.Surface]
+		pathColumn := pathColumns[cursor.Surface]
 		return fmt.Sprintf(`
 			SELECT '%s'::text AS image_type, 'item'::text AS target_type,
 			       mi.content_id AS target_content_id, ''::text AS target_language,
@@ -900,12 +907,12 @@ func imageCacheDiscoverySourceQuery(cursor imageCacheDiscoveryCursor, limit int)
 			  AND %s
 			ORDER BY mi.content_id
 			LIMIT $1
-		`, imageType, sourceColumn, sourceColumn, fmt.Sprintf(providerFilter, "mi."+sourceColumn), fmt.Sprintf(uncachedFilter, "mi."+pathColumn)), textArgs
+		`, imageType, sourceColumn, sourceColumn, providerFilter("mi."+sourceColumn), uncachedFilter("mi."+pathColumn)), textArgs
 	case 3, 4, 5:
 		index := cursor.Surface - 3
-		imageType := []string{ImageCacheImagePoster, ImageCacheImageBackdrop, ImageCacheImageLogo}[index]
-		sourceColumn := []string{"poster_source_path", "backdrop_source_path", "logo_source_path"}[index]
-		pathColumn := []string{"poster_path", "backdrop_path", "logo_path"}[index]
+		imageType := imageTypes[index]
+		sourceColumn := sourceColumns[index]
+		pathColumn := pathColumns[index]
 		return fmt.Sprintf(`
 			SELECT '%s'::text AS image_type, 'item_localization'::text AS target_type,
 			       loc.content_id AS target_content_id, loc.language AS target_language,
@@ -920,7 +927,7 @@ func imageCacheDiscoverySourceQuery(cursor imageCacheDiscoveryCursor, limit int)
 			  AND %s
 			ORDER BY loc.content_id, loc.language
 			LIMIT $1
-		`, imageType, sourceColumn, sourceColumn, fmt.Sprintf(providerFilter, "loc."+sourceColumn), fmt.Sprintf(uncachedFilter, "loc."+pathColumn)), localizedArgs
+		`, imageType, sourceColumn, sourceColumn, providerFilter("loc."+sourceColumn), uncachedFilter("loc."+pathColumn)), localizedArgs
 	case 6:
 		return fmt.Sprintf(`
 			SELECT 'poster'::text AS image_type, 'season'::text AS target_type,
@@ -936,7 +943,7 @@ func imageCacheDiscoverySourceQuery(cursor imageCacheDiscoveryCursor, limit int)
 			  AND %s
 			ORDER BY s.content_id
 			LIMIT $1
-		`, fmt.Sprintf(providerFilter, "s.poster_source_path"), fmt.Sprintf(uncachedFilter, "s.poster_path")), textArgs
+		`, providerFilter("s.poster_source_path"), uncachedFilter("s.poster_path")), textArgs
 	case 7:
 		return fmt.Sprintf(`
 			SELECT 'poster'::text AS image_type, 'season_localization'::text AS target_type,
@@ -953,7 +960,7 @@ func imageCacheDiscoverySourceQuery(cursor imageCacheDiscoveryCursor, limit int)
 			  AND %s
 			ORDER BY loc.season_content_id, loc.language
 			LIMIT $1
-		`, fmt.Sprintf(providerFilter, "loc.poster_source_path"), fmt.Sprintf(uncachedFilter, "loc.poster_path")), localizedArgs
+		`, providerFilter("loc.poster_source_path"), uncachedFilter("loc.poster_path")), localizedArgs
 	case 8:
 		return fmt.Sprintf(`
 			SELECT 'still'::text AS image_type, 'episode'::text AS target_type,
@@ -969,7 +976,7 @@ func imageCacheDiscoverySourceQuery(cursor imageCacheDiscoveryCursor, limit int)
 			  AND %s
 			ORDER BY e.content_id
 			LIMIT $1
-		`, fmt.Sprintf(providerFilter, "e.still_source_path"), fmt.Sprintf(uncachedFilter, "e.still_path")), textArgs
+		`, providerFilter("e.still_source_path"), uncachedFilter("e.still_path")), textArgs
 	case 9:
 		return fmt.Sprintf(`
 			SELECT 'profile'::text AS image_type, 'person'::text AS target_type,
@@ -984,7 +991,7 @@ func imageCacheDiscoverySourceQuery(cursor imageCacheDiscoveryCursor, limit int)
 			  AND %s
 			ORDER BY p.id
 			LIMIT $1
-		`, fmt.Sprintf(providerFilter, "p.photo_source_path"), fmt.Sprintf(uncachedFilter, "p.photo_path")), []any{limit, cursor.NumericKey}
+		`, providerFilter("p.photo_source_path"), uncachedFilter("p.photo_path")), []any{limit, cursor.NumericKey}
 	default:
 		return `SELECT NULL WHERE false`, []any{limit}
 	}

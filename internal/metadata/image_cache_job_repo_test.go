@@ -146,6 +146,9 @@ func TestImageCacheDiscoverySurfacesUseBoundedNativeKeyPages(t *testing.T) {
 		if strings.Contains(strings.ToUpper(query), "UNION") {
 			t.Fatalf("surface %d query rebuilds a cross-surface union", surface)
 		}
+		if strings.Contains(query, "%!") || !strings.Contains(query, "LIKE '%://%'") {
+			t.Fatalf("surface %d query has a malformed provider-source predicate", surface)
+		}
 		if len(args) < 2 || args[0] != 1000 {
 			t.Fatalf("surface %d args = %#v, want page limit and native cursor", surface, args)
 		}
