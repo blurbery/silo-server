@@ -136,6 +136,34 @@ func TestNormalizeImageCacheJobInputKeepsLanguageAndDefaultsAttribution(t *testi
 	}
 }
 
+func TestImageCacheDiscoverySurfacesUseBoundedNativeKeyPages(t *testing.T) {
+	for surface := 0; surface < imageCacheDiscoverySurfaceCount; surface++ {
+		cursor := imageCacheDiscoveryCursor{Surface: surface, Key: "content-10", Subkey: "fr", NumericKey: 10}
+		query, args := imageCacheDiscoverySourceQuery(cursor, 1000)
+		if !strings.Contains(query, "LIMIT $1") {
+			t.Fatalf("surface %d query is not page-bounded", surface)
+		}
+		if strings.Contains(strings.ToUpper(query), "UNION") {
+			t.Fatalf("surface %d query rebuilds a cross-surface union", surface)
+		}
+		if strings.Contains(query, "%!") || !strings.Contains(query, "LIKE '%://%'") {
+			t.Fatalf("surface %d query has a malformed provider-source predicate", surface)
+		}
+		if len(args) < 2 || args[0] != 1000 {
+			t.Fatalf("surface %d args = %#v, want page limit and native cursor", surface, args)
+		}
+	}
+
+	localizedQuery, localizedArgs := imageCacheDiscoverySourceQuery(imageCacheDiscoveryCursor{Surface: 3}, 1000)
+	if !strings.Contains(localizedQuery, "loc.language > $3") || len(localizedArgs) != 3 {
+		t.Fatalf("localized discovery does not use its composite primary key: args=%#v", localizedArgs)
+	}
+	personQuery, personArgs := imageCacheDiscoverySourceQuery(imageCacheDiscoveryCursor{Surface: 9, NumericKey: 41}, 1000)
+	if !strings.Contains(personQuery, "p.id > $2") || len(personArgs) != 2 || personArgs[1] != int64(41) {
+		t.Fatalf("person discovery does not preserve its numeric cursor: args=%#v", personArgs)
+	}
+}
+
 func TestImageCacheProviderIDFromSourceDoesNotUseURLSchemeAsProvider(t *testing.T) {
 	if got := imageCacheProviderIDFromSource("https://image.tmdb.org/t/p/original/a.jpg", "tmdb"); got != "tmdb" {
 		t.Fatalf("provider from HTTP source with fallback = %q, want tmdb", got)
