@@ -40,7 +40,7 @@ export default function PageBack({
       type="button"
       aria-label={label}
       onClick={goBack}
-      className={`glass text-foreground hover:bg-accent ${position} z-20 flex items-center justify-center rounded-full p-1.5 shadow-md transition-colors`}
+      className={`glass detail-action-hover detail-action-hover-accent text-foreground ${position} z-20 flex items-center justify-center rounded-full p-1.5 shadow-md`}
     >
       <ChevronLeft className="size-5" />
     </button>

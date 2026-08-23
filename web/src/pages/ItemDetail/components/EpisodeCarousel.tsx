@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import MediaItemMenu from "@/components/MediaItemMenu";
 import type { EpisodeNavigationState } from "../itemDetailLayout";
 import { useCarouselEmbla } from "@/hooks/useCarouselEmbla";
+import { usePrefetchCatalogItemDetail } from "@/hooks/queries/catalogRead";
 
 interface EpisodeCarouselProps {
   episodes: EpisodeListItem[];
@@ -23,6 +24,7 @@ export default function EpisodeCarousel({
   const currentEpisodeIndex = episodes.findIndex(
     (episode) => episode.episode_number === currentEpisodeNumber,
   );
+  const prefetchEpisodeDetail = usePrefetchCatalogItemDetail();
   const { emblaApi, emblaRef, canScrollPrev, canScrollNext, scrollPrev, scrollNext } =
     useCarouselEmbla({
       options: {
@@ -76,7 +78,12 @@ export default function EpisodeCarousel({
                   data-episode={ep.episode_number}
                   className="embla__slide shrink-0"
                 >
-                  <div className="group/card w-[240px]">
+                  <div
+                    className="group/card w-[240px]"
+                    onMouseEnter={() => prefetchEpisodeDetail(ep.content_id)}
+                    onFocus={() => prefetchEpisodeDetail(ep.content_id)}
+                    onTouchStart={() => prefetchEpisodeDetail(ep.content_id)}
+                  >
                     <div className="relative">
                       <Link
                         to={`/item/${ep.content_id}`}
