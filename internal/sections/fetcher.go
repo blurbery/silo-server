@@ -2423,13 +2423,12 @@ func buildRecentlyAddedSingleLibraryQuery(s ResolvedSection, cfgFilters SectionC
 	}
 
 	if len(filter.DisabledLibraryIDs) > 0 {
-		placeholders := make([]string, len(filter.DisabledLibraryIDs))
-		for i, id := range filter.DisabledLibraryIDs {
-			placeholders[i] = fmt.Sprintf("$%d", argIdx)
-			args = append(args, id)
-			argIdx++
-		}
-		conditions = append(conditions, fmt.Sprintf("mil.media_folder_id NOT IN (%s)", strings.Join(placeholders, ", ")))
+		conditions = append(conditions, fmt.Sprintf(
+			"NOT EXISTS (SELECT 1 FROM media_item_libraries mil_scope_out WHERE mil_scope_out.content_id = mi.content_id AND mil_scope_out.media_folder_id = ANY($%d))",
+			argIdx,
+		))
+		args = append(args, append([]int(nil), filter.DisabledLibraryIDs...))
+		argIdx++
 	}
 
 	applyConfigTypeFilter("mi", cfgFilters.FilterType, &conditions, &args, &argIdx)

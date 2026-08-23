@@ -142,6 +142,13 @@ func appendLibraryAccessConditions(keyColumn string, filter AccessFilter, condit
 	*conditions = append(*conditions, libraryAccessConditions(keyColumn, allowedIdx, disabledIdx)...)
 }
 
+// ApplyLibraryAccessFilter appends the canonical item-level library allow/deny
+// predicates for keyColumn. It is exported for query builders outside the
+// catalog package that must enforce the same dual-membership invariant.
+func ApplyLibraryAccessFilter(keyColumn string, filter AccessFilter, conditions *[]string, args *[]any, argIdx *int) {
+	appendLibraryAccessConditions(keyColumn, filter, conditions, args, argIdx)
+}
+
 // ApplySectionAccessFilter applies non-library access constraints to section queries.
 func ApplySectionAccessFilter(alias string, filter AccessFilter, conditions *[]string, args *[]any, argIdx *int) {
 	applyAccessFilter(alias, filter, conditions, args, argIdx)
