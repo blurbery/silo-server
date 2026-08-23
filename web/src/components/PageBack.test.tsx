@@ -94,6 +94,8 @@ describe("PageBack", () => {
     const button = screen.getByRole("button", { name: "Go back" });
     expect(button).toHaveClass(
       "glass",
+      "detail-action-hover",
+      "detail-action-hover-accent",
       "absolute",
       "top-4",
       "left-2",
@@ -101,6 +103,7 @@ describe("PageBack", () => {
       "rounded-full",
       "p-1.5",
     );
+    expect(button).not.toHaveClass("hover:bg-accent", "transition-colors");
   });
 
   it("pins to the viewport on lg+ when floating is set", () => {

@@ -56,7 +56,8 @@ import SubtitlesPopover from "./SubtitlesPopover";
 const responsivePrimaryActionClass =
   "transform-gpu transition-transform duration-150 motion-safe:hover:scale-[1.02] motion-safe:active:scale-[0.98] motion-reduce:transition-none";
 const responsivePlayActionClass = `${responsivePrimaryActionClass} hover:bg-primary`;
-const responsiveWatchedActionClass = `${responsivePrimaryActionClass} hover:bg-[color-mix(in_srgb,var(--surface)_40%,transparent)]`;
+const responsiveWatchedActionClass = responsivePrimaryActionClass;
+const compositedGlassHoverClass = "detail-action-hover detail-action-hover-surface transition-none";
 
 interface ActionBarProps {
   contentId?: string;
@@ -337,7 +338,7 @@ export default function ActionBar({
         {/* ── Watched toggle ─────────────────────────────────── */}
         {watchedLabel && onToggleWatched && (
           <Button
-            variant="glass"
+            variant="glass-static"
             onClick={onToggleWatched}
             disabled={isUpdatingWatched}
             className={`${responsiveWatchedActionClass} h-11 cursor-pointer rounded-full px-5 text-[14px] font-semibold`}
@@ -350,11 +351,11 @@ export default function ActionBar({
         {/* ── Icon action buttons ────────────────────────────── */}
         {onToggleFavorite && (
           <Button
-            variant="glass"
+            variant="glass-static"
             size="icon-lg"
             onClick={onToggleFavorite}
             title={isFavorite ? "Unfavorite" : "Favorite"}
-            className="size-11 cursor-pointer rounded-full"
+            className={`${compositedGlassHoverClass} size-11 cursor-pointer rounded-full`}
           >
             <Heart
               className={`size-[18px] transition-colors ${isFavorite ? "fill-current text-red-400" : ""}`}
@@ -369,10 +370,10 @@ export default function ActionBar({
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
             <Button
-              variant="glass"
+              variant="glass-static"
               size="icon-lg"
               title="More"
-              className="size-11 cursor-pointer rounded-full"
+              className={`${compositedGlassHoverClass} size-11 cursor-pointer rounded-full`}
             >
               <MoreVertical className="size-[18px]" />
             </Button>

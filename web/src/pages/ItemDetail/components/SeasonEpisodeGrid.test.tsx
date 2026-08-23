@@ -1,9 +1,15 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SeasonEpisodeGrid from "./SeasonEpisodeGrid";
 
 const capturedMenuProps: Record<string, unknown>[] = [];
+const prefetchEpisodeDetail = vi.hoisted(() => vi.fn());
+
+vi.mock("@/hooks/queries/catalogRead", () => ({
+  usePrefetchCatalogItemDetail: () => prefetchEpisodeDetail,
+}));
 
 vi.mock("@/components/MediaItemMenu", () => ({
   default: (props: Record<string, unknown>) => {
@@ -19,6 +25,35 @@ vi.mock("@/hooks/useOverlayPrefs", () => ({
 describe("SeasonEpisodeGrid", () => {
   beforeEach(() => {
     capturedMenuProps.length = 0;
+    prefetchEpisodeDetail.mockClear();
+  });
+
+  it("prefetches episode details when a card shows navigation intent", async () => {
+    render(
+      <MemoryRouter>
+        <SeasonEpisodeGrid
+          isLoading={false}
+          episodes={[
+            {
+              content_id: "ep-1",
+              season_number: 1,
+              episode_number: 1,
+              title: "Pilot",
+              overview: "A beginning.",
+              air_date: null,
+              runtime: 42,
+              still_url: "",
+              still_thumbhash: "",
+              files: [],
+            },
+          ]}
+        />
+      </MemoryRouter>,
+    );
+
+    await userEvent.hover(screen.getAllByRole("link", { name: /Pilot/ })[0]!);
+
+    expect(prefetchEpisodeDetail).toHaveBeenCalledWith("ep-1");
   });
 
   it("enables the watched shortcut on episode cards", () => {

@@ -63,7 +63,7 @@ describe("ActionBar", () => {
     },
   );
 
-  it("keeps the watched action on a compositor-only hover path and shows pointers", () => {
+  it("keeps detail action feedback on compositor-only hover paths", () => {
     renderActionBar({
       watchedLabel: "Mark Watched",
       onToggleWatched: () => {},
@@ -72,14 +72,29 @@ describe("ActionBar", () => {
 
     expect(screen.getByRole("button", { name: "Mark Watched" })).toHaveClass(
       "cursor-pointer",
+      "glass-subtle",
       "transform-gpu",
       "transition-transform",
-      "hover:bg-[color-mix(in_srgb,var(--surface)_40%,transparent)]",
       "motion-safe:hover:scale-[1.02]",
       "motion-reduce:transition-none",
     );
-    expect(screen.getByTitle("Favorite")).toHaveClass("cursor-pointer");
-    expect(screen.getByTitle("More")).toHaveClass("cursor-pointer");
+    expect(screen.getByRole("button", { name: "Mark Watched" })).not.toHaveClass(
+      "hover:bg-[color-mix(in_srgb,var(--surface)_40%,transparent)]",
+    );
+    expect(screen.getByTitle("Favorite")).toHaveClass(
+      "cursor-pointer",
+      "glass-subtle",
+      "detail-action-hover",
+      "detail-action-hover-surface",
+      "transition-none",
+    );
+    expect(screen.getByTitle("More")).toHaveClass(
+      "cursor-pointer",
+      "glass-subtle",
+      "detail-action-hover",
+      "detail-action-hover-surface",
+      "transition-none",
+    );
   });
 
   it("uses matching icons and longest-entry sizing in the detail menu", async () => {

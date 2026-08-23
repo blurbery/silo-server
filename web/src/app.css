@@ -1015,6 +1015,36 @@
     box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.05);
   }
 
+  /* Preserve glass-control hover color while fading a composited overlay
+     instead of repainting the backdrop-filtered element on every frame. */
+  .detail-action-hover {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+  }
+  .detail-action-hover::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background: var(--detail-action-hover-color);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--duration-fast) var(--ease-default);
+    will-change: opacity;
+  }
+  .detail-action-hover:hover::before {
+    opacity: 1;
+  }
+  .detail-action-hover-surface {
+    /* 25% surface over the existing 40% glass equals the previous 55% hover. */
+    --detail-action-hover-color: color-mix(in srgb, var(--surface) 25%, transparent);
+  }
+  .detail-action-hover-accent {
+    --detail-action-hover-color: var(--accent);
+  }
+
   /* Less-transparent glass for small chips that sit over busy cover art
      (manga count/status pills) so the label stays legible. */
   .glass-chip {
