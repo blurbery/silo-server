@@ -14,6 +14,8 @@ import (
 	"github.com/Silo-Server/silo-server/internal/models"
 )
 
+const browseSortRecentlyAdded = "recently_added"
+
 // BrowseFilters represents all supported filter, sort, and pagination parameters
 // for the /items browse endpoint.
 type BrowseFilters struct {
@@ -459,7 +461,7 @@ func (r *BrowseRepository) buildBrowsePlan(filters BrowseFilters) (browseQueryPl
 	}
 
 	// Library access control: restrict to user's accessible libraries.
-	needsLibJoin := filters.LibraryID > 0 || filters.LibraryIDs != nil || filters.Sort == "recently_added"
+	needsLibJoin := filters.LibraryID > 0 || filters.LibraryIDs != nil || filters.Sort == browseSortRecentlyAdded
 	needsPersonJoin := filters.PersonID > 0
 	// When filtering by exactly one library and no person join, each
 	// content_id matches at most one mil row, so the GROUP BY usually added
@@ -1540,7 +1542,7 @@ func buildOrderByPlan(sort, order string, snapshot *time.Time, argIdx int, singl
 			direction,
 			direction,
 		), nil
-	case "recently_added":
+	case browseSortRecentlyAdded:
 		// Without GROUP BY (single-library filter), reference mil.first_seen_at
 		// directly so the planner can drive the order from
 		// idx_item_libraries_folder_seen_content instead of materializing
