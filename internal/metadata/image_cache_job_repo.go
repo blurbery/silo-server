@@ -767,10 +767,10 @@ func (r *ImageCacheJobRepository) DeleteSucceededBefore(ctx context.Context, bef
 	return int(tag.RowsAffected()), nil
 }
 
-const (
-	imageCacheDiscoverySurfaceCount = 10
-	imageCacheBackdropPathColumn    = "backdrop_path"
-)
+const imageCacheDiscoverySurfaceCount = 10
+const imageCachePosterPathColumn = "poster_path"
+const imageCacheBackdropPathColumn = "backdrop_path"
+const imageCacheLogoPathColumn = "logo_path"
 
 func (r *ImageCacheJobRepository) EnqueueExistingProviderArtwork(ctx context.Context, cursor imageCacheDiscoveryCursor, limit int) (imageCacheDiscoveryPage, error) {
 	page := imageCacheDiscoveryPage{Next: cursor}
@@ -888,7 +888,7 @@ func imageCacheDiscoverySourceQuery(cursor imageCacheDiscoveryCursor, limit int)
 	}
 	imageTypes := [...]string{ImageCacheImagePoster, ImageCacheImageBackdrop, ImageCacheImageLogo}
 	sourceColumns := [...]string{"poster_source_path", "backdrop_source_path", "logo_source_path"}
-	pathColumns := [...]string{"poster_path", imageCacheBackdropPathColumn, "logo_path"}
+	pathColumns := [...]string{imageCachePosterPathColumn, imageCacheBackdropPathColumn, imageCacheLogoPathColumn}
 	textArgs := []any{limit, cursor.Key}
 	localizedArgs := []any{limit, cursor.Key, cursor.Subkey}
 
