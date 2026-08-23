@@ -158,8 +158,13 @@ interface VideoPlayerProps {
   watchTogetherConnection?: WatchTogetherRoomConnectionResult;
 }
 
-/** Preload hls.js eagerly so it's cached before the first transcode. */
-const hlsPromise: Promise<typeof HlsType> = import("hls.js").then((m) => m.default);
+let hlsPromise: Promise<typeof HlsType> | null = null;
+
+/** Load hls.js once, only when a non-native HLS stream needs it. */
+function loadHls() {
+  hlsPromise ??= import("hls.js").then((module) => module.default);
+  return hlsPromise;
+}
 const EXIT_PROGRESS_FLUSH_TIMEOUT_MS = 1_000;
 const FIREFOX_COMPATIBILITY_FALLBACK_DELAY_MS = 8_000;
 
@@ -1432,9 +1437,6 @@ export function VideoPlayer({
 
       if (isHlsStream) {
         try {
-          const Hls = await hlsPromise;
-          if (destroyed || hlsStartupGuardRef.current?.hasFailed()) return;
-
           // Honor the delivery capability this client advertised to the
           // planner. Safari's exact HEVC/HDR evidence comes from its native
           // media element, so routing the resulting plan through hls.js/MSE
@@ -1446,7 +1448,13 @@ export function VideoPlayer({
               attemptAutoplayWhenReady();
             };
             video.addEventListener("loadedmetadata", nativeHLSMetadataHandler, { once: true });
-          } else if (Hls.isSupported()) {
+            return;
+          }
+
+          const Hls = await loadHls();
+          if (destroyed || hlsStartupGuardRef.current?.hasFailed()) return;
+
+          if (Hls.isSupported()) {
             const maxBufferLength = plannedBitrateKbps >= 25000 ? 60 : 120;
             const retryingLoadPolicy = {
               maxTimeToFirstByteMs: 45000,
