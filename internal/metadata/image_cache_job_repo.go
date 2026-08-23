@@ -791,34 +791,7 @@ func (r *ImageCacheJobRepository) EnqueueExistingProviderArtwork(ctx context.Con
 	// This avoids rebuilding and sorting the union of the full catalog for every
 	// page. The explicit collation on the job key is required for PostgreSQL to
 	// use an indexed job lookup when source IDs use C collation.
-	sourceQuery, args := imageCacheDiscoverySourceQuery(cursor, limit)
-	query := strings.ReplaceAll(fmt.Sprintf(`
-		WITH source_page AS (
-			%s
-		), scanned AS (
-			SELECT c.*,
-			       (j.id IS NULL
-			        OR j.source_path IS DISTINCT FROM c.source_path
-			        OR j.status = 'succeeded'
-			        OR (j.status = 'failed' AND j.next_attempt_at <= NOW())) AS eligible
-			FROM source_page c
-			LEFT JOIN LATERAL (
-				SELECT j.id, j.source_path, j.status, j.next_attempt_at
-				FROM metadata_image_cache_jobs j
-				WHERE j.target_type = c.target_type
-				  AND j.target_content_id = c.target_content_id COLLATE "default"
-				  AND j.image_type = c.image_type
-				  AND j.target_language = c.target_language
-				LIMIT 1
-			) j ON true
-		)
-		SELECT image_type, target_type, target_content_id, target_language, series_id, source_path,
-		       content_type, season_number, episode_number,
-		       COALESCE(tmdb_id, ''), COALESCE(tvdb_id, ''), COALESCE(imdb_id, ''),
-		       cursor_key, cursor_subkey, cursor_number, eligible
-		FROM scanned
-		ORDER BY cursor_number, cursor_key, cursor_subkey
-	`, sourceQuery), "@nonProviderSchemes", nonProviderImageSchemesSQL)
+	query, args := imageCacheDiscoveryQuery(cursor, limit)
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return page, fmt.Errorf("discovering existing provider artwork surface %d: %w", cursor.Surface, err)
@@ -879,6 +852,38 @@ func (r *ImageCacheJobRepository) EnqueueExistingProviderArtwork(ctx context.Con
 	return page, nil
 }
 
+func imageCacheDiscoveryQuery(cursor imageCacheDiscoveryCursor, limit int) (string, []any) {
+	sourceQuery, args := imageCacheDiscoverySourceQuery(cursor, limit)
+	query := strings.ReplaceAll(fmt.Sprintf(`
+		WITH source_page AS (
+			%s
+		), scanned AS (
+			SELECT c.*,
+			       (j.id IS NULL
+			        OR j.source_path IS DISTINCT FROM c.source_path
+			        OR j.status = 'succeeded'
+			        OR (j.status = 'failed' AND j.next_attempt_at <= NOW())) AS eligible
+			FROM source_page c
+			LEFT JOIN LATERAL (
+				SELECT j.id, j.source_path, j.status, j.next_attempt_at
+				FROM metadata_image_cache_jobs j
+				WHERE j.target_type = c.target_type
+				  AND j.target_content_id = c.target_content_id COLLATE "default"
+				  AND j.image_type = c.image_type
+				  AND j.target_language = c.target_language
+				LIMIT 1
+			) j ON true
+		)
+		SELECT image_type, target_type, target_content_id, target_language, series_id, source_path,
+		       content_type, season_number, episode_number,
+		       COALESCE(tmdb_id, ''), COALESCE(tvdb_id, ''), COALESCE(imdb_id, ''),
+		       cursor_key, cursor_subkey, cursor_number, eligible
+		FROM scanned
+		ORDER BY cursor_number, cursor_key, cursor_subkey
+	`, sourceQuery), "@nonProviderSchemes", nonProviderImageSchemesSQL)
+	return query, args
+}
+
 func imageCacheDiscoverySourceQuery(cursor imageCacheDiscoveryCursor, limit int) (string, []any) {
 	providerFilter := func(column string) string {
 		return column + ` LIKE '%://%' AND lower(` + column + `) NOT LIKE ALL (@nonProviderSchemes)`
@@ -906,11 +911,11 @@ func imageCacheDiscoverySourceQuery(cursor imageCacheDiscoveryCursor, limit int)
 			       mi.content_id AS cursor_key, ''::text AS cursor_subkey, 0::bigint AS cursor_number
 			FROM media_items mi
 			WHERE mi.content_id > $2
-			  AND mi.%s %s
+			  AND %s
 			  AND %s
 			ORDER BY mi.content_id
 			LIMIT $1
-		`, imageType, sourceColumn, sourceColumn, providerFilter("mi."+sourceColumn), uncachedFilter("mi."+pathColumn)), textArgs
+		`, imageType, sourceColumn, providerFilter("mi."+sourceColumn), uncachedFilter("mi."+pathColumn)), textArgs
 	case 3, 4, 5:
 		index := cursor.Surface - 3
 		imageType := imageTypes[index]
@@ -926,11 +931,11 @@ func imageCacheDiscoverySourceQuery(cursor imageCacheDiscoveryCursor, limit int)
 			FROM media_item_localizations loc
 			JOIN media_items mi ON mi.content_id = loc.content_id
 			WHERE (loc.content_id > $2 OR (loc.content_id = $2 AND loc.language > $3))
-			  AND loc.%s %s
+			  AND %s
 			  AND %s
 			ORDER BY loc.content_id, loc.language
 			LIMIT $1
-		`, imageType, sourceColumn, sourceColumn, providerFilter("loc."+sourceColumn), uncachedFilter("loc."+pathColumn)), localizedArgs
+		`, imageType, sourceColumn, providerFilter("loc."+sourceColumn), uncachedFilter("loc."+pathColumn)), localizedArgs
 	case 6:
 		return fmt.Sprintf(`
 			SELECT 'poster'::text AS image_type, 'season'::text AS target_type,
@@ -942,7 +947,7 @@ func imageCacheDiscoverySourceQuery(cursor imageCacheDiscoveryCursor, limit int)
 			FROM seasons s
 			JOIN media_items mi ON mi.content_id = s.series_id
 			WHERE s.content_id > $2
-			  AND s.poster_source_path %s
+			  AND %s
 			  AND %s
 			ORDER BY s.content_id
 			LIMIT $1
@@ -959,7 +964,7 @@ func imageCacheDiscoverySourceQuery(cursor imageCacheDiscoveryCursor, limit int)
 			JOIN seasons s ON s.content_id = loc.season_content_id
 			JOIN media_items mi ON mi.content_id = s.series_id
 			WHERE (loc.season_content_id > $2 OR (loc.season_content_id = $2 AND loc.language > $3))
-			  AND loc.poster_source_path %s
+			  AND %s
 			  AND %s
 			ORDER BY loc.season_content_id, loc.language
 			LIMIT $1
@@ -975,7 +980,7 @@ func imageCacheDiscoverySourceQuery(cursor imageCacheDiscoveryCursor, limit int)
 			FROM episodes e
 			JOIN media_items mi ON mi.content_id = e.series_id
 			WHERE e.content_id > $2
-			  AND e.still_source_path %s
+			  AND %s
 			  AND %s
 			ORDER BY e.content_id
 			LIMIT $1
@@ -990,7 +995,7 @@ func imageCacheDiscoverySourceQuery(cursor imageCacheDiscoveryCursor, limit int)
 			       ''::text AS cursor_key, ''::text AS cursor_subkey, p.id::bigint AS cursor_number
 			FROM people p
 			WHERE p.id > $2
-			  AND p.photo_source_path %s
+			  AND %s
 			  AND %s
 			ORDER BY p.id
 			LIMIT $1

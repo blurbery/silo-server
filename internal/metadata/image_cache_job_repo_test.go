@@ -137,9 +137,21 @@ func TestNormalizeImageCacheJobInputKeepsLanguageAndDefaultsAttribution(t *testi
 }
 
 func TestImageCacheDiscoverySurfacesUseBoundedNativeKeyPages(t *testing.T) {
+	providerColumns := [...]string{
+		"mi.poster_source_path",
+		"mi.backdrop_source_path",
+		"mi.logo_source_path",
+		"loc.poster_source_path",
+		"loc.backdrop_source_path",
+		"loc.logo_source_path",
+		"s.poster_source_path",
+		"loc.poster_source_path",
+		"e.still_source_path",
+		"p.photo_source_path",
+	}
 	for surface := 0; surface < imageCacheDiscoverySurfaceCount; surface++ {
 		cursor := imageCacheDiscoveryCursor{Surface: surface, Key: "content-10", Subkey: "fr", NumericKey: 10}
-		query, args := imageCacheDiscoverySourceQuery(cursor, 1000)
+		query, args := imageCacheDiscoveryQuery(cursor, 1000)
 		if !strings.Contains(query, "LIMIT $1") {
 			t.Fatalf("surface %d query is not page-bounded", surface)
 		}
@@ -149,16 +161,23 @@ func TestImageCacheDiscoverySurfacesUseBoundedNativeKeyPages(t *testing.T) {
 		if strings.Contains(query, "%!") || !strings.Contains(query, "LIKE '%://%'") {
 			t.Fatalf("surface %d query has a malformed provider-source predicate", surface)
 		}
+		providerPredicate := "AND " + providerColumns[surface] + " LIKE '%://%'"
+		if !strings.Contains(query, providerPredicate) {
+			t.Fatalf("surface %d query missing exact provider predicate %q:\n%s", surface, providerPredicate, query)
+		}
+		if strings.Contains(query, providerColumns[surface]+" "+providerColumns[surface]) {
+			t.Fatalf("surface %d query duplicates provider column %q:\n%s", surface, providerColumns[surface], query)
+		}
 		if len(args) < 2 || args[0] != 1000 {
 			t.Fatalf("surface %d args = %#v, want page limit and native cursor", surface, args)
 		}
 	}
 
-	localizedQuery, localizedArgs := imageCacheDiscoverySourceQuery(imageCacheDiscoveryCursor{Surface: 3}, 1000)
+	localizedQuery, localizedArgs := imageCacheDiscoveryQuery(imageCacheDiscoveryCursor{Surface: 3}, 1000)
 	if !strings.Contains(localizedQuery, "loc.language > $3") || len(localizedArgs) != 3 {
 		t.Fatalf("localized discovery does not use its composite primary key: args=%#v", localizedArgs)
 	}
-	personQuery, personArgs := imageCacheDiscoverySourceQuery(imageCacheDiscoveryCursor{Surface: 9, NumericKey: 41}, 1000)
+	personQuery, personArgs := imageCacheDiscoveryQuery(imageCacheDiscoveryCursor{Surface: 9, NumericKey: 41}, 1000)
 	if !strings.Contains(personQuery, "p.id > $2") || len(personArgs) != 2 || personArgs[1] != int64(41) {
 		t.Fatalf("person discovery does not preserve its numeric cursor: args=%#v", personArgs)
 	}
