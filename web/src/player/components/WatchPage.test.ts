@@ -87,6 +87,7 @@ function playbackSession(
     changeSubtitleTrack: vi.fn(),
     changeQuality: vi.fn(),
     recoverFromFailure: vi.fn(),
+    invalidatePlan: vi.fn().mockResolvedValue(true),
     reanchorSeek: vi.fn(),
     refreshSubtitles: vi.fn(),
     applySubtitleTrack: vi.fn(),

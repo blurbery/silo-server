@@ -36,6 +36,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/downloads"
 	evt "github.com/Silo-Server/silo-server/internal/events"
 	"github.com/Silo-Server/silo-server/internal/historyimport"
+	"github.com/Silo-Server/silo-server/internal/httpstream"
 	"github.com/Silo-Server/silo-server/internal/intromarkers"
 	"github.com/Silo-Server/silo-server/internal/invitations"
 	"github.com/Silo-Server/silo-server/internal/libraryingest"
@@ -49,6 +50,7 @@ import (
 	metatrakt "github.com/Silo-Server/silo-server/internal/metadata/trakt"
 	metadatatranslation "github.com/Silo-Server/silo-server/internal/metadata/translation"
 	"github.com/Silo-Server/silo-server/internal/nodepool"
+	"github.com/Silo-Server/silo-server/internal/noderecipe"
 	"github.com/Silo-Server/silo-server/internal/notifications"
 	"github.com/Silo-Server/silo-server/internal/onboarding"
 	"github.com/Silo-Server/silo-server/internal/opslog"
@@ -65,6 +67,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/secret"
 	"github.com/Silo-Server/silo-server/internal/sections"
 	"github.com/Silo-Server/silo-server/internal/settingscontract"
+	"github.com/Silo-Server/silo-server/internal/streamtelemetry"
 	"github.com/Silo-Server/silo-server/internal/subtitles"
 	subtitleai "github.com/Silo-Server/silo-server/internal/subtitles/ai"
 	"github.com/Silo-Server/silo-server/internal/subtitles/opensubtitles"
@@ -96,67 +99,71 @@ type Dependencies struct {
 	DB                           *pgxpool.Pool
 	SecretCipher                 *secret.Cipher // at-rest credential cipher (required when DB is set)
 	FrontendFS                   fs.FS
-	S3Public                     *s3client.Client                 // public assets bucket client (may be nil)
-	S3Private                    *s3client.Client                 // private internal bucket client (may be nil)
-	S3UserDB                     *s3client.Client                 // user-db bucket client (may be nil)
-	BrandingService              *branding.Service                // white-label branding (nil when DB unavailable)
-	FolderRepo                   *catalog.FolderRepository        // media folder repository (may be nil)
-	FileRepo                     *scanner.FileRepository          // media file repository (may be nil)
-	Scanner                      *scanner.Scanner                 // scanner instance (may be nil)
-	LibraryIngester              *libraryingest.Executor          // shared library ingest executor (may be nil)
-	ProbeEnsurer                 handlers.PlaybackProbeEnsurer    // on-demand probe repair for playback/detail (may be nil)
-	UserStoreProvider            userstore.UserStoreProvider      // user store provider (may be nil)
-	SessionMgr                   *playback.SessionManager         // playback session manager (may be nil)
-	SkippedRootRepo              *metadata.SkippedRootRepository  // skipped root repository (may be nil)
-	StaleIDRepo                  *metadata.StaleMediaIDRepository // stale media ID repository (may be nil)
-	MovieMatchQueueRepo          *metadata.MovieMatchQueueRepository
-	SeriesRootMatchQueueRepo     *metadata.SeriesRootMatchQueueRepository
-	Refresher                    handlers.AdminMetadataRefresher // metadata refresher (may be nil)
-	NodeRepo                     *nodepool.Repository            // stream node repository (may be nil)
-	ProxyPool                    *nodepool.ProxyPool             // proxy node pool (may be nil)
-	TranscodePool                *nodepool.TranscodePool         // transcode node pool (may be nil)
-	NodePlanner                  *nodepool.Planner               // group/cap-aware node selection (may be nil)
-	SessionSyncer                handlers.PlaybackSessionSyncer  // optional; immediate playback session sync trigger
-	EventBus                     cache.EventBus
-	AdminStatsProvider           handlers.AdminStatsSource
-	Recommender                  recommendations.Recommender // nil when disabled
-	RecWorker                    *recommendations.Worker     // nil when disabled
-	CatalogSearchVectorizer      catalog.CatalogSearchQueryVectorizer
-	RatingsRepo                  *catalog.RatingsRepo
-	PersonRepo                   *catalog.PersonRepository
-	PersonRefreshQueue           handlers.PersonRefreshQueue
-	PersonRefresher              handlers.PersonRefresher
-	RateLimitMW                  *ratelimit.Middleware
-	ClientIPResolver             *clientip.Resolver
-	NodeID                       string
-	LogStreamHub                 *logstream.Hub
-	RealtimeHub                  *notifications.Hub
-	Notifications                *notifications.System // user-facing release notifications (may be nil)
-	PolicySystem                 *policy.System        // policy engine lifecycle (may be nil)
-	EventsHub                    *evt.Hub
-	ScanRegistry                 *evt.ScanRegistry
-	LibraryScanQueue             *scanqueue.Service
-	ActivityLogWriter            activitylog.Writer
-	ActivityLogRepo              *activitylog.Repo
-	OpsLogRepo                   *opslog.Repo
-	FFmpegLogSink                playback.FFmpegLogSink
-	RedisClient                  *redis.Client              // for session listing (may be nil)
-	TaskManager                  *taskmanager.TaskManager   // task manager (may be nil)
-	ArtifactManager              *downloads.ArtifactManager // download prepare-to-file pipeline (may be nil)
-	AdminJobCancelRegistry       *adminjob.CancelRegistry
-	IntroRepository              *intromarkers.Repository
-	IntroAnalyzer                *intromarkers.Analyzer
-	MarkerRegistry               *markers.Registry
-	MarkerResolver               markers.ExternalIDResolver
-	MarkerProviderConfig         *markers.ProviderConfigStore
-	MarkerContributionStore      *markers.ContributionStore
-	MarkerContributionService    *markers.ContributionService
-	WatchProviderService         handlers.WatchProviderService
-	WatchCompletionObserver      watchstate.CompletionObserver
-	PluginService                *plugins.Service
-	PluginHTTPProxy              *plugins.HTTPProxy
-	PluginUserConfig             *plugins.UserConfigStore
-	AuthProviders                []auth.RegisteredProvider
+	S3Public                     *s3client.Client              // public assets bucket client (may be nil)
+	S3Private                    *s3client.Client              // private internal bucket client (may be nil)
+	S3UserDB                     *s3client.Client              // user-db bucket client (may be nil)
+	BrandingService              *branding.Service             // white-label branding (nil when DB unavailable)
+	FolderRepo                   *catalog.FolderRepository     // media folder repository (may be nil)
+	FileRepo                     *scanner.FileRepository       // media file repository (may be nil)
+	Scanner                      *scanner.Scanner              // scanner instance (may be nil)
+	LibraryIngester              *libraryingest.Executor       // shared library ingest executor (may be nil)
+	ProbeEnsurer                 handlers.PlaybackProbeEnsurer // on-demand probe repair for playback/detail (may be nil)
+	UserStoreProvider            userstore.UserStoreProvider   // user store provider (may be nil)
+	SessionMgr                   *playback.SessionManager      // playback session manager (may be nil)
+	StreamTelemetry              *streamtelemetry.Registry     // local observation-only stream telemetry (may be nil)
+	// StreamTelemetryViewCache serves the merged global view with bounded
+	// staleness so the admin parity endpoint never rebuilds it per request.
+	StreamTelemetryViewCache  *streamtelemetry.ViewCache
+	SkippedRootRepo           *metadata.SkippedRootRepository  // skipped root repository (may be nil)
+	StaleIDRepo               *metadata.StaleMediaIDRepository // stale media ID repository (may be nil)
+	MovieMatchQueueRepo       *metadata.MovieMatchQueueRepository
+	SeriesRootMatchQueueRepo  *metadata.SeriesRootMatchQueueRepository
+	Refresher                 handlers.AdminMetadataRefresher // metadata refresher (may be nil)
+	NodeRepo                  *nodepool.Repository            // stream node repository (may be nil)
+	ProxyPool                 *nodepool.ProxyPool             // proxy node pool (may be nil)
+	TranscodePool             *nodepool.TranscodePool         // transcode node pool (may be nil)
+	NodePlanner               *nodepool.Planner               // group/cap-aware node selection (may be nil)
+	SessionSyncer             handlers.PlaybackSessionSyncer  // optional; immediate playback session sync trigger
+	EventBus                  cache.EventBus
+	AdminStatsProvider        handlers.AdminStatsSource
+	Recommender               recommendations.Recommender // nil when disabled
+	RecWorker                 *recommendations.Worker     // nil when disabled
+	CatalogSearchVectorizer   catalog.CatalogSearchQueryVectorizer
+	RatingsRepo               *catalog.RatingsRepo
+	PersonRepo                *catalog.PersonRepository
+	PersonRefreshQueue        handlers.PersonRefreshQueue
+	PersonRefresher           handlers.PersonRefresher
+	RateLimitMW               *ratelimit.Middleware
+	ClientIPResolver          *clientip.Resolver
+	NodeID                    string
+	LogStreamHub              *logstream.Hub
+	RealtimeHub               *notifications.Hub
+	Notifications             *notifications.System // user-facing release notifications (may be nil)
+	PolicySystem              *policy.System        // policy engine lifecycle (may be nil)
+	EventsHub                 *evt.Hub
+	ScanRegistry              *evt.ScanRegistry
+	LibraryScanQueue          *scanqueue.Service
+	ActivityLogWriter         activitylog.Writer
+	ActivityLogRepo           *activitylog.Repo
+	OpsLogRepo                *opslog.Repo
+	FFmpegLogSink             playback.FFmpegLogSink
+	RedisClient               *redis.Client              // for session listing (may be nil)
+	TaskManager               *taskmanager.TaskManager   // task manager (may be nil)
+	ArtifactManager           *downloads.ArtifactManager // download prepare-to-file pipeline (may be nil)
+	AdminJobCancelRegistry    *adminjob.CancelRegistry
+	IntroRepository           *intromarkers.Repository
+	IntroAnalyzer             *intromarkers.Analyzer
+	MarkerRegistry            *markers.Registry
+	MarkerResolver            markers.ExternalIDResolver
+	MarkerProviderConfig      *markers.ProviderConfigStore
+	MarkerContributionStore   *markers.ContributionStore
+	MarkerContributionService *markers.ContributionService
+	WatchProviderService      handlers.WatchProviderService
+	WatchCompletionObserver   watchstate.CompletionObserver
+	PluginService             *plugins.Service
+	PluginHTTPProxy           *plugins.HTTPProxy
+	PluginUserConfig          *plugins.UserConfigStore
+	AuthProviders             []auth.RegisteredProvider
 	// PublicURL is the externally-reachable origin (scheme + host) for this
 	// silo instance. Used to build redirect_uri values handed to OAuth
 	// IdPs. Empty disables the /oauth/{install_id}/{init,callback} routes.
@@ -215,28 +222,10 @@ func (d *Dependencies) CurrentConfig() *config.Config {
 // under /api/v1/. ABS-compat routes (/abs/*, /login, /socket.io/*) are
 // mounted at the root level when deps.ABSHandler is non-nil.
 func NewRouter(deps Dependencies) chi.Router {
+	declareNativeMediaRoutes()
 	r := chi.NewRouter()
 
-	// Standard middleware.
-	r.Use(middleware.RequestID)
-
-	// Client IP resolution must run before request logging.
-	if deps.ClientIPResolver != nil {
-		r.Use(clientip.Middleware(deps.ClientIPResolver))
-	}
-
-	r.Use(apimw.RequestLogger(deps.NodeID))
-	r.Use(middleware.Recoverer)
-	r.Use(apimw.Metrics)
-
-	// Compress text-like responses (JSON, SVG, …); media content types are
-	// not in the middleware's allowlist and stream through untouched.
-	r.Use(middleware.Compress(5))
-
-	// Activity logging (before auth — captures all requests including failed auth).
-	if deps.ActivityLogWriter != nil {
-		r.Use(activitylog.NewMiddleware(deps.ActivityLogWriter, deps.NodeID))
-	}
+	useBaseMiddleware(r, deps)
 
 	// Build the readiness handler with optional S3 check.
 	var s3Checker handlers.S3HealthChecker
@@ -958,6 +947,7 @@ func NewRouter(deps Dependencies) chi.Router {
 		} else {
 			playbackHandler = handlers.NewPlaybackHandler(deps.SessionMgr)
 		}
+		playbackHandler.StreamTelemetry = deps.StreamTelemetry
 		if deps.DB != nil {
 			playbackHandler.PlanStoreV3 = planstore.NewPostgres(deps.DB)
 		}
@@ -1005,6 +995,15 @@ func NewRouter(deps Dependencies) chi.Router {
 		if deps.Config != nil && deps.Config.Auth.JWTSecret != "" {
 			playbackHandler.JWTSecret = deps.Config.Auth.JWTSecret
 		}
+		// Hand proxy nodes the recipes they serve header-authenticated sessions
+		// from, so an attempt that negotiated authorized media origins egresses
+		// from the pool instead of this server. Nil-safe: without Redis the
+		// store reports itself disabled and every such attempt stays API-local.
+		playbackHandler.ProxyGrantStore = noderecipe.NewProxyGrantStore(deps.RedisClient, 0)
+		// Hand transcode nodes the recipes they rebuild header-authenticated remote
+		// transcodes from after a restart. Same nil-safety: without Redis such a
+		// session replans instead of recovering, as it did before.
+		playbackHandler.NodeRecipeStore = noderecipe.NewStore(deps.RedisClient, 0)
 		if deps.Config != nil {
 			playbackHandler.PlaybackConfig = func() config.PlaybackConfig {
 				return deps.CurrentConfig().Playback
@@ -1050,6 +1049,37 @@ func NewRouter(deps Dependencies) chi.Router {
 			playbackHandler.MarkerUpserter = deps.FileRepo
 		}
 		playbackHandler.MarkerUpdateNotifier = playback.NewMarkerUpdateNotifier(deps.SessionMgr, realtimeHub)
+		// Optimistic remux: a play is never blocked on the H.264 copy-safety
+		// scan, so the scan runs behind the issued plan and the notifier moves
+		// any session that is already stream-copying an unsafe source off that
+		// route (or stops it, for a client that cannot be told). Both halves
+		// need the same probe ensurer the playback and detail surfaces use.
+		if copySafetyScanner, ok := deps.ProbeEnsurer.(playback.CopySafetyScanner); ok && deps.FileRepo != nil {
+			copySafetyRace := playback.NewCopySafetyRace(
+				copySafetyScanner,
+				deps.FileRepo,
+				playback.NewCopySafetyNotifier(
+					deps.SessionMgr,
+					playbackHandler.PlanStoreV3,
+					playbackHandler.CommandDispatcher,
+					handlers.NewCopySafetyPlaybackControl(playbackHandler),
+				),
+			)
+			if copySafetyRace != nil {
+				playbackHandler.CopySafetyRacer = copySafetyRace
+				if detailSvc != nil {
+					detailSvc.SetCopySafetyRacer(copySafetyRace)
+				}
+				if streamHandler != nil {
+					// The progressive remux serve path revives stream-copy
+					// transports of its own, and its single long response is
+					// the one thing no later request can gate. It needs the
+					// same racer to refuse a condemned revival and to cover an
+					// undecided one.
+					streamHandler.CopySafetyRacer = copySafetyRace
+				}
+			}
+		}
 		// A resolver lets subtitle realtime events carry the combined ordinal
 		// the new track will hold in the next plan. Without a file repository
 		// the notifier still fires; its events just omit the track block.
@@ -2051,15 +2081,15 @@ func NewRouter(deps Dependencies) chi.Router {
 					r.Use(deps.RateLimitMW.Handler)
 				}
 				if playbackHandler != nil {
-					r.Get("/playback/transcode/{session_id}/master.m3u8", playbackHandler.HandleGetTranscodeManifest)
-					r.Get("/playback/transcode/{session_id}/segment/{name}", playbackHandler.HandleGetTranscodeSegment)
+					r.Get("/playback/transcode/{session_id}/master.m3u8", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/playback/transcode/{session_id}/master.m3u8", playbackHandler.HandleGetTranscodeManifest))
+					r.Get("/playback/transcode/{session_id}/segment/{name}", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/playback/transcode/{session_id}/segment/{name}", playbackHandler.HandleGetTranscodeSegment))
 				}
 				if streamHandler != nil {
-					r.Get("/stream/{session_id}", streamHandler.HandleStream)
-					r.Head("/stream/{session_id}", streamHandler.HandleStream)
-					r.Get("/stream/{session_id}/subtitles/{track}", streamHandler.HandleSubtitle)
-					r.Head("/stream/{session_id}/subtitles/{track}", streamHandler.HandleSubtitle)
-					r.Get("/stream/{session_id}/subtitles/{track}/fonts", streamHandler.HandleSubtitleFonts)
+					r.Get("/stream/{session_id}", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/stream/{session_id}", streamHandler.HandleStream))
+					r.Head("/stream/{session_id}", observeNative(deps.StreamTelemetry, http.MethodHead, "/api/v1/stream/{session_id}", streamHandler.HandleStream))
+					r.Get("/stream/{session_id}/subtitles/{track}", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/stream/{session_id}/subtitles/{track}", streamHandler.HandleSubtitle))
+					r.Head("/stream/{session_id}/subtitles/{track}", observeNative(deps.StreamTelemetry, http.MethodHead, "/api/v1/stream/{session_id}/subtitles/{track}", streamHandler.HandleSubtitle))
+					r.Get("/stream/{session_id}/subtitles/{track}/fonts", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/stream/{session_id}/subtitles/{track}/fonts", streamHandler.HandleSubtitleFonts))
 				}
 			})
 		}
@@ -2567,8 +2597,8 @@ func NewRouter(deps Dependencies) chi.Router {
 					r.Route("/ebooks", func(r chi.Router) {
 						r.Use(apimw.RequireProfile)
 						r.Get("/capability", ebookReaderHandler.HandleConversionCapability)
-						r.Get("/{content_id}/files/{file_id}/read", ebookReaderHandler.HandleReadFile)
-						r.Head("/{content_id}/files/{file_id}/read", ebookReaderHandler.HandleReadFile)
+						r.Get("/{content_id}/files/{file_id}/read", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/ebooks/{content_id}/files/{file_id}/read", ebookReaderHandler.HandleReadFile))
+						r.Head("/{content_id}/files/{file_id}/read", observeNative(deps.StreamTelemetry, http.MethodHead, "/api/v1/ebooks/{content_id}/files/{file_id}/read", ebookReaderHandler.HandleReadFile))
 						r.Get("/{content_id}/progress", ebookReaderHandler.HandleGetProgress)
 						r.Put("/{content_id}/progress", ebookReaderHandler.HandleSaveProgress)
 						r.Get("/{content_id}/reader-config", ebookReaderHandler.HandleGetConfig)
@@ -2743,18 +2773,18 @@ func NewRouter(deps Dependencies) chi.Router {
 					// GET+HEAD: background download stacks probe with HEAD
 					// before issuing ranged GETs; http.ServeContent handles
 					// HEAD natively.
-					r.Get("/{id}/file", downloadHandler.HandleDownloadFile)
-					r.Head("/{id}/file", downloadHandler.HandleDownloadFile)
-					r.Get("/{id}/file-proxy", downloadHandler.HandleDownloadFileViaProxy)
-					r.Head("/{id}/file-proxy", downloadHandler.HandleDownloadFileViaProxy)
+					r.Get("/{id}/file", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/downloads/{id}/file", downloadHandler.HandleDownloadFile))
+					r.Head("/{id}/file", observeNative(deps.StreamTelemetry, http.MethodHead, "/api/v1/downloads/{id}/file", downloadHandler.HandleDownloadFile))
+					r.Get("/{id}/file-proxy", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/downloads/{id}/file-proxy", downloadHandler.HandleDownloadFileViaProxy))
+					r.Head("/{id}/file-proxy", observeNative(deps.StreamTelemetry, http.MethodHead, "/api/v1/downloads/{id}/file-proxy", downloadHandler.HandleDownloadFileViaProxy))
 					r.Get("/{id}/manifest", downloadHandler.HandleManifest)
 					r.Get("/{id}/artwork/{kind}", downloadHandler.HandleArtwork)
-					r.Get("/{id}/subtitles/{ref}", downloadHandler.HandleSubtitle)
+					r.Get("/{id}/subtitles/{ref}", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/downloads/{id}/subtitles/{ref}", downloadHandler.HandleSubtitle))
 				})
-				r.Get("/direct-download", downloadHandler.HandleDirectDownload)
-				r.Head("/direct-download", downloadHandler.HandleDirectDownload)
-				r.Get("/direct-download-proxy", downloadHandler.HandleDirectDownloadViaProxy)
-				r.Head("/direct-download-proxy", downloadHandler.HandleDirectDownloadViaProxy)
+				r.Get("/direct-download", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/direct-download", downloadHandler.HandleDirectDownload))
+				r.Head("/direct-download", observeNative(deps.StreamTelemetry, http.MethodHead, "/api/v1/direct-download", downloadHandler.HandleDirectDownload))
+				r.Get("/direct-download-proxy", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/direct-download-proxy", downloadHandler.HandleDirectDownloadViaProxy))
+				r.Head("/direct-download-proxy", observeNative(deps.StreamTelemetry, http.MethodHead, "/api/v1/direct-download-proxy", downloadHandler.HandleDirectDownloadViaProxy))
 
 				// Recipe gallery catalog (no profile required — purely static metadata).
 				recipeHandler := &handlers.RecipeHandler{}
@@ -2873,6 +2903,16 @@ func NewRouter(deps Dependencies) chi.Router {
 							}
 
 							r.Get("/sessions", adminHandler.HandleListSessions)
+							// P0d parity projection: the merged telemetry view beside
+							// both legacy live-session projections and their diff. It
+							// compares only — the repoint is the separate retirement
+							// change, which this endpoint exists to give evidence for.
+							r.Get("/stream-telemetry/parity", (&handlers.StreamTelemetryParityHandler{
+								Registry:  deps.StreamTelemetry,
+								ViewCache: deps.StreamTelemetryViewCache,
+								Pool:      deps.DB,
+								Redis:     deps.RedisClient,
+							}).HandleGetStreamTelemetryParity)
 							r.Get("/sessions/capabilities", adminHandler.HandleGetSessionsCapabilities)
 							r.Get("/playback-history", adminHandler.HandleListPlaybackHistory)
 							r.Get("/unmatched", adminHandler.HandleListUnmatched)
@@ -3312,6 +3352,58 @@ func NewRouter(deps Dependencies) chi.Router {
 	})
 
 	return r
+}
+
+// useBaseMiddleware mounts the middleware chain every native request passes
+// through, in order. It is factored out of NewRouter so a test can drive the
+// real chain over a real socket: re-declaring the stack in a test would let the
+// two drift, and a drifted copy is exactly how a broken writer chain passes its
+// own tests (see the §4.4 conformance requirement in the stream-telemetry design).
+func useBaseMiddleware(r chi.Router, deps Dependencies) {
+	// Standard middleware.
+	r.Use(middleware.RequestID)
+
+	// Client IP resolution must run before request logging.
+	if deps.ClientIPResolver != nil {
+		r.Use(clientip.Middleware(deps.ClientIPResolver))
+	}
+
+	r.Use(apimw.RequestLogger(deps.NodeID))
+	r.Use(middleware.Recoverer)
+	r.Use(apimw.Metrics)
+
+	// Compress text-like responses (JSON, SVG, …), while leaving exact bulk
+	// media routes unwrapped so their io.ReaderFrom/sendfile path survives.
+	r.Use(httpstream.CompressExcept(5, skipNativeMediaCompression))
+
+	// Activity logging (before auth — captures all requests including failed auth).
+	if deps.ActivityLogWriter != nil {
+		r.Use(activitylog.NewMiddleware(deps.ActivityLogWriter, deps.NodeID))
+	}
+}
+
+func skipNativeMediaCompression(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	p := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	if len(p) < 3 || p[0] != "api" || p[1] != "v1" {
+		return false
+	}
+	switch {
+	case len(p) == 4 && p[2] == "stream" && p[3] != "":
+		return true
+	case len(p) == 7 && p[2] == "playback" && p[3] == "transcode" && p[4] != "" && p[5] == "segment" && p[6] != "":
+		return true
+	case len(p) == 5 && p[2] == "downloads" && p[3] != "" && (p[4] == "file" || p[4] == "file-proxy"):
+		return true
+	case len(p) == 3 && (p[2] == "direct-download" || p[2] == "direct-download-proxy"):
+		return true
+	case len(p) == 7 && p[2] == "ebooks" && p[3] != "" && p[4] == "files" && p[5] != "" && p[6] == "read":
+		return true
+	default:
+		return false
+	}
 }
 
 // optionalProfileViewerAccess preserves the established profile-less plugin

@@ -67,8 +67,11 @@ type FolderRepository interface {
 	GetByID(ctx context.Context, id int) (*models.MediaFolder, error)
 }
 
+// ProbeEnsurer repairs probe metadata. Only the repair half is needed here:
+// chapter extraction reads Chapters, never the H.264 copy-safety verdict, so
+// this deliberately does not ask for the bitstream scan.
 type ProbeEnsurer interface {
-	Ensure(ctx context.Context, file *models.MediaFile) (*models.MediaFile, error)
+	EnsureProbeOnly(ctx context.Context, file *models.MediaFile) (*models.MediaFile, error)
 }
 
 type SettingsReader interface {
@@ -541,7 +544,7 @@ func (s *Service) ensureChapters(ctx context.Context, file *models.MediaFile, no
 		return file, nil
 	}
 
-	ensured, err := s.probeEnsurer.Ensure(ctx, file)
+	ensured, err := s.probeEnsurer.EnsureProbeOnly(ctx, file)
 	if err == nil && ensured != nil {
 		return ensured, nil
 	}

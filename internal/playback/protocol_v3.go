@@ -11,26 +11,69 @@ import (
 )
 
 const (
-	ProtocolV3                    = 3
-	FeaturePlaybackPlanV3         = "playback_plan_v3"
-	FeatureNeutralContractV3      = "neutral_playback_v3_contract_v1"
-	FeatureLayoutPassthrough      = "layout_aware_passthrough"
-	FeatureClientVideoTransforms  = "client_video_transformations_v1"
-	FeatureRouteDiagnostics       = "playback_route_diagnostics"
-	FeatureDeviceQuirksV3         = "device_quirks_v1"
-	FeatureSeekReanchorV3         = "seek_reanchor_v1"
-	FeatureOutputChangeV3         = "output_change_v1"
-	FeatureDirectStreamResumeV3   = "direct_stream_resume_v1"
-	FeaturePlanSourceDurationV3   = "plan_source_duration_v1"
-	PlanRecipeVersionV3           = "v3.4"
-	ClientDV7ToDV81V3             = "client_dv7_to_dv81"
-	ClientDV7ToHDR10V3            = "client_dv7_to_hdr10"
-	ClientDVTransformVersionV3    = "1"
-	ClientDV8HDR10PlusSanitizerV3 = "client_dv8_hdr10plus_sanitizer_v1"
-	ClientNativeHLSPlaybackV3     = "native_hls_playback_v1"
-	ClientPostResumeRecoveryV3    = "client_post_resume_video_recovery_v1"
-	ClientSurfaceRecoveryV3       = "client_surface_recovery_v1"
-	DeviceQuirkRegistryRevisionV3 = "2026-08-15.1"
+	ProtocolV3                   = 3
+	FeaturePlaybackPlanV3        = "playback_plan_v3"
+	FeatureNeutralContractV3     = "neutral_playback_v3_contract_v1"
+	FeatureLayoutPassthrough     = "layout_aware_passthrough"
+	FeatureClientVideoTransforms = "client_video_transformations_v1"
+	FeatureRouteDiagnostics      = "playback_route_diagnostics"
+	FeatureDeviceQuirksV3        = "device_quirks_v1"
+	FeatureSeekReanchorV3        = "seek_reanchor_v1"
+	FeatureOutputChangeV3        = "output_change_v1"
+	FeatureDirectStreamResumeV3  = "direct_stream_resume_v1"
+	FeaturePlanSourceDurationV3  = "plan_source_duration_v1"
+	// FeatureSoftwareVideoDecodeV3 lets a strict evidence-tier client opt into
+	// bounded hardware:false video_decode entries. Without the feature, exact
+	// and platform_attested retain their historical hardware-only direct-play
+	// policy, so older clients cannot become software-decoding candidates by
+	// accident.
+	FeatureSoftwareVideoDecodeV3 = "software_video_decode_v1"
+	// FeatureHeaderAuthenticatedMediaV3 advertises an opt-in transport mode
+	// whose client-visible stream and subtitle URLs carry no signed playback
+	// credential. A client that sends this token promises to attach its normal
+	// access-token Authorization header to every media request, including HLS
+	// manifests/segments and sidecar subtitle/font requests.
+	FeatureHeaderAuthenticatedMediaV3 = "header_authenticated_media_v1"
+	// FeatureAuthorizedMediaOriginsV3 is the client's promise to fetch media
+	// from the absolute URLs a plan returns on server-designated origins (proxy
+	// nodes), attaching its normal access-token Authorization header to those
+	// requests exactly as it does to the API origin. It is meaningful only
+	// together with header_authenticated_media_v1: on its own there is nothing
+	// to designate, because a legacy attempt already receives signed proxy URLs
+	// that authenticate themselves.
+	//
+	// Without it a header-authenticated attempt stays entirely on the API
+	// origin, so every byte egresses from the API server; with it the plan may
+	// hand out credential-free proxy origins and distributed egress is restored.
+	FeatureAuthorizedMediaOriginsV3 = "authorized_media_origins_v1"
+	// FeaturePlanInvalidatedV3 is the client's promise to handle the realtime
+	// plan_invalidated command: ack it, replan off the named plan with operation
+	// failure_recovery and the invalidated plan's attempt key in
+	// attempted_plan_keys, then report the result.
+	//
+	// It exists because the server may only learn a route is wrong after the
+	// plan is already playing — the H.264 copy-safety scan now runs
+	// asynchronously so playback never waits on it. A session that did not
+	// negotiate the token, or has no realtime connection, is stopped instead;
+	// the client's ordinary recovery then mints a fresh attempt that plans
+	// against the now-persisted verdict.
+	FeaturePlanInvalidatedV3   = "plan_invalidated_v1"
+	PlanRecipeVersionV3        = "v3.4"
+	ClientDV7ToDV81V3          = "client_dv7_to_dv81"
+	ClientDV7ToHDR10V3         = "client_dv7_to_hdr10"
+	ClientDVTransformVersionV3 = "1"
+	// ClaimClientManagedDynamicRangeV3 is scoped to the original_http
+	// delivery. A client that advertises it accepts responsibility for mapping
+	// any source dynamic range it declares decodable onto the active output;
+	// the server must not require native sink-HDR support before delivering the
+	// original bytes. Packaged server deliveries remain output-gated.
+	ClaimClientManagedDynamicRangeV3 = "client_managed_dynamic_range_v1"
+	ClaimClientSelectedAudioTrackV3  = "client_selected_audio_track_v1"
+	ClientDV8HDR10PlusSanitizerV3    = "client_dv8_hdr10plus_sanitizer_v1"
+	ClientNativeHLSPlaybackV3        = "native_hls_playback_v1"
+	ClientPostResumeRecoveryV3       = "client_post_resume_video_recovery_v1"
+	ClientSurfaceRecoveryV3          = "client_surface_recovery_v1"
+	DeviceQuirkRegistryRevisionV3    = "2026-08-15.1"
 )
 
 // ServerFeaturesV3 returns the complete feature set advertised by protocol-v3
@@ -46,6 +89,10 @@ func ServerFeaturesV3() []string {
 		FeatureSeekReanchorV3,
 		FeatureOutputChangeV3,
 		FeatureDirectStreamResumeV3,
+		FeatureHeaderAuthenticatedMediaV3,
+		FeatureAuthorizedMediaOriginsV3,
+		FeatureSoftwareVideoDecodeV3,
+		FeaturePlanInvalidatedV3,
 		// Advertised so a client can tell "this server does not populate
 		// source.duration_seconds" apart from "this server knows the runtime
 		// is genuinely unknown". Without the distinction both look like an
@@ -125,6 +172,7 @@ const (
 	DynamicRangeHDR10PlusV3   = "hdr10_plus"
 	DynamicRangeHLGV3         = "hlg"
 	DynamicRangeDolbyVisionV3 = "dolby_vision"
+	DynamicRangeHDRUnknownV3  = "hdr_unknown"
 )
 
 // Server transformation names. A plan names the transformations its serving
@@ -261,10 +309,11 @@ type VideoDecodeCapabilityV3 struct {
 //
 //   - exact: per-codec profiles/levels/bit-depths/bounds from a real platform
 //     probe (Android MediaCodecList). Full strict validation.
-//   - platform_attested: platform-level decoder attestation without
-//     profile/level enumeration (Apple VideoToolbox). Codec, resolution, bit
-//     depth, frame rate, and dynamic range are validated; profile/level
-//     matching is skipped instead of failing conservative.
+//   - platform_attested: platform-level decoder-stack attestation without
+//     profile/level enumeration (for example Apple's VideoToolbox plus a
+//     pinned software stack). Codec, resolution, bit depth, frame rate, and
+//     dynamic range are validated; profile/level matching is skipped instead
+//     of failing conservative. Software entries require an explicit feature.
 //   - declared: boolean support statements (web MediaSource.isTypeSupported).
 //     Copy routes are granted on codec+container+range match from the flat
 //     codec lists; no strict direct claims are made.
@@ -278,6 +327,44 @@ const (
 
 func validCapabilityEvidenceV3(v CapabilityEvidenceV3) bool {
 	return v == EvidenceExactV3 || v == EvidencePlatformAttestedV3 || v == EvidenceDeclaredV3
+}
+
+func normalizeAndValidateVideoCapabilitiesV3(c *ClientCodecCapabilitiesV3, features []string) error {
+	if !validCapabilityEvidenceV3(c.VideoEvidence) {
+		return errors.New("video_evidence is required and must be exact, platform_attested, or declared")
+	}
+	if len(features) > 64 || len(c.CodecsVideo) > 64 || len(c.CodecsVideoHardware) > 64 || len(c.VideoDecode) > 64 {
+		return errors.New("video capability list exceeds supported size")
+	}
+	for _, feature := range features {
+		if len(feature) > 128 {
+			return errors.New("client feature exceeds supported size")
+		}
+	}
+	for _, values := range [][]string{c.CodecsVideo, c.CodecsVideoHardware} {
+		for i := range values {
+			values[i] = strings.ToLower(strings.TrimSpace(values[i]))
+			if len(values[i]) > 128 {
+				return errors.New("capability value exceeds supported size")
+			}
+		}
+	}
+	for i := range c.VideoDecode {
+		entry := &c.VideoDecode[i]
+		entry.Codec = strings.ToLower(strings.TrimSpace(entry.Codec))
+		if entry.Codec == "" || len(entry.DecoderName) > 128 || entry.MaxWidth < 0 || entry.MaxHeight < 0 || entry.MaxFrameRate < 0 || entry.MaxBitrateKbps < 0 {
+			return errors.New("invalid detailed video capability")
+		}
+		if len(entry.Profiles) > 64 || len(entry.Levels) > 64 || len(entry.BitDepths) > 64 {
+			return errors.New("detailed video capability exceeds supported size")
+		}
+		for _, profile := range entry.Profiles {
+			if len(profile) > 64 {
+				return errors.New("detailed video capability value exceeds supported size")
+			}
+		}
+	}
+	return nil
 }
 
 type ClientCodecCapabilitiesV3 struct {
@@ -635,8 +722,14 @@ type SubtitleArtifactV3 struct {
 }
 
 type SubtitleDecisionV3 struct {
-	Mode     SubtitleModeV3      `json:"mode"`
-	TrackID  string              `json:"track_id,omitempty"`
+	Mode    SubtitleModeV3 `json:"mode"`
+	TrackID string         `json:"track_id,omitempty"`
+	// Artifact is the single track the client draws. It exists only under
+	// SubtitleRenderV3 and SubtitleConvertV3; SubtitleOffV3 and
+	// SubtitleBurnInV3 have no client-fetchable artifact and must publish none,
+	// including on a plan derived from an earlier plan of the same session.
+	// SubtitleOffV3 carries no TrackID either. Inventory URLs are independent
+	// of the selection and stay published in every mode.
 	Artifact *SubtitleArtifactV3 `json:"artifact,omitempty"`
 	// Inventory is the complete, gap-free combined-ordinal subtitle track list
 	// for the effective source. It is authoritative: a client selects a track
@@ -908,8 +1001,8 @@ func validateSelectedTrackIdentityV3(kind string, track *TrackIdentityV3) error 
 // payload. features carries the request's top-level client_features — the
 // only feature-advertisement location in the contract.
 func validateCapabilitiesV3(c *ClientCodecCapabilitiesV3, ctx *ClientPlaybackContextV3, features []string) error {
-	if !validCapabilityEvidenceV3(c.VideoEvidence) {
-		return errors.New("video_evidence is required and must be exact, platform_attested, or declared")
+	if err := normalizeAndValidateVideoCapabilitiesV3(c, features); err != nil {
+		return err
 	}
 	if !validCapabilityEvidenceV3(c.AudioEvidence) {
 		return errors.New("audio_evidence is required and must be exact, platform_attested, or declared")
@@ -941,25 +1034,11 @@ func validateCapabilitiesV3(c *ClientCodecCapabilitiesV3, ctx *ClientPlaybackCon
 			return errors.New("platform_details entry exceeds supported size")
 		}
 	}
-	for _, values := range [][]string{c.CodecsVideo, c.CodecsVideoHardware, c.CodecsAudio, c.Containers} {
+	for _, values := range [][]string{c.CodecsAudio, c.Containers} {
 		for i := range values {
 			values[i] = strings.ToLower(strings.TrimSpace(values[i]))
 			if len(values[i]) > 128 {
 				return errors.New("capability value exceeds supported size")
-			}
-		}
-	}
-	for i := range c.VideoDecode {
-		c.VideoDecode[i].Codec = strings.ToLower(strings.TrimSpace(c.VideoDecode[i].Codec))
-		if c.VideoDecode[i].Codec == "" || len(c.VideoDecode[i].DecoderName) > 128 || c.VideoDecode[i].MaxWidth < 0 || c.VideoDecode[i].MaxHeight < 0 || c.VideoDecode[i].MaxFrameRate < 0 || c.VideoDecode[i].MaxBitrateKbps < 0 {
-			return errors.New("invalid detailed video capability")
-		}
-		if len(c.VideoDecode[i].Profiles) > 64 || len(c.VideoDecode[i].Levels) > 64 || len(c.VideoDecode[i].BitDepths) > 64 {
-			return errors.New("detailed video capability exceeds supported size")
-		}
-		for _, profile := range c.VideoDecode[i].Profiles {
-			if len(profile) > 64 {
-				return errors.New("detailed video capability value exceeds supported size")
 			}
 		}
 	}
@@ -1095,6 +1174,50 @@ func isFiniteV3(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 
 func HasFeatureV3(features []string, wanted string) bool {
 	return slices.ContainsFunc(features, func(v string) bool { return strings.EqualFold(strings.TrimSpace(v), wanted) })
+}
+
+// AttemptStickyFeaturesV3 lists the client features that are negotiated once,
+// at start, and are fixed for the lifetime of the playback attempt. Each of
+// them selects a contract the durable plan and its live transport are built
+// around rather than a per-plan preference:
+//
+//   - header_authenticated_media_v1 picks the media security contract. A legacy
+//     signed URL from an earlier plan can outlive the plan that minted it, so
+//     switching mid-attempt would leave two contracts alive for one session.
+//   - authorized_media_origins_v1 selects which origins may serve the attempt's
+//     media. The trust set a client honors must not change mid-attempt: a plan
+//     that already handed out a proxy origin outlives the replan that would
+//     revoke it, so the client would be left holding a URL it no longer trusts.
+//   - software_video_decode_v1 widens the direct-play evidence tiers. Dropping
+//     it on a replan silently converts a direct route into a transcode and
+//     persists that downgrade into the durable normalized request.
+//
+// Stop/start is the explicit boundary for changing any of them.
+func AttemptStickyFeaturesV3() []string {
+	return []string{FeatureHeaderAuthenticatedMediaV3, FeatureAuthorizedMediaOriginsV3, FeatureSoftwareVideoDecodeV3}
+}
+
+// PinAttemptStickyFeaturesV3 returns requested with every attempt-sticky
+// feature forced back to the state the start negotiation established: a replan
+// can neither add nor remove one, whatever its own client_features list says.
+// Non-sticky features are passed through untouched and in order.
+func PinAttemptStickyFeaturesV3(requested, negotiated []string) []string {
+	sticky := AttemptStickyFeaturesV3()
+	pinned := make([]string, 0, len(requested)+len(sticky))
+	for _, feature := range requested {
+		if slices.ContainsFunc(sticky, func(candidate string) bool {
+			return strings.EqualFold(strings.TrimSpace(feature), candidate)
+		}) {
+			continue
+		}
+		pinned = append(pinned, feature)
+	}
+	for _, feature := range sticky {
+		if HasFeatureV3(negotiated, feature) {
+			pinned = append(pinned, feature)
+		}
+	}
+	return pinned
 }
 
 func NewTerminalResponseV3(reason, message string, retryable bool) DecisionResponseV3 {

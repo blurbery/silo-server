@@ -154,6 +154,12 @@ type TranscodeSession struct {
 	reserveHWDeviceOnRestart bool
 }
 
+// NewTranscodeSessionForTest exposes only the output directory needed by tests
+// in other packages that exercise the mounted transcode-node media routes.
+func NewTranscodeSessionForTest(outputDir string) *TranscodeSession {
+	return &TranscodeSession{outputDir: outputDir}
+}
+
 // SetRestartHook registers a callback fired after every successful Restart.
 // The owning handler uses it to re-arm the transcode throttler and the exit
 // monitor; firing it from Restart itself keeps every restart caller (web

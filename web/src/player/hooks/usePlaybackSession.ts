@@ -28,6 +28,7 @@ import {
   buildReplanRequestV3,
   buildStartRequestV3,
   routeEventPlanIdentityV3,
+  VIDEO_CLIENT_FEATURES_V3,
   type ReplanOptions,
 } from "../playback-session-wire-v3";
 import type {
@@ -87,6 +88,12 @@ export interface UsePlaybackSessionResult extends PlaybackSessionState {
   changeQuality: (label: string, currentPosition: number) => void;
   /** `failure_recovery` replan after the client could not play the plan. */
   recoverFromFailure: (failure: FailureV3, currentPosition: number) => void;
+  /**
+   * `failure_recovery` replan for a plan the *server* invalidated over the
+   * realtime `plan_invalidated` command. Resolves to whether a replacement plan
+   * is now playing; the caller reports that back as the command's result.
+   */
+  invalidatePlan: (planId: string, reason: string, currentPosition: number) => Promise<boolean>;
   /** `seek_reanchor` replan when the target lies outside the seekable window. */
   reanchorSeek: (positionSeconds: number) => void;
   /** Re-reads the subtitle inventory by replanning with the selection unchanged. */
@@ -314,6 +321,23 @@ export function usePlaybackSession(
   const attemptedPlanKeysRef = useRef<string[]>([]);
   const attemptCountRef = useRef(1);
   const replanInFlightRef = useRef(false);
+  // Adoptions in flight, counted per load sequence: a start or a replan whose
+  // decision has not been applied yet. The server commits a replacement plan —
+  // and starts the copy-safety scan behind it — before the client can read the
+  // response, so a `plan_invalidated` command can name a plan this client is
+  // still adopting. Waiters registered here are woken once their own sequence
+  // has nothing in flight, which lets an invalidation decide against the plan
+  // that actually won.
+  //
+  // The key is what makes the wait bounded. A superseded request — a version
+  // switch abandoned mid-flight, a start whose `fetch` never settles — is not a
+  // candidate to own the session any more, so waiting for it decides nothing
+  // and is worse than not waiting: the server's invalidation deadline is 8s,
+  // and a session that misses it is stopped outright. Only the sequence that
+  // currently owns the session can still change what the invalidation should
+  // decide against, so only it is waited on.
+  const adoptionsInFlightRef = useRef(new Map<number, number>());
+  const adoptionWaitersRef = useRef<Array<{ loadSequence: number; resolve: () => void }>>([]);
   const pendingReplanRef = useRef<{
     options: ReplanOptions;
     loadSequence: number;
@@ -330,6 +354,54 @@ export function usePlaybackSession(
     stateRef.current = state;
   }, [state]);
   capabilityDetectionSettledRef.current = capabilityDetectionSettled;
+
+  const beginAdoption = useCallback((loadSequence: number) => {
+    const inFlight = adoptionsInFlightRef.current;
+    inFlight.set(loadSequence, (inFlight.get(loadSequence) ?? 0) + 1);
+  }, []);
+
+  /**
+   * Counts one in-flight adoption out of its load sequence.
+   *
+   * A sequence's waiters are woken only when nothing is left in flight for it:
+   * a queued replan is dispatched from its predecessor's `finally` before the
+   * predecessor is counted out, so the count tracks the whole chain rather than
+   * one request.
+   */
+  const endAdoption = useCallback((loadSequence: number) => {
+    const inFlight = adoptionsInFlightRef.current;
+    const remaining = (inFlight.get(loadSequence) ?? 0) - 1;
+    if (remaining > 0) {
+      inFlight.set(loadSequence, remaining);
+      return;
+    }
+    inFlight.delete(loadSequence);
+    const waiters = adoptionWaitersRef.current;
+    if (waiters.length === 0) return;
+    const settled = waiters.filter((waiter) => !inFlight.has(waiter.loadSequence));
+    if (settled.length === 0) return;
+    adoptionWaitersRef.current = waiters.filter((waiter) => inFlight.has(waiter.loadSequence));
+    for (const waiter of settled) waiter.resolve();
+  }, []);
+
+  /**
+   * Resolves once the sequence that currently owns the session has no start or
+   * replan in flight, or null when it has none — callers act synchronously in
+   * the common case rather than deferring a turn.
+   *
+   * A request from a superseded sequence is deliberately not waited for. It can
+   * no longer install a plan (every path re-checks the sequence before adopting
+   * one), so it has nothing left to say about what an invalidation should
+   * decide against, and a hung one would otherwise hold the wait open past the
+   * server's deadline and cost the live session its stream.
+   */
+  const awaitAdoptionSettled = useCallback((): Promise<void> | null => {
+    const loadSequence = loadSequenceRef.current;
+    if (!adoptionsInFlightRef.current.has(loadSequence)) return null;
+    return new Promise<void>((resolve) => {
+      adoptionWaitersRef.current.push({ loadSequence, resolve });
+    });
+  }, []);
 
   const reportEvent = useCallback(
     (
@@ -427,6 +499,7 @@ export function usePlaybackSession(
       playbackAttemptId: string,
     ): Promise<DecisionResponseV3> => {
       const body = buildStartRequestV3({
+        extraClientFeatures: VIDEO_CLIENT_FEATURES_V3,
         fileId: targetFileId,
         profileId: config.getProfileId() ?? "",
         playbackAttemptId,
@@ -584,6 +657,7 @@ export function usePlaybackSession(
         }));
       };
 
+      beginAdoption(loadSequence);
       try {
         const selectedFileId = selectFileId(preferredFileId);
         if (!selectedFileId) {
@@ -654,9 +728,10 @@ export function usePlaybackSession(
             setCapabilityRefreshRevision((revision) => revision + 1);
           }
         }
+        endAdoption(loadSequence);
       }
     },
-    [adoptDecision, requestStart, selectFileId, stopSession],
+    [adoptDecision, beginAdoption, endAdoption, requestStart, selectFileId, stopSession],
   );
 
   useEffect(() => {
@@ -819,6 +894,7 @@ export function usePlaybackSession(
 
       const body = buildReplanRequestV3({
         ...options,
+        extraClientFeatures: VIDEO_CLIENT_FEATURES_V3,
         plan,
         playbackAttemptId,
         replanRequestId: randomUUID(),
@@ -835,6 +911,7 @@ export function usePlaybackSession(
 
       const loadSequence = loadSequenceRef.current;
       replanInFlightRef.current = true;
+      beginAdoption(loadSequence);
       setState((current) => ({
         ...current,
         replanning: true,
@@ -928,13 +1005,18 @@ export function usePlaybackSession(
         } else {
           pendingReplan?.resolve(false);
         }
+        // Last: a queued replan dispatched just above has already counted
+        // itself in, so waiters are not woken between the two links of a chain.
+        endAdoption(loadSequence);
       }
     },
     [
       adoptDecision,
+      beginAdoption,
       clientCapabilities,
       clientPlaybackContext,
       config,
+      endAdoption,
       maxBitrateKbps,
       retireActiveSession,
     ],
@@ -1086,6 +1168,46 @@ export function usePlaybackSession(
     [replan, reportEvent],
   );
 
+  /**
+   * Replans off a plan the server invalidated mid-playback.
+   *
+   * This is an ordinary `failure_recovery`, deliberately: that operation is
+   * what folds the current plan's attempt key into `attempted_plan_keys`, so
+   * the route the server just disqualified is excluded from the replacement
+   * plan without the client reasoning about deliveries at all. The plan
+   * revision the adopted plan bumps rebuilds the transport and restores the
+   * position, exactly as it does after a client-detected failure.
+   *
+   * A start or replan already in flight is waited out first. The server commits
+   * a replacement plan and starts the copy-safety scan behind it *before* the
+   * response reaches the client, so an invalidation can name a plan this client
+   * has not adopted yet. Deciding against the plan currently on screen would
+   * complete the command as a no-op and then let the pending response install
+   * the very route the server just withdrew.
+   */
+  const invalidatePlan = useCallback(
+    async (planId: string, reason: string, currentPosition: number): Promise<boolean> => {
+      const settling = awaitAdoptionSettled();
+      if (settling) await settling;
+      const plan = planRef.current;
+      if (!plan) return false;
+      // The command names the plan the server invalidated. Once the client has
+      // moved past it there is nothing to recover from, and replanning anyway
+      // would evict a route the server never complained about. That stays true
+      // for a plan id this client has never seen: it is a verdict for a route
+      // that has already been replaced, not a reason to tear the session down.
+      if (plan.plan_id !== planId) return true;
+      const classification = reason.trim().slice(0, 64) || "plan_invalidated";
+      reportEvent("plan_invalidated", { fallbackReason: classification });
+      return replan({
+        operation: "failure_recovery",
+        positionSeconds: currentPosition,
+        failure: { classification, message: "The server invalidated this plan." },
+      });
+    },
+    [awaitAdoptionSettled, replan, reportEvent],
+  );
+
   const reanchorSeek = useCallback(
     (positionSeconds: number) => {
       playbackPositionRef.current = positionSeconds;
@@ -1195,6 +1317,7 @@ export function usePlaybackSession(
     changeSubtitleTrack,
     changeQuality,
     recoverFromFailure,
+    invalidatePlan,
     reanchorSeek,
     refreshSubtitles,
     applySubtitleTrack,

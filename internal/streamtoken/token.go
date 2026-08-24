@@ -56,6 +56,10 @@ type Claims struct {
 	UserID      int    `json:"uid,omitempty"`
 	ProfileID   string `json:"pid,omitempty"`
 	MediaFileID int    `json:"mfid,omitempty"`
+	// OriginalStartedAtUnixNano is decoded directly into int64 by golang-jwt,
+	// preserving nanosecond precision. A future map[string]any decode path must
+	// not pass this through float64, which cannot represent this magnitude exactly.
+	OriginalStartedAtUnixNano int64 `json:"ostn,omitempty"`
 	// DownloadArtifactID is an opaque transcode-node artifact handle. For
 	// download tokens TranscodeNode is its authenticated origin; MediaPath stays
 	// empty so node-local filesystem paths never leave the owning node.
@@ -97,6 +101,30 @@ type Claims struct {
 	Version int `json:"ver,omitempty"`
 
 	jwt.RegisteredClaims
+}
+
+type StartedAtSource string
+
+const (
+	StartedAtSourceClaim    StartedAtSource = "claim"
+	StartedAtSourceIssuedAt StartedAtSource = "issued_at"
+	StartedAtSourceNone     StartedAtSource = "none"
+)
+
+// StartedAt resolves the session's creation time from the explicit claim first,
+// then the registered issue time. Only the explicit claim is authoritative:
+// Sign rewrites RegisteredClaims on every mint, so iat is issue time.
+func (c *Claims) StartedAt() (time.Time, StartedAtSource) {
+	if c == nil {
+		return time.Time{}, StartedAtSourceNone
+	}
+	if c.OriginalStartedAtUnixNano != 0 {
+		return time.Unix(0, c.OriginalStartedAtUnixNano).UTC(), StartedAtSourceClaim
+	}
+	if c.IssuedAt != nil {
+		return c.IssuedAt.UTC(), StartedAtSourceIssuedAt
+	}
+	return time.Time{}, StartedAtSourceNone
 }
 
 // Sign creates a signed JWT string from the given claims.

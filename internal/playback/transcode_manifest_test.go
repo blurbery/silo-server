@@ -70,6 +70,23 @@ func TestBuildPlaybackManifest_CopyVideoUsesRealManifest(t *testing.T) {
 	if strings.Contains(text, "#EXT-X-PLAYLIST-TYPE:VOD") {
 		t.Fatalf("copy-mode manifest should not be synthetic VOD:\n%s", text)
 	}
+
+	tokenless, err := session.BuildPlaybackManifest("segment/", "")
+	if err != nil {
+		t.Fatalf("BuildPlaybackManifest tokenless: %v", err)
+	}
+	for _, want := range []string{
+		"#EXT-X-MAP:URI=\"segment/init.mp4\"",
+		"segment/seg_00009.m4s",
+		"segment/seg_00010.m4s",
+	} {
+		if !strings.Contains(string(tokenless), want) {
+			t.Fatalf("tokenless manifest missing %q:\n%s", want, tokenless)
+		}
+	}
+	if strings.Contains(string(tokenless), "?st=") || strings.Contains(string(tokenless), "?token=") {
+		t.Fatalf("tokenless manifest propagated a credential query:\n%s", tokenless)
+	}
 }
 
 func TestBuildPlaybackManifest_AdvancedCopyGenerationKeepsHistoricalRemountPosition(t *testing.T) {

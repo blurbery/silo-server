@@ -117,6 +117,25 @@ func TestLoadOrReconstructSession(t *testing.T) {
 		}
 	})
 
+	// A v3 transport that negotiated header-authenticated media never treats its
+	// session UUID as a credential, so the front door refuses an anonymous
+	// caller instead of leaving that rule to each serve handler.
+	t.Run("live media-authorized session, zero caller -> unauthorized", func(t *testing.T) {
+		reg := &fakeSessionRegistry{sessions: map[string]*Session{"s": {ID: "s", UserID: 5, RequireMediaAuthorization: true}}}
+		m := newMgr(reg)
+		if got, status := m.LoadOrReconstructSession(ctx, reg.GetSession, "s", 0, nil); status != SessionUnauthorized || got != nil {
+			t.Fatalf("status = %v session = %+v, want unauthorized", status, got)
+		}
+	})
+
+	t.Run("live media-authorized session, owner -> loaded", func(t *testing.T) {
+		reg := &fakeSessionRegistry{sessions: map[string]*Session{"s": {ID: "s", UserID: 5, RequireMediaAuthorization: true}}}
+		m := newMgr(reg)
+		if _, status := m.LoadOrReconstructSession(ctx, reg.GetSession, "s", 5, nil); status != SessionLoaded {
+			t.Fatalf("status = %v, want loaded", status)
+		}
+	})
+
 	t.Run("miss + remux token + matching owner -> reconstructed with method", func(t *testing.T) {
 		reg := &fakeSessionRegistry{}
 		m := newMgr(reg)

@@ -20,6 +20,12 @@ import (
 // Sentinel errors for file repository operations.
 var (
 	ErrFileNotFound = errors.New("media file not found")
+	// ErrStaleCopySafetyScan reports that a multi-PPS verdict was computed from
+	// a generation of the file the row no longer holds — it was rewritten (or
+	// removed) while the scan ran. The verdict is not wrong, it just describes
+	// bytes nobody is serving any more, so it must not overwrite the row and
+	// must not be pushed at live sessions.
+	ErrStaleCopySafetyScan = errors.New("copy-safety verdict superseded by a newer generation of the file")
 )
 
 // FileRepository provides CRUD operations for the media_files table.
@@ -59,6 +65,7 @@ const fileColumns = `id, content_id, episode_id, extra_id, season_number, episod
 	edition_raw, edition_key, edition_confidence, edition_source,
 	presentation_kind, presentation_group_key, presentation_part_index, presentation_part_total,
 	multi_episode_start, multi_episode_end,
+	multiple_pps, multiple_pps_scan_size, multiple_pps_scan_mtime,
 	probe_source, probe_updated_at, match_attempted_at, missing_since, created_at, updated_at`
 
 const overlayFileColumns = `content_id, episode_id, media_folder_id, file_path,
@@ -82,6 +89,7 @@ const mfFileColumns = `mf.id, mf.content_id, mf.episode_id, mf.extra_id, mf.seas
 	mf.edition_raw, mf.edition_key, mf.edition_confidence, mf.edition_source,
 	mf.presentation_kind, mf.presentation_group_key, mf.presentation_part_index, mf.presentation_part_total,
 	mf.multi_episode_start, mf.multi_episode_end,
+	mf.multiple_pps, mf.multiple_pps_scan_size, mf.multiple_pps_scan_mtime,
 	mf.probe_source, mf.probe_updated_at, mf.match_attempted_at, mf.missing_since, mf.created_at, mf.updated_at`
 
 // scanMediaFile scans a single row into a *models.MediaFile.
@@ -196,6 +204,9 @@ func scanMediaFile(row pgx.Row) (*models.MediaFile, error) {
 		&presentationPartTotal,
 		&multiEpisodeStart,
 		&multiEpisodeEnd,
+		&f.MultiplePPS,
+		&f.MultiplePPSScanSize,
+		&f.MultiplePPSScanMtime,
 		&probeSource,
 		&f.ProbeUpdatedAt,
 		&f.MatchAttemptedAt,
@@ -506,6 +517,9 @@ func scanMediaFiles(rows pgx.Rows) ([]*models.MediaFile, error) {
 			&presentationPartTotal,
 			&multiEpisodeStart,
 			&multiEpisodeEnd,
+			&f.MultiplePPS,
+			&f.MultiplePPSScanSize,
+			&f.MultiplePPSScanMtime,
 			&probeSource,
 			&f.ProbeUpdatedAt,
 			&f.MatchAttemptedAt,
@@ -1168,6 +1182,61 @@ func (r *FileRepository) SetChapterThumbnailFailure(
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrFileNotFound
+	}
+	return nil
+}
+
+// UpdateMultiplePPS records the H.264 multi-PPS copy-safety verdict together
+// with the size and mtime it was computed from, so a later read can tell
+// whether the file has been rewritten since. A nil scanMtime records a verdict
+// for a row that has no file mtime; reading it back validates on size alone.
+//
+// It deliberately does not go through Upsert: that path also clears
+// match_suppressed_at and missing_since, which a copy-safety scan has no
+// business touching.
+//
+// The write is conditional on the row still holding the generation that was
+// scanned. A scan reads the opening seconds of a file over storage that can be
+// slow, so an old-generation scan finishing late would otherwise stamp its
+// verdict — and its stale size and mtime — over the replacement generation's,
+// re-validating a verdict for bytes that are gone and condemning (or clearing
+// the condemnation of) a file nobody scanned. A superseded write reports
+// ErrStaleCopySafetyScan rather than succeeding silently, because the caller
+// must also refrain from notifying live sessions on the strength of it.
+//
+// Both sides of the mtime predicate are normalized to microseconds, exactly as
+// MediaFile.PersistedVideoCopyVerdict normalizes them when it reads the verdict
+// back: Postgres stores timestamptz at microsecond resolution while a
+// filesystem mtime carries nanoseconds, so comparing the raw values would make
+// every write for a row whose mtime came from a stat call fail.
+func (r *FileRepository) UpdateMultiplePPS(ctx context.Context, fileID int, multiplePPS bool, scanSize int64, scanMtime *time.Time) error {
+	var normalizedMtime *time.Time
+	if scanMtime != nil {
+		normalized := models.NormalizeFileModifiedAt(*scanMtime)
+		normalizedMtime = &normalized
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE media_files
+		SET multiple_pps = $2,
+		    multiple_pps_scan_size = $3,
+		    multiple_pps_scan_mtime = $4,
+		    updated_at = NOW()
+		WHERE id = $1
+		  AND file_size = $3
+		  AND date_trunc('microseconds', file_modified_at) IS NOT DISTINCT FROM $4::timestamptz`,
+		fileID,
+		multiplePPS,
+		scanSize,
+		normalizedMtime,
+	)
+	if err != nil {
+		return fmt.Errorf("updating multiple pps verdict: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// The row is gone, or it no longer carries the size and mtime that were
+		// scanned. Both mean the same thing to every caller: this verdict does
+		// not describe the file as it stands.
+		return ErrStaleCopySafetyScan
 	}
 	return nil
 }

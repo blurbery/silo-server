@@ -163,7 +163,11 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		}
 	}
 	rangeOK, videoClaims := outputRangeEligibleV3(source, input.Request)
+	clientManagedRange := clientManagesOriginalDynamicRangeV3(source, input.Request)
+	originalRangeOK := rangeOK || clientManagedRange
 	audioOK, passthrough, audioClaims := audioEligibilityV3(source, input.Request)
+	originalAudioSelectionOK := audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) ||
+		clientSelectsOriginalAudioTrackV3(input.Request)
 	if !audioOK && source.AudioCodec == "" && (file == nil || len(file.AudioTracks) == 0) {
 		// Video-only media has no audio stream to adapt: treating the absence
 		// as an unsupported codec would force a pointless AAC conversion — or
@@ -223,7 +227,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	// so the client is told the actual cause — a source whose Dolby Vision
 	// metadata cannot be removed — rather than a generic HDR message that
 	// sends the user looking for a missing encoder.
-	if dvStripUnsupportedBySource && !rangeOK && !clientDV81Eligible && !clientHDR10Eligible {
+	if dvStripUnsupportedBySource && !originalRangeOK && !clientDV81Eligible && !clientHDR10Eligible {
 		return terminalPlannerResultV3(TerminalDVConversionUnsupportedV3,
 			"This source's Dolby Vision metadata cannot be removed cleanly, and this device cannot play the source as it is.", false)
 	}
@@ -248,10 +252,10 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	base.AvailableQualities = availableQualitiesV3(input, source)
 	base.Subtitle.Inventory = BuildSubtitleInventoryV3(file, input.AdditionalSubtitles)
 	base.Claims.Audio.Passthrough = passthrough
-	if source.DynamicRange == "hdr_unknown" && rangeOK {
+	if source.DynamicRange == DynamicRangeHDRUnknownV3 && (rangeOK || clientManagedRange) {
 		base.DegradationWarnings = append(base.DegradationWarnings, DegradationWarningV3{
 			Code:    "hdr_range_assumed_hdr10",
-			Message: "The source is flagged HDR without precise range metadata and is delivered as HDR10.",
+			Message: "The source is flagged HDR without precise range metadata; playback treats it as HDR10 unless the client resolves a more precise presentation.",
 		})
 	}
 	if dvStripUnsupportedBySource {
@@ -285,7 +289,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	// degradation warning instead of refusing playback. Explicit user-selected
 	// rungs keep the existing terminals.
 	if quality.RequiresTranscode && !quality.ExplicitRung && !subtitle.RequiresBurn && videoOK &&
-		(rangeOK || dvStripEligible || clientDV81Eligible || clientHDR10Eligible) &&
+		(originalRangeOK || dvStripEligible || clientDV81Eligible || clientHDR10Eligible) &&
 		!videoTranscodeExecutableV3(input, source) {
 		warnings := append(quality.Warnings, DegradationWarningV3{
 			Code:    "quality_reduction_unavailable",
@@ -297,7 +301,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	base.DegradationWarnings = append(base.DegradationWarnings, quality.Warnings...)
 
 	if quality.RequiresTranscode || !videoOK ||
-		(!rangeOK && !dvStripEligible && !clientDV81Eligible && !clientHDR10Eligible) ||
+		(!originalRangeOK && !dvStripEligible && !clientDV81Eligible && !clientHDR10Eligible) ||
 		(subtitle.RequiresBurn && !remuxSubtitleOK && !hlsRemuxSubtitleOK) {
 		reasonOverride := ""
 		if !quality.RequiresTranscode && !videoOK && videoEvidenceInsufficient {
@@ -309,7 +313,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		// True when the burn requirement is the sole disjunct that fired: every
 		// other route condition still permits a source-preserving delivery.
 		subtitleForcedAdaptation := !quality.RequiresTranscode && videoOK &&
-			(rangeOK || dvStripEligible || clientDV81Eligible || clientHDR10Eligible) &&
+			(originalRangeOK || dvStripEligible || clientDV81Eligible || clientHDR10Eligible) &&
 			subtitle.RequiresBurn && !remuxSubtitleOK && !hlsRemuxSubtitleOK
 		return planVideoTranscodeV3(input, base, source, quality, hlsSubtitle, reasonOverride, subtitleForcedAdaptation)
 	}
@@ -318,8 +322,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	// source. A decoder profile/max-instance claim alone is not proof of native
 	// dual-layer output, so the default Android route mirrors Silo Apple: P8.1
 	// base-layer Dolby Vision first, then same-file HDR10.
-	if !preferServerHLS && source.DVProfile == 7 && quality.PreservesSource && videoOK && containerOK && audioOK &&
-		audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && !subtitle.RequiresBurn {
+	if !preferServerHLS && source.DVProfile == 7 && quality.PreservesSource && videoOK && containerOK && audioOK && originalAudioSelectionOK && !subtitle.RequiresBurn {
 		if clientDV81Eligible {
 			plan := base
 			plan.Delivery = DeliveryOriginalHTTPV3
@@ -360,14 +363,26 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 				return PlannerResultV3{Plan: &plan, PlayMethod: PlayDirect, SubtitleTrackIndex: subtitle.SelectedIndex, SubtitleTransportTrackIndex: subtitle.TransportIndex, SubtitleCodec: subtitle.Codec, DownloadedSubtitleID: subtitle.DownloadedSubtitleID}
 			}
 		}
+		if clientManagedRange {
+			plan := base
+			plan.Delivery = DeliveryOriginalHTTPV3
+			plan.Stream = StreamV3{Protocol: StreamHTTPProgressiveV3, Container: source.Container, MIMEType: MimeFromExtension(file.FilePath), Headers: map[string]string{}, HeaderRefresh: HeaderRefreshNoneV3}
+			plan.DecisionReason = decisionReasonClientManagedDynamicRangeV3
+			finalizePlanIdentityV3(&plan, input.Request.PlaybackAttemptID, input.Request.ClientPlaybackContext.Output.OutputContextID)
+			if deliverySupportsPlanV3(input.Request, DeliveryClassOriginalHTTPV3, plan) && !planAttemptedV3(plan, input.Request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
+				return PlannerResultV3{Plan: &plan, PlayMethod: PlayDirect, SubtitleTrackIndex: subtitle.SelectedIndex, SubtitleTransportTrackIndex: subtitle.TransportIndex, SubtitleCodec: subtitle.Codec, DownloadedSubtitleID: subtitle.DownloadedSubtitleID}
+			}
+		}
 	}
 
-	if !preferServerHLS && source.DVProfile != 7 && deliveryAvailableV3(input.Request, DeliveryClassOriginalHTTPV3) && containerOK && videoOK && rangeOK && audioOK && quality.PreservesSource &&
-		audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && !subtitle.RequiresBurn {
+	if !preferServerHLS && source.DVProfile != 7 && deliveryAvailableV3(input.Request, DeliveryClassOriginalHTTPV3) && containerOK && videoOK && originalRangeOK && audioOK && originalAudioSelectionOK && quality.PreservesSource && !subtitle.RequiresBurn {
 		plan := base
 		plan.Delivery = DeliveryOriginalHTTPV3
 		plan.Stream = StreamV3{Protocol: StreamHTTPProgressiveV3, Container: source.Container, MIMEType: MimeFromExtension(file.FilePath), Headers: map[string]string{}, HeaderRefresh: HeaderRefreshNoneV3}
 		plan.DecisionReason = "validated_original_playback"
+		if !rangeOK && clientManagedRange {
+			plan.DecisionReason = decisionReasonClientManagedDynamicRangeV3
+		}
 		applyCopiedVideoQuirksV3(&plan, source, input.Request, high10Quirk)
 		finalizePlanIdentityV3(&plan, input.Request.PlaybackAttemptID, input.Request.ClientPlaybackContext.Output.OutputContextID)
 		if deliverySupportsPlanV3(input.Request, DeliveryClassOriginalHTTPV3, plan) && !planAttemptedV3(plan, input.Request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
@@ -607,9 +622,15 @@ func audioAvailableQualitiesV3(source SourceDescriptorV3) []AvailableQualityV3 {
 	return []AvailableQualityV3{{Label: QualityOriginalV3, BitrateKbps: source.BitrateKbps, PreservesSource: true}}
 }
 
-// decisionReasonBandwidthCapV3 marks a plan whose recipe was constrained by
-// the request's bandwidth cap rather than by decode capability.
-const decisionReasonBandwidthCapV3 = "quality_bandwidth_cap"
+const (
+	// decisionReasonBandwidthCapV3 marks a plan whose recipe was constrained by
+	// the request's bandwidth cap rather than by decode capability.
+	decisionReasonBandwidthCapV3 = "quality_bandwidth_cap"
+
+	// decisionReasonClientManagedDynamicRangeV3 marks an original-file plan
+	// whose executor owns source-to-output dynamic-range presentation.
+	decisionReasonClientManagedDynamicRangeV3 = "client_managed_dynamic_range"
+)
 
 // planAudioOnlyV3 plans sources without a video track (audiobooks, music).
 // The route family is deliberately small: the original container over
@@ -619,6 +640,8 @@ const decisionReasonBandwidthCapV3 = "quality_bandwidth_cap"
 func planAudioOnlyV3(input PlannerInputV3, file *models.MediaFile, source SourceDescriptorV3) PlannerResultV3 {
 	request := input.Request
 	audioOK, _, audioClaims := audioEligibilityV3(source, request)
+	originalAudioSelectionOK := audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) ||
+		clientSelectsOriginalAudioTrackV3(request)
 	bandwidthCapKbps := optionalValueV3(request.BandwidthCapKbps)
 	bandwidthCapExceeded := bandwidthCapKbps > 0 && source.BitrateKbps > bandwidthCapKbps
 	if source.AudioCodec == "" {
@@ -647,7 +670,7 @@ func planAudioOnlyV3(input PlannerInputV3, file *models.MediaFile, source Source
 		Timeline:               TimelineV3{SourceStartSeconds: floatOrZeroV3(request.StartPosition), PlayerStartSeconds: floatOrZeroV3(request.StartPosition), CanSeekAnywhere: true, SeekRestoration: "player_position"},
 	}
 	containerOK := containsFoldV3(request.Capabilities.Containers, source.Container)
-	if audioOK && containerOK && !bandwidthCapExceeded && audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && deliveryAvailableV3(request, DeliveryClassOriginalHTTPV3) {
+	if audioOK && containerOK && !bandwidthCapExceeded && originalAudioSelectionOK && deliveryAvailableV3(request, DeliveryClassOriginalHTTPV3) {
 		plan := base
 		plan.Delivery = DeliveryOriginalHTTPV3
 		plan.Stream = StreamV3{Protocol: StreamHTTPProgressiveV3, Container: source.Container, MIMEType: MimeFromExtension(file.FilePath), Headers: map[string]string{}, HeaderRefresh: HeaderRefreshNoneV3}
@@ -1194,9 +1217,9 @@ func selectedTracksForPlanV3(file *models.MediaFile, audioIndex int, subtitle Su
 }
 
 // audioSelectionUsesContainerDefaultV3 reports whether an untouched source
-// stream can realize the selected audio track. Original HTTP serves the file
-// byte-for-byte, so any non-default selection must use a remux/transcode route
-// that can map the requested stream explicitly.
+// stream can realize the selected audio track without client-side selection.
+// Clients that explicitly claim client_selected_audio_track_v1 on
+// original_http may select another stream after probing the complete source.
 func audioSelectionUsesContainerDefaultV3(file *models.MediaFile, audioIndex int) bool {
 	if file == nil || len(file.AudioTracks) == 0 {
 		return true
@@ -1375,7 +1398,10 @@ func deliverySupportsPlanV3(request StartRequestV3, deliveryClass string, plan P
 	if capability.MaxChannels != nil && plan.EffectiveRecipe.AudioChannels != nil && *plan.EffectiveRecipe.AudioChannels > *capability.MaxChannels {
 		return false
 	}
-	if capability.HDRDetails != nil && !hdrDetailsSupportPlanV3(*capability.HDRDetails, plan) {
+	clientManagedOriginalRange := deliveryClass == DeliveryClassOriginalHTTPV3 &&
+		len(plan.Transformations) == 0 &&
+		containsFoldV3(capability.ValidatedClaims, ClaimClientManagedDynamicRangeV3)
+	if capability.HDRDetails != nil && !hdrDetailsSupportPlanV3(*capability.HDRDetails, plan) && !clientManagedOriginalRange {
 		return false
 	}
 	return true
@@ -1385,7 +1411,7 @@ func hdrDetailsSupportPlanV3(hdr HDRCapabilitiesV3, plan PlanV3) bool {
 	switch plan.EffectiveRecipe.DynamicRange {
 	case "", DynamicRangeSDRV3:
 		return true
-	case DynamicRangeHDR10V3, "hdr_unknown":
+	case DynamicRangeHDR10V3, DynamicRangeHDRUnknownV3:
 		return hdr.HDR10 && hdr10LimitsSupportPlanV3(hdr, plan)
 	case DynamicRangeHDR10PlusV3:
 		return hdr.HDR10Plus

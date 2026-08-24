@@ -1,6 +1,7 @@
 package playback
 
 import (
+	"strings"
 	"time"
 
 	"github.com/Silo-Server/silo-server/internal/streamtoken"
@@ -16,12 +17,13 @@ import (
 // context, channels, log sink). Those are re-wired on reconstruct from the
 // live config and request.
 type RecipeCard struct {
-	SessionID            string `json:"session_id"`
-	UserID               int    `json:"user_id"`
-	ProfileID            string `json:"profile_id"`
-	MediaFileID          int    `json:"media_file_id"`
-	TranscodeNodeURL     string `json:"transcode_node_url,omitempty"`
-	TranscodeTransportID string `json:"transcode_transport_id,omitempty"`
+	SessionID            string    `json:"session_id"`
+	UserID               int       `json:"user_id"`
+	ProfileID            string    `json:"profile_id"`
+	MediaFileID          int       `json:"media_file_id"`
+	TranscodeNodeURL     string    `json:"transcode_node_url,omitempty"`
+	TranscodeTransportID string    `json:"transcode_transport_id,omitempty"`
+	OriginalStartedAt    time.Time `json:"original_started_at,omitempty"`
 
 	// PlayMethod discriminates which serve path reconstructs this session
 	// (direct / remux / transcode). Empty decodes as PlayTranscode for
@@ -47,8 +49,15 @@ type RecipeCard struct {
 	// Encode parameters — mirror of the byte-affecting TranscodeOpts fields.
 	// Direct cards leave them zero; remux cards use the audio targets when the
 	// selected stream must be converted.
-	InputPath              string  `json:"input_path"`
-	OutputSubdir           string  `json:"output_subdir,omitempty"`
+	InputPath    string `json:"input_path"`
+	OutputSubdir string `json:"output_subdir,omitempty"`
+	// DVProfile and AudioOnly are source facts the catalog owns and a remote
+	// executor cannot look up for itself: the remux needs the Dolby Vision
+	// profile to strip a dangling Profile 7 RPU, and the audio-only flag to keep
+	// the content type the plan promised. They ride the card so a proxy serving
+	// this session from a grant produces the same bytes the API would have.
+	DVProfile              int     `json:"dv_profile,omitempty"`
+	AudioOnly              bool    `json:"audio_only,omitempty"`
 	SourceVideoCodec       string  `json:"source_video_codec,omitempty"`
 	SourceVideoProfile     string  `json:"source_video_profile,omitempty"`
 	SourceVideoBitDepth    int     `json:"source_video_bit_depth,omitempty"`
@@ -158,6 +167,18 @@ func NewRemuxRecipeCard(sessionID string, userID int, profileID string, mediaFil
 	}
 }
 
+// VideoStreamCopy reports whether this recipe delivers the source video
+// bitstream without re-encoding it: a progressive remux, or an HLS transport
+// whose video target was pinned to an explicit copy. Those are exactly the
+// routes an H.264 multi-PPS verdict disqualifies — a real transcode re-encodes
+// the bitstream and is unaffected by conflicting in-band parameter sets.
+func (c RecipeCard) VideoStreamCopy() bool {
+	if c.PlayMethod == PlayRemux {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(c.TargetCodecVideo), "copy")
+}
+
 // TranscodeOpts rebuilds the encode parameters for a reconstruct. outputDir,
 // ffmpegPath and logSink are supplied by the caller from live config because
 // they are environment-specific and not pinned in the card.
@@ -220,6 +241,8 @@ func (c RecipeCard) ToClaims() streamtoken.Claims {
 		SessionID:                  c.SessionID,
 		MediaPath:                  c.InputPath,
 		OutputSubdir:               c.OutputSubdir,
+		DVProfile:                  c.DVProfile,
+		AudioOnly:                  c.AudioOnly,
 		PlayMethod:                 string(c.PlayMethod),
 		TranscodeAudio:             c.TranscodeAudio,
 		RemuxDVMode:                string(c.RemuxDVMode),
@@ -232,26 +255,32 @@ func (c RecipeCard) ToClaims() streamtoken.Claims {
 		UserID:                     c.UserID,
 		ProfileID:                  c.ProfileID,
 		MediaFileID:                c.MediaFileID,
-		SourceVideoCodec:           c.SourceVideoCodec,
-		SourceVideoProfile:         c.SourceVideoProfile,
-		SourceVideoBitDepth:        c.SourceVideoBitDepth,
-		SoftwareVideoDecode:        c.SoftwareVideoDecode,
-		VideoBitstreamFilter:       c.VideoBitstreamFilter,
-		VideoSampleEntry:           c.VideoSampleEntry,
-		SeekSeconds:                c.SeekSeconds,
-		StreamOriginSeconds:        c.StreamOriginSeconds,
-		CopySeekAnchorResolved:     c.CopySeekAnchorResolved,
-		SegmentDuration:            c.SegmentDuration,
-		StartSegmentNumber:         c.StartSegmentNumber,
-		SubtitleTrackIndex:         c.SubtitleTrackIndex,
-		SubtitleBurnIn:             c.SubtitleBurnIn,
-		SubtitleCodec:              c.SubtitleCodec,
-		TargetBitrateKbps:          c.TargetBitrateKbps,
-		TotalDuration:              c.TotalDuration,
-		FastStart:                  c.FastStart,
-		TargetCodecAudio:           c.TargetCodecAudio,
-		TargetAudioChannels:        c.TargetAudioChannels,
-		TargetAudioBitrateKbps:     c.TargetAudioBitrateKbps,
+		OriginalStartedAtUnixNano: func() int64 {
+			if c.OriginalStartedAt.IsZero() {
+				return 0
+			}
+			return c.OriginalStartedAt.UnixNano()
+		}(),
+		SourceVideoCodec:       c.SourceVideoCodec,
+		SourceVideoProfile:     c.SourceVideoProfile,
+		SourceVideoBitDepth:    c.SourceVideoBitDepth,
+		SoftwareVideoDecode:    c.SoftwareVideoDecode,
+		VideoBitstreamFilter:   c.VideoBitstreamFilter,
+		VideoSampleEntry:       c.VideoSampleEntry,
+		SeekSeconds:            c.SeekSeconds,
+		StreamOriginSeconds:    c.StreamOriginSeconds,
+		CopySeekAnchorResolved: c.CopySeekAnchorResolved,
+		SegmentDuration:        c.SegmentDuration,
+		StartSegmentNumber:     c.StartSegmentNumber,
+		SubtitleTrackIndex:     c.SubtitleTrackIndex,
+		SubtitleBurnIn:         c.SubtitleBurnIn,
+		SubtitleCodec:          c.SubtitleCodec,
+		TargetBitrateKbps:      c.TargetBitrateKbps,
+		TotalDuration:          c.TotalDuration,
+		FastStart:              c.FastStart,
+		TargetCodecAudio:       c.TargetCodecAudio,
+		TargetAudioChannels:    c.TargetAudioChannels,
+		TargetAudioBitrateKbps: c.TargetAudioBitrateKbps,
 	}
 }
 
@@ -267,7 +296,7 @@ func RecipeCardFromClaims(c *streamtoken.Claims) RecipeCard {
 	if method == "" {
 		method = PlayTranscode
 	}
-	return RecipeCard{
+	card := RecipeCard{
 		SessionID:                  c.SessionID,
 		UserID:                     c.UserID,
 		ProfileID:                  c.ProfileID,
@@ -280,6 +309,8 @@ func RecipeCardFromClaims(c *streamtoken.Claims) RecipeCard {
 		DropInitialLeadingPictures: c.DropInitialLeadingPictures,
 		InputPath:                  c.MediaPath,
 		OutputSubdir:               c.OutputSubdir,
+		DVProfile:                  c.DVProfile,
+		AudioOnly:                  c.AudioOnly,
 		SourceVideoCodec:           c.SourceVideoCodec,
 		SourceVideoProfile:         c.SourceVideoProfile,
 		SourceVideoBitDepth:        c.SourceVideoBitDepth,
@@ -304,4 +335,8 @@ func RecipeCardFromClaims(c *streamtoken.Claims) RecipeCard {
 		TotalDuration:              c.TotalDuration,
 		FastStart:                  c.FastStart,
 	}
+	if c.OriginalStartedAtUnixNano != 0 {
+		card.OriginalStartedAt = time.Unix(0, c.OriginalStartedAtUnixNano).UTC()
+	}
+	return card
 }

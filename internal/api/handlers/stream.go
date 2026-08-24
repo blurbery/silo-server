@@ -51,6 +51,12 @@ type StreamHandler struct {
 	// PlaybackConfig returns the current playback config; read it through
 	// ffmpegPath(). May be nil (tests).
 	PlaybackConfig func() config.PlaybackConfig
+	// CopySafetyRacer gates and covers a revived progressive remux: it answers
+	// whether this replica already condemns a video stream-copy of the source,
+	// and re-engages the copy-safety race for one whose verdict is still open.
+	// Optional — without it a revived remux is gated on the persisted row alone
+	// and no race is started here.
+	CopySafetyRacer PlaybackCopySafetyRacer
 	// SubtitleCache stores full-track PGS (.sup) extracts under the transcode
 	// dir so repeat selections skip the whole-file ffmpeg demux. May be nil
 	// (tests / minimal setups) — extraction then always streams uncached.
@@ -105,8 +111,8 @@ func (h *StreamHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 	// ?seek= query for remux), so no runtime beyond the Session needs rebuilding.
 	// Without a token (or signing secret) reconstruct is off, collapsing to a
 	// plain GetSession + ownership check.
-	card := streamCardFromRequest(r, sessionID, h.JWTSecret)
-	session, status := h.TM.LoadOrReconstructSession(r.Context(), h.sessionMgr.GetSession, sessionID, userID, card)
+	card, claims := verifiedStreamCardFromRequest(r, sessionID, h.JWTSecret)
+	session, status, reconstructed := h.TM.LoadOrReconstructSessionDetail(r.Context(), h.sessionMgr.GetSession, sessionID, userID, card)
 	switch status {
 	case playback.SessionMissing:
 		writePlaybackSessionNotFound(w)
@@ -116,6 +122,12 @@ func (h *StreamHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	case playback.SessionForbidden:
 		writeError(w, http.StatusForbidden, "forbidden", "Session belongs to another user")
+		return
+	case playback.SessionUnauthorized:
+		// Defensive against invariant drift, not a reachable path: this caller
+		// resolves a non-zero user before loading. Falling through would
+		// dereference the nil session the status carries.
+		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
 		return
 	}
 	if !transportStreamClaimsMatchSession(r.Context(), session) {
@@ -145,6 +157,23 @@ func (h *StreamHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 		writePlaybackFilePreflightError(w, err)
 		return
 	}
+	attachPlaybackSession(r.Context(), session, claims)
+
+	// A reconstructed remux replays a recipe committed before the copy-safety
+	// verdict existed, and no notifier can reach it — see playback_copy_safety.go.
+	// One that the verdict does not condemn re-engages the race here, which is
+	// what gives the single long response below something able to withdraw it.
+	// Starting that race before the abort watcher is registered is safe: a
+	// verdict fast enough to stop the session first leaves WatchTransportStop
+	// with no session to watch, and it reports the stop it missed.
+	if reconstructed && session.PlayMethod == playback.PlayRemux &&
+		videoCopyRevivalRefused(r.Context(), h.CopySafetyRacer, file, sessionID) {
+		// The reconstruct already registered the session; tear it down again so
+		// the refusal leaves no half-live session behind the client's replan.
+		h.abortPlaybackSession(r.Context(), session)
+		writePlaybackSessionNotFound(w)
+		return
+	}
 
 	switch session.PlayMethod {
 	case playback.PlayDirect:
@@ -163,6 +192,12 @@ func (h *StreamHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 				_ = h.sessionMgr.EndTransport(sessionID)
 			}()
 		}
+		// A progressive remux runs for the length of the title behind a single
+		// response, so a stop decided while it is playing — a copy-safety
+		// verdict withdrawing the route, an admin kill — has to reach the
+		// stream itself. Nothing else can: the ffmpeg belongs to this request.
+		abort, releaseAbort := h.sessionMgr.WatchTransportStop(sessionID)
+		defer releaseAbort()
 		seekSeconds := 0.0
 		if seekStr := r.URL.Query().Get("seek"); seekStr != "" {
 			if s, err := strconv.ParseFloat(seekStr, 64); err == nil && s >= 0 {
@@ -181,6 +216,7 @@ func (h *StreamHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 			AudioOnly:                  file.IsAudioOnly(),
 			TargetAudioChannels:        session.TargetAudioChannels,
 			TargetAudioBitrateKbps:     session.TargetAudioBitrateKbps,
+			Abort:                      abort,
 		}); err != nil {
 			h.handleTransportStartFailure(r.Context(), session, file, err)
 		}
@@ -233,6 +269,7 @@ func (h *StreamHandler) HandleSubtitle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden", "Stream token no longer matches the playback session")
 		return
 	}
+	attachPlaybackSession(r.Context(), session, apimw.GetTransportStreamClaims(r.Context()))
 
 	fileID, err := subtitleSourceFileID(r, session)
 	if err != nil {
@@ -503,6 +540,7 @@ func (h *StreamHandler) HandleSubtitleFonts(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusForbidden, "forbidden", "Stream token no longer matches the playback session")
 		return
 	}
+	attachPlaybackSession(r.Context(), session, apimw.GetTransportStreamClaims(r.Context()))
 
 	fileID, err := subtitleSourceFileID(r, session)
 	if err != nil {

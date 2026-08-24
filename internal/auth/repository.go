@@ -249,45 +249,66 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.
 // access_policy_revision. Values are pre-computed, so every entry is safe to
 // build even when set is false.
 type userUpdateColumn struct {
-	column string
-	set    bool
-	value  any
-	// expr, when non-empty, is a SQL expression written in place of a bare
-	// bound value; it may reference the row's current columns. A "$?" inside
-	// it is replaced with the placeholder for value; without one, value is
-	// not bound.
-	expr              string
+	column            string
+	set               bool
+	value             any
 	bumpsAccessPolicy bool
 }
 
-// accessGroupUpdateColumn decides what the write does to access_group_id.
-// Admin accounts are never grouped (see Create): granting the role clears the
-// group no matter what the caller passed, and taking the role away without
-// naming a group lands the account on the default group, as create does. A
-// group written on its own is checked against the row's role inside the same
-// statement, so a concurrent promotion cannot leave an admin grouped.
-func accessGroupUpdateColumn(input models.UpdateUserInput) userUpdateColumn {
+// accessGroupSetClause builds the SET clause and access-policy predicate for
+// access_group_id given the next free placeholder index. access_group_id is
+// handled outside the generic userUpdateColumn machinery because, unlike
+// every other column, what gets written depends on the row's current role:
+//
+//   - Granting admin (input.Role == "admin") clears the group unconditionally.
+//   - Changing role to anything else without naming a group lands the row on
+//     the default group, but only if it was an admin (accounts are never
+//     un-grouped by an unrelated role change).
+//   - Setting a group on its own (input.Role == nil) is guarded by a CASE so
+//     a write that races an admin promotion cannot leave the admin grouped.
+//   - Otherwise (explicit NULL, or a group set alongside a non-admin role
+//     change) the value is bound directly.
+//
+// Admin accounts are never grouped (see Create). Returns an empty setClause
+// if access_group_id is not touched by this update.
+//
+// The default-group branch reads from a CTE (aliased in defaultGroupCTE)
+// instead of inlining the subselect, because the same expression is spliced
+// into both the SET clause and the access_policy_revision predicate — as a
+// literal subselect it would run twice per UPDATE, but a CTE referenced more
+// than once is materialized once by Postgres.
+func accessGroupSetClause(input models.UpdateUserInput, argIndex int) (setClause, predicate, defaultGroupCTE string, args []any, nextArgIndex int) {
 	const isAdmin = "role = '" + models.RoleAdmin + "'"
-	col := userUpdateColumn{column: "access_group_id", bumpsAccessPolicy: true}
+	nextArgIndex = argIndex
 	switch {
 	case input.Role != nil && *input.Role == models.RoleAdmin:
-		col.set = true
-		col.value = (*int64)(nil)
+		placeholder := fmt.Sprintf("$%d", argIndex)
+		setClause = "access_group_id = " + placeholder
+		args = []any{(*int64)(nil)}
+		nextArgIndex++
 	case input.Role != nil && !input.AccessGroupID.Set:
-		col.set = true
-		col.expr = "CASE WHEN " + isAdmin +
-			" THEN (SELECT id FROM access_groups WHERE is_default) ELSE access_group_id END"
+		defaultGroupCTE = "default_group AS (SELECT id FROM access_groups WHERE is_default)"
+		expr := "(CASE WHEN " + isAdmin + " THEN (SELECT id FROM default_group) ELSE access_group_id END)"
+		setClause = "access_group_id = " + expr
 	case input.Role == nil && input.AccessGroupID.Set && input.AccessGroupID.Value != nil:
-		col.set = true
-		col.value = input.AccessGroupID.Value
+		placeholder := fmt.Sprintf("$%d", argIndex)
 		// The cast pins the parameter type; inside a CASE the driver would
 		// otherwise send it as text.
-		col.expr = "CASE WHEN " + isAdmin + " THEN NULL ELSE $?::bigint END"
+		expr := "(CASE WHEN " + isAdmin + " THEN NULL ELSE " + placeholder + "::bigint END)"
+		setClause = "access_group_id = " + expr
+		args = []any{input.AccessGroupID.Value}
+		nextArgIndex++
 	default:
-		col.set = input.AccessGroupID.Set
-		col.value = input.AccessGroupID.Value
+		if !input.AccessGroupID.Set {
+			return "", "", "", nil, argIndex
+		}
+		placeholder := fmt.Sprintf("$%d", argIndex)
+		setClause = "access_group_id = " + placeholder
+		args = []any{input.AccessGroupID.Value}
+		nextArgIndex++
 	}
-	return col
+	predicate = "access_group_id IS DISTINCT FROM " + strings.TrimPrefix(setClause, "access_group_id = ")
+	return setClause, predicate, defaultGroupCTE, args, nextArgIndex
 }
 
 // Update modifies a user's fields. Only non-nil fields in the input are updated.
@@ -347,7 +368,6 @@ func (r *UserRepository) Update(ctx context.Context, id int, input models.Update
 		{column: "download_allowed", set: input.DownloadAllowed.Set, value: input.DownloadAllowed.Value},
 		{column: "download_transcode_allowed", set: input.DownloadTranscodeAllowed.Set, value: input.DownloadTranscodeAllowed.Value},
 		{column: "requests_allowed", set: input.RequestsAllowed.Set, value: input.RequestsAllowed.Value},
-		accessGroupUpdateColumn(input),
 	}
 
 	setClauses := []string{}
@@ -359,24 +379,27 @@ func (r *UserRepository) Update(ctx context.Context, id int, input models.Update
 			continue
 		}
 		placeholder := fmt.Sprintf("$%d", argIndex)
-		rhs := placeholder
-		binds := true
-		if col.expr != "" {
-			binds = strings.Contains(col.expr, "$?")
-			rhs = "(" + strings.ReplaceAll(col.expr, "$?", placeholder) + ")"
-		}
-		setClauses = append(setClauses, fmt.Sprintf("%s = %s", col.column, rhs))
+		setClauses = append(setClauses, fmt.Sprintf("%s = %s", col.column, placeholder))
 		if col.bumpsAccessPolicy {
 			accessPolicyPredicates = append(
 				accessPolicyPredicates,
-				fmt.Sprintf("%s IS DISTINCT FROM %s", col.column, rhs),
+				fmt.Sprintf("%s IS DISTINCT FROM %s", col.column, placeholder),
 			)
-		}
-		if !binds {
-			continue
 		}
 		args = append(args, col.value)
 		argIndex++
+	}
+
+	// access_group_id is not a plain userUpdateColumn: what gets written
+	// depends on the row's current role, so it is assembled directly rather
+	// than through the generic column loop above.
+	var defaultGroupCTE string
+	if setClause, predicate, cte, groupArgs, nextArgIndex := accessGroupSetClause(input, argIndex); setClause != "" {
+		setClauses = append(setClauses, setClause)
+		accessPolicyPredicates = append(accessPolicyPredicates, predicate)
+		defaultGroupCTE = cte
+		args = append(args, groupArgs...)
+		argIndex = nextArgIndex
 	}
 
 	if len(setClauses) == 0 {
@@ -395,8 +418,14 @@ func (r *UserRepository) Update(ctx context.Context, id int, input models.Update
 	// Always bump updated_at.
 	setClauses = append(setClauses, "updated_at = NOW()")
 
-	query := fmt.Sprintf("UPDATE users SET %s WHERE id = $%d",
-		strings.Join(setClauses, ", "), argIndex)
+	var query string
+	if defaultGroupCTE != "" {
+		query = fmt.Sprintf("WITH %s UPDATE users SET %s WHERE id = $%d",
+			defaultGroupCTE, strings.Join(setClauses, ", "), argIndex)
+	} else {
+		query = fmt.Sprintf("UPDATE users SET %s WHERE id = $%d",
+			strings.Join(setClauses, ", "), argIndex)
+	}
 	args = append(args, id)
 
 	tag, err := r.pool.Exec(ctx, query, args...)

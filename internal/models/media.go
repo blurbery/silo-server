@@ -9,6 +9,7 @@ const (
 	mediaBaseTypeAudiobook = "audiobook"
 	mediaBaseTypePodcast   = "podcast"
 	mediaCodecMJPEG        = "mjpeg"
+	mediaCodecH264         = "h264"
 )
 
 // MediaFolder represents a row in the media_folders table.
@@ -113,12 +114,23 @@ type MediaFile struct {
 	PresentationPartTotal        int
 	MultiEpisodeStart            int
 	MultiEpisodeEnd              int
-	ProbeSource                  string // arrs, local
-	ProbeUpdatedAt               *time.Time
-	MatchAttemptedAt             *time.Time
-	MissingSince                 *time.Time
-	CreatedAt                    time.Time
-	UpdatedAt                    time.Time
+	// MultiplePPS is the persisted H.264 multi-PPS copy-safety verdict; nil
+	// means the file has never been successfully analyzed. It is trusted only
+	// when MultiplePPSScanSize and MultiplePPSScanMtime still match the file's
+	// current size and mtime, so a rewritten file self-invalidates without any
+	// coordination from the writers that touch media_files.
+	//
+	// json:"-" on all three: MediaFile is not a client-facing shape, and the
+	// runtime copy-safety signal clients do act on lives on VideoTrack.
+	MultiplePPS          *bool      `json:"-"`
+	MultiplePPSScanSize  *int64     `json:"-"`
+	MultiplePPSScanMtime *time.Time `json:"-"`
+	ProbeSource          string     // arrs, local
+	ProbeUpdatedAt       *time.Time
+	MatchAttemptedAt     *time.Time
+	MissingSince         *time.Time
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 // MediaChapter represents a single media chapter derived from embedded file metadata.
@@ -157,6 +169,68 @@ func (f *MediaFile) PrimaryDVProfile() int {
 		return 0
 	}
 	return f.VideoTracks[0].DVProfile
+}
+
+// VideoCopySafetyUnknown reports whether this file is an H.264 video whose
+// multi-PPS copy-safety verdict is not stamped on the in-memory track. Only
+// H.264 can carry the conflicting in-band parameter sets that make a video
+// stream-copy unsafe, so every other codec is trivially known-safe.
+//
+// This is the single definition of "the verdict is still open", shared by the
+// scanner that resolves it, the catalog surfaces that trigger the resolution,
+// and playback.
+func (f *MediaFile) VideoCopySafetyUnknown() bool {
+	if f == nil || len(f.VideoTracks) == 0 {
+		return false
+	}
+	if f.VideoTracks[0].MultiplePPS != nil {
+		return false
+	}
+	codec := strings.ToLower(strings.TrimSpace(f.VideoTracks[0].Codec))
+	if codec == "" {
+		codec = strings.ToLower(strings.TrimSpace(f.CodecVideo))
+	}
+	return codec == mediaCodecH264 || codec == "avc" || codec == "avc1"
+}
+
+// PersistedVideoCopyVerdict returns the H.264 multi-PPS verdict recorded on the
+// media_files row and whether it still describes the file as it stands.
+//
+// The verdict is self-validating: it is only honored while the size and mtime
+// it was computed from still match the row, so a rewrite in place falls through
+// to a rescan without any writer having to clear it. A verdict recorded for a
+// row that carries no mtime is trusted on size alone — that is the only signal
+// such a row has, and it is the same rule the scanner's in-process memo
+// applies.
+//
+// This lives on the model because the row columns are loaded by every media
+// file read, while the VideoTrack copy-safety flags are runtime-only and are
+// stamped by the probe ensurer, which not every path that loads a file runs.
+func (f *MediaFile) PersistedVideoCopyVerdict() (bool, bool) {
+	if f == nil || f.MultiplePPS == nil || f.MultiplePPSScanSize == nil {
+		return false, false
+	}
+	if *f.MultiplePPSScanSize != f.FileSize {
+		return false, false
+	}
+	if f.MultiplePPSScanMtime == nil || f.FileModifiedAt == nil {
+		if f.MultiplePPSScanMtime != nil || f.FileModifiedAt != nil {
+			return false, false
+		}
+		return *f.MultiplePPS, true
+	}
+	if !NormalizeFileModifiedAt(*f.MultiplePPSScanMtime).Equal(NormalizeFileModifiedAt(*f.FileModifiedAt)) {
+		return false, false
+	}
+	return *f.MultiplePPS, true
+}
+
+// NormalizeFileModifiedAt puts a filesystem mtime in the one shape every
+// comparison uses. Postgres stores microseconds and local filesystems report
+// nanoseconds, so a round trip through the database is only equal to the value
+// that was written after truncation.
+func NormalizeFileModifiedAt(ts time.Time) time.Time {
+	return ts.UTC().Truncate(time.Microsecond)
 }
 
 // AudioOnlyProbeFacts is the compact probe shape needed to distinguish known

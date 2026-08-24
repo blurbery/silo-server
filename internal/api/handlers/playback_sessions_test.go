@@ -70,7 +70,8 @@ func TestSessionsCapabilitiesAdvertisesActivityFields(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode capabilities: %v", err)
 	}
-	if !resp.EffectivePlayMethod || !resp.IsJellyfinClient || !resp.ClientBuild || !resp.ClientChannel {
+	if !resp.EffectivePlayMethod || !resp.IsJellyfinClient || !resp.ClientBuild || !resp.ClientChannel ||
+		!resp.TargetAudioChannels {
 		t.Fatalf("capabilities must advertise every additive field: %+v", resp)
 	}
 	want := []string{"direct", "remux", "transcode", "audio"}
@@ -412,7 +413,7 @@ func TestPlaybackClientInfoFromRequestClampsHeaders(t *testing.T) {
 	req.Header.Set("X-Silo-Client-Build", strings.Repeat("b", 100))
 	req.Header.Set("X-Silo-Client-Channel", strings.Repeat("c", 100))
 
-	got := playbackClientInfoFromRequest(req)
+	got := playback.ClientInfoFromRequest(req)
 
 	for _, tc := range []struct {
 		field string
@@ -441,7 +442,7 @@ func TestNormalizeClientMetadataCountsRunes(t *testing.T) {
 	// counts it, well past it as bytes.
 	req.Header.Set("X-Silo-Client-Channel", strings.Repeat("δ", 40))
 
-	got := playbackClientInfoFromRequest(req)
+	got := playback.ClientInfoFromRequest(req)
 
 	if runes := utf8.RuneCountInString(got.Channel); runes != 32 {
 		t.Errorf("Channel runes = %d, want the 32-character bound", runes)

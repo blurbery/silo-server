@@ -337,6 +337,20 @@ func (s *RemuxSession) Read(p []byte) (int, error) {
 	return s.outputPipe.Read(p)
 }
 
+// Abort kills the ffmpeg process without draining or reaping it.
+//
+// It exists for callers that are not the owner of the session: killing ffmpeg
+// closes the output pipe, which is what unblocks a copy loop parked in Read, and
+// the owner's deferred Close then does the draining and the wait. Close itself
+// cannot be used for that — it reads the pipe and calls cmd.Wait, neither of
+// which may run concurrently with the owner's Read.
+func (s *RemuxSession) Abort() {
+	if s == nil || s.cancel == nil {
+		return
+	}
+	s.cancel()
+}
+
 // Close stops the ffmpeg process and cleans up all resources.
 // It is safe to call Close multiple times.
 func (s *RemuxSession) Close() error {
@@ -382,6 +396,12 @@ type RemuxServeOptions struct {
 	// output. Zero values retain the historical stereo 192 kbps behavior.
 	TargetAudioChannels    int
 	TargetAudioBitrateKbps int
+	// Abort ends the response early when it is closed. A progressive remux is
+	// one long response, so without it the only thing that can stop the stream
+	// is the client itself — a server-initiated session stop cannot withdraw a
+	// route the client is still being fed. Callers that serve a session pass
+	// SessionManager.WatchTransportStop's channel.
+	Abort <-chan struct{}
 }
 
 // RemuxContentType returns the override required for an audio-only fMP4.
@@ -432,6 +452,20 @@ func ServeRemuxWithOptions(w http.ResponseWriter, r *http.Request, filePath, out
 		return err
 	}
 	defer session.Close()
+
+	if opts.Abort != nil {
+		// Deferred after session.Close, so it runs before it: the watcher is
+		// gone by the time the owner drains and reaps the process.
+		served := make(chan struct{})
+		defer close(served)
+		go func() {
+			select {
+			case <-opts.Abort:
+				session.Abort()
+			case <-served:
+			}
+		}()
+	}
 
 	contentType := opts.ContentType
 	if contentType == "" {
