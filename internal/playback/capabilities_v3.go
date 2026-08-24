@@ -88,7 +88,7 @@ func SourceDescriptorFromFileV3(file *models.MediaFile, audioIndex int) SourceDe
 	}
 	if source.DynamicRange == "" {
 		if file.HDR {
-			source.DynamicRange = "hdr_unknown"
+			source.DynamicRange = DynamicRangeHDRUnknownV3
 		} else {
 			source.DynamicRange = DynamicRangeSDRV3
 		}
@@ -129,13 +129,15 @@ func videoEligibleV3(source SourceDescriptorV3, request StartRequestV3) (bool, b
 		// planner); there is no stricter validation to run.
 		return flatClaims, false
 	case EvidenceExactV3, EvidencePlatformAttestedV3:
-		skipProfileLevel := request.Capabilities.VideoEvidence == EvidencePlatformAttestedV3
+		softwareDecodeOptIn := HasFeatureV3(request.ClientFeatures, FeatureSoftwareVideoDecodeV3)
 		matchedCodec := false
 		for _, capability := range request.Capabilities.VideoDecode {
-			if !strings.EqualFold(capability.Codec, source.VideoCodec) || !capability.Hardware {
+			if !strings.EqualFold(capability.Codec, source.VideoCodec) ||
+				(!capability.Hardware && !softwareDecodeOptIn) {
 				continue
 			}
 			matchedCodec = true
+			skipProfileLevel := request.Capabilities.VideoEvidence == EvidencePlatformAttestedV3 && capability.Hardware
 			if !skipProfileLevel {
 				if len(capability.Profiles) > 0 && (source.VideoProfile == "" || !containsFoldV3(capability.Profiles, source.VideoProfile)) {
 					continue
@@ -187,7 +189,7 @@ func outputRangeEligibleV3(source SourceDescriptorV3, request StartRequestV3) (b
 	case "hdr10":
 		claims.HDR10 = hdr != nil && hdr.HDR10
 		return claims.HDR10, claims
-	case "hdr_unknown":
+	case DynamicRangeHDRUnknownV3:
 		// Legacy rows only recorded a file-level HDR flag without per-track
 		// range metadata. HDR10 is by far the most common static-HDR range, so
 		// an HDR10-capable output treats the source as HDR10 instead of
@@ -216,6 +218,29 @@ func outputRangeEligibleV3(source SourceDescriptorV3, request StartRequestV3) (b
 	default:
 		return false, claims
 	}
+}
+
+// clientManagesOriginalDynamicRangeV3 is intentionally delivery-scoped. It
+// says the original-file executor can inspect the source and choose its own
+// display presentation after delivery; it does not make the same HDR source
+// safe for a server-produced progressive or HLS stream.
+func clientManagesOriginalDynamicRangeV3(source SourceDescriptorV3, request StartRequestV3) bool {
+	if source.DynamicRange == "" || source.DynamicRange == DynamicRangeSDRV3 {
+		return false
+	}
+	delivery, ok := request.ClientPlaybackContext.Deliveries[DeliveryClassOriginalHTTPV3]
+	return ok && delivery.Enabled && delivery.SupportedOnDevice &&
+		containsFoldV3(delivery.ValidatedClaims, ClaimClientManagedDynamicRangeV3)
+}
+
+// clientSelectsOriginalAudioTrackV3 is delivery-scoped because original HTTP
+// carries every source stream unchanged. A client that makes this claim maps
+// selected_tracks.audio.index onto its probed source inventory; clients that
+// do not keep the historical server-remux requirement for non-default audio.
+func clientSelectsOriginalAudioTrackV3(request StartRequestV3) bool {
+	delivery, ok := request.ClientPlaybackContext.Deliveries[DeliveryClassOriginalHTTPV3]
+	return ok && delivery.Enabled && delivery.SupportedOnDevice &&
+		containsFoldV3(delivery.ValidatedClaims, ClaimClientSelectedAudioTrackV3)
 }
 
 func clientSupportsHDR10V3(request StartRequestV3) bool {

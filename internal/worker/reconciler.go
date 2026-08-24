@@ -39,14 +39,18 @@ type SessionSync struct {
 	TargetResolution     string
 	TargetVideoCodec     string
 	TargetAudioCodec     string
-	TargetBitrateKbps    int
-	TranscodeHWAccel     string
-	StartedAt            time.Time
-	UpdatedAt            time.Time
-	PositionSeconds      float64
-	IsPaused             bool
-	HasWebSocket         bool
-	IsJellyfinCompat     bool
+	// TargetAudioChannels is the encoded output channel count when audio is
+	// re-encoded; 0 means the node did not report one. Admin views must not
+	// substitute the source count for it.
+	TargetAudioChannels int
+	TargetBitrateKbps   int
+	TranscodeHWAccel    string
+	StartedAt           time.Time
+	UpdatedAt           time.Time
+	PositionSeconds     float64
+	IsPaused            bool
+	HasWebSocket        bool
+	IsJellyfinCompat    bool
 }
 
 // AggregateData represents the aggregate counts for a single user that are
@@ -155,9 +159,10 @@ func (r *Reconciler) ReconcileNodeSessions(ctx context.Context, reportingNode st
 				 reporting_node, started_at, updated_at, last_sync_at, client_ip,
 				 client_name, client_version, client_build, client_channel, client_user_agent,
 				 audio_track_index, transcode_audio, stream_bitrate_kbps, transcode_node_url,
-				 target_resolution, target_video_codec, target_audio_codec, target_bitrate_kbps,
+				 target_resolution, target_video_codec, target_audio_codec, target_audio_channels,
+				 target_bitrate_kbps,
 				 transcode_hw_accel, position_seconds, is_paused, has_websocket, compat_origin)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10::inet, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10::inet, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
 			ON CONFLICT (session_id) DO UPDATE SET
 				user_id             = EXCLUDED.user_id,
 				profile_id          = EXCLUDED.profile_id,
@@ -180,6 +185,7 @@ func (r *Reconciler) ReconcileNodeSessions(ctx context.Context, reportingNode st
 				target_resolution   = EXCLUDED.target_resolution,
 				target_video_codec  = EXCLUDED.target_video_codec,
 				target_audio_codec  = EXCLUDED.target_audio_codec,
+				target_audio_channels = EXCLUDED.target_audio_channels,
 				target_bitrate_kbps = EXCLUDED.target_bitrate_kbps,
 				transcode_hw_accel  = EXCLUDED.transcode_hw_accel,
 				position_seconds    = EXCLUDED.position_seconds,
@@ -193,7 +199,8 @@ func (r *Reconciler) ReconcileNodeSessions(ctx context.Context, reportingNode st
 			nullableString(s.ClientChannel), nullableString(s.ClientUserAgent),
 			s.AudioTrackIndex, s.TranscodeAudio, nullableInt(s.StreamBitrateKbps), nullableString(s.TranscodeNodeURL),
 			nullableString(s.TargetResolution), nullableString(s.TargetVideoCodec),
-			nullableString(s.TargetAudioCodec), nullableInt(s.TargetBitrateKbps),
+			nullableString(s.TargetAudioCodec), nullableInt(s.TargetAudioChannels),
+			nullableInt(s.TargetBitrateKbps),
 			nullableString(s.TranscodeHWAccel), normalizePositionSeconds(s.PositionSeconds),
 			s.IsPaused, s.HasWebSocket, s.IsJellyfinCompat)
 		if err != nil {
@@ -266,6 +273,7 @@ func loadNodeSessionsSnapshot(ctx context.Context, tx pgx.Tx, reportingNode stri
 			COALESCE(target_resolution, ''),
 			COALESCE(target_video_codec, ''),
 			COALESCE(target_audio_codec, ''),
+			COALESCE(target_audio_channels, 0),
 			COALESCE(target_bitrate_kbps, 0),
 			COALESCE(transcode_hw_accel, ''),
 			started_at,
@@ -307,6 +315,7 @@ func loadNodeSessionsSnapshot(ctx context.Context, tx pgx.Tx, reportingNode stri
 			&s.TargetResolution,
 			&s.TargetVideoCodec,
 			&s.TargetAudioCodec,
+			&s.TargetAudioChannels,
 			&s.TargetBitrateKbps,
 			&s.TranscodeHWAccel,
 			&s.StartedAt,
@@ -366,6 +375,7 @@ func sessionSnapshotsEqual(left, right []SessionSync) bool {
 			left[i].TargetResolution != right[i].TargetResolution ||
 			left[i].TargetVideoCodec != right[i].TargetVideoCodec ||
 			left[i].TargetAudioCodec != right[i].TargetAudioCodec ||
+			left[i].TargetAudioChannels != right[i].TargetAudioChannels ||
 			left[i].TargetBitrateKbps != right[i].TargetBitrateKbps ||
 			left[i].TranscodeHWAccel != right[i].TranscodeHWAccel ||
 			!left[i].StartedAt.Equal(right[i].StartedAt) ||

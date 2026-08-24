@@ -326,6 +326,9 @@ const (
 	SessionLoadFailed
 	// SessionForbidden: a live session exists but belongs to another user.
 	SessionForbidden
+	// SessionUnauthorized: the live session negotiated authenticated media
+	// requests, but this request has no authenticated user identity.
+	SessionUnauthorized
 )
 
 // LoadOrReconstructSession is the single front door every serve handler uses to
@@ -334,8 +337,10 @@ const (
 // re-binding ownership to the live caller. The two-factor ownership rule is
 // preserved exactly — a live session with a non-zero, mismatched caller is
 // refused; reconstruct itself refuses a zero/mismatched caller — so this widens
-// no access. getSession is supplied by the caller (its SessionManager.GetSession)
-// so the manager needs no direct handle on the manager type.
+// no access. A live session that requires media authorization additionally
+// refuses a caller with no identity at all. getSession is supplied by the caller
+// (its SessionManager.GetSession) so the manager needs no direct handle on the
+// manager type.
 //
 // card is the reconstruction recipe the caller decoded from the verified stream
 // token the client presented (nil when the request carried no usable token).
@@ -343,15 +348,27 @@ const (
 // no shared per-session store to fall back on — so a not-found session with a nil
 // card is a genuine miss.
 func (m *TranscodeManager) LoadOrReconstructSession(ctx context.Context, getSession func(string) (*Session, error), sessionID string, requestUserID int, card *RecipeCard) (*Session, SessionLoadStatus) {
+	session, status, _ := m.LoadOrReconstructSessionDetail(ctx, getSession, sessionID, requestUserID, card)
+	return session, status
+}
+
+// LoadOrReconstructSessionDetail is LoadOrReconstructSession plus whether the
+// session it returned was rebuilt from the card rather than found live.
+//
+// A handler needs the distinction when the card pins a route that may have been
+// withdrawn since it was signed: a live session was already re-decided by
+// whatever withdrew it, while a reconstruction replays the recipe verbatim and
+// has to re-check it. See the copy-safety refusal on the stream serve path.
+func (m *TranscodeManager) LoadOrReconstructSessionDetail(ctx context.Context, getSession func(string) (*Session, error), sessionID string, requestUserID int, card *RecipeCard) (*Session, SessionLoadStatus, bool) {
 	session, err := getSession(sessionID)
 	if err != nil {
 		if !errors.Is(err, ErrSessionNotFound) {
-			return nil, SessionLoadFailed
+			return nil, SessionLoadFailed, false
 		}
 		// A nil manager (documented optional on StreamHandler) cannot reconstruct,
 		// so a missing session is simply not-found rather than a panic.
 		if m == nil || card == nil {
-			return nil, SessionMissing
+			return nil, SessionMissing, false
 		}
 		// Lost the in-memory session (e.g. restart): rebuild it from the token's
 		// recipe. ReconstructSession re-binds the session to the card owner and
@@ -359,17 +376,27 @@ func (m *TranscodeManager) LoadOrReconstructSession(ctx context.Context, getSess
 		// the authless bearer routes), so a nil result here is a genuine not-found.
 		session = m.ReconstructSession(ctx, sessionID, requestUserID, *card)
 		if session == nil {
-			return nil, SessionMissing
+			return nil, SessionMissing, false
 		}
-		return session, SessionLoaded
+		return session, SessionLoaded, true
 	}
 	// Live session: enforce the existing ownership check. A zero caller is
 	// allowed (these routes treat the session UUID as a bearer when auth is
 	// optional); a non-zero mismatch is refused.
-	if requestUserID != 0 && session.UserID != requestUserID {
-		return nil, SessionForbidden
+	//
+	// A session that negotiated header-authenticated media is the exception: its
+	// UUID is a route identifier and never a credential, so an unauthenticated
+	// caller is refused here — at the front door every serve handler shares —
+	// rather than at each handler's own fast path. Sessions that never
+	// negotiated the mode (legacy v3 and jellycompat alike) keep the bearer
+	// behavior unchanged.
+	if requestUserID == 0 && session.RequireMediaAuthorization {
+		return nil, SessionUnauthorized, false
 	}
-	return session, SessionLoaded
+	if requestUserID != 0 && session.UserID != requestUserID {
+		return nil, SessionForbidden, false
+	}
+	return session, SessionLoaded, false
 }
 
 // ReconstructSession rebuilds the in-memory playback Session from a persisted
@@ -410,6 +437,7 @@ func (m *TranscodeManager) ReconstructSession(ctx context.Context, sessionID str
 		UserID:                     card.UserID,
 		ProfileID:                  card.ProfileID,
 		MediaFileID:                card.MediaFileID,
+		StartedAt:                  card.OriginalStartedAt,
 		PlayMethod:                 method,
 		BasePlayMethod:             method,
 		TranscodeNodeURL:           card.TranscodeNodeURL,

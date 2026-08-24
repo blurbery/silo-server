@@ -76,6 +76,7 @@ func (h *PlaybackHandler) HandleVideoStream(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "BadRequest", "Media source is required")
 		return
 	}
+	attachCompatStream(r.Context(), session, playSession, source.FileID)
 
 	method := "direct"
 	if !staticRequest && !source.SupportsDirectPlay {
@@ -92,6 +93,9 @@ func (h *PlaybackHandler) HandleVideoStream(w http.ResponseWriter, r *http.Reque
 		writeCompatUpstreamError(w, err)
 		return
 	}
+	// The attach above is a no-op on the first request of a session, which has
+	// no upstream id yet. Now it does, and no byte has been written.
+	attachCompatStream(r.Context(), session, playSession, source.FileID)
 
 	if h.fileResolver == nil {
 		writeError(w, http.StatusInternalServerError, "ServerError", "File resolver not available")
@@ -109,7 +113,7 @@ func (h *PlaybackHandler) HandleVideoStream(w http.ResponseWriter, r *http.Reque
 	}
 	if h.NodePlanner != nil && h.JWTSecret != "" {
 		plan := h.NodePlanner.PlanSession(playSession.UpstreamSessionID, "", false, source.Version.Bitrate)
-		if redirectURL, redirectErr := h.buildProxyRedirectURL(playSession.ID, playSession.UpstreamSessionID, method, file, *source, "", seekSeconds, plan.ProxyNode); redirectErr == nil {
+		if redirectURL, redirectErr := h.buildProxyRedirectURL(playSession.ID, playSession.UpstreamSessionID, method, file, *source, session, playSession.CreatedAt, "", seekSeconds, plan.ProxyNode); redirectErr == nil {
 			http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 			return
 		}
@@ -186,6 +190,9 @@ func (h *PlaybackHandler) HandleDownload(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, "NotFound", "Media file not found")
 		return
 	}
+	// §4.2b: a download has a user but no stable playback session, so it is a
+	// Transfer rather than a logical session.
+	attachCompatTransfer(r.Context(), session, version.FileID)
 
 	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(filepath.Base(file.FilePath)))
 	_ = playback.ServeDirectPlay(w, r, file.FilePath)
@@ -218,6 +225,11 @@ func (h *PlaybackHandler) HandleMasterManifest(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "BadRequest", "Media source is required")
 		return
 	}
+	// Attach BEFORE ensureUpstreamPlayback below: this route can start a
+	// transcode before it writes a byte, which is the whole reason §4.2 enrolls
+	// manifest routes. A cut has to be able to act here, not after the side
+	// effect. See the boundary note in streamtelemetry.go.
+	attachCompatStream(r.Context(), session, playSession, source.FileID)
 
 	var err error
 	if h.NodePlanner != nil && h.JWTSecret != "" {
@@ -226,6 +238,9 @@ func (h *PlaybackHandler) HandleMasterManifest(w http.ResponseWriter, r *http.Re
 			writeCompatUpstreamError(w, err)
 			return
 		}
+		// See HandleVideoStream: the pre-side-effect attach cannot know the
+		// upstream id on a session's first request, and this is where it exists.
+		attachCompatStream(r.Context(), session, playSession, source.FileID)
 		failRemoteStart := func() {
 			h.teardownPlaySession(context.WithoutCancel(r.Context()), playSession, nil, nil)
 		}
@@ -259,7 +274,7 @@ func (h *PlaybackHandler) HandleMasterManifest(w http.ResponseWriter, r *http.Re
 					writeError(w, http.StatusBadGateway, "TranscodeStartFailed", "Transcode node rejected the request")
 					return
 				}
-				redirectURL, redirectErr := h.buildProxyRedirectURL(playSession.ID, playSession.UpstreamSessionID, string(playback.PlayTranscode), file, *source, tcNode.URL, 0, plan.ProxyNode)
+				redirectURL, redirectErr := h.buildProxyRedirectURL(playSession.ID, playSession.UpstreamSessionID, string(playback.PlayTranscode), file, *source, session, playSession.CreatedAt, tcNode.URL, 0, plan.ProxyNode)
 				if redirectErr != nil {
 					failRemoteStart()
 					writeError(w, http.StatusInternalServerError, "ServerError", "Failed to sign proxy stream URL")
@@ -284,6 +299,13 @@ func (h *PlaybackHandler) HandleMasterManifest(w http.ResponseWriter, r *http.Re
 
 	// Ensure the transcode process is running.
 	manifest, err := h.ensureTranscodeManifest(r.Context(), session, playSession.ID, *source)
+	if err == nil {
+		// Local-fallback path: the upstream session was minted in here, so this
+		// is the first point at which the observation can carry the merged view's
+		// canonical key. No-op when the earlier attach already succeeded.
+		playSession = h.refreshPlaySession(playSession)
+		attachCompatStream(r.Context(), session, playSession, source.FileID)
+	}
 	if err != nil {
 		if errors.Is(err, errTranscode4KDisallowed) {
 			writeError(w, http.StatusForbidden, "Forbidden", "4K video transcoding is disabled on this server")
@@ -333,9 +355,18 @@ func (h *PlaybackHandler) HandleHLSManifest(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "BadRequest", "Media source is required")
 		return
 	}
+	// Before ensureTranscodeManifest, for the same reason as the master manifest.
+	attachCompatStream(r.Context(), session, playSession, source.FileID)
 
 	// Ensure the transcode process is running.
 	manifest, err := h.ensureTranscodeManifest(r.Context(), session, playSession.ID, *source)
+	if err == nil {
+		// Local-fallback path: the upstream session was minted in here, so this
+		// is the first point at which the observation can carry the merged view's
+		// canonical key. No-op when the earlier attach already succeeded.
+		playSession = h.refreshPlaySession(playSession)
+		attachCompatStream(r.Context(), session, playSession, source.FileID)
+	}
 	if err != nil {
 		if errors.Is(err, errTranscode4KDisallowed) {
 			writeError(w, http.StatusForbidden, "Forbidden", "4K video transcoding is disabled on this server")
@@ -379,6 +410,11 @@ func (h *PlaybackHandler) HandleHLSSegment(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, "NotFound", "Playback session not found")
 		return
 	}
+	segmentSourceFileID := 0
+	if source := firstMediaSource(playSession); source != nil {
+		segmentSourceFileID = source.FileID
+	}
+	attachCompatStream(r.Context(), session, playSession, segmentSourceFileID)
 
 	name := chiURLParam(r, "segmentId")
 	ext := chiURLParam(r, "segmentContainer")
@@ -397,6 +433,12 @@ func (h *PlaybackHandler) HandleHLSSegment(w http.ResponseWriter, r *http.Reques
 		return
 	case playback.SessionForbidden:
 		writeError(w, http.StatusForbidden, "Forbidden", "Session belongs to another user")
+		return
+	case playback.SessionUnauthorized:
+		// Defensive against invariant drift, not a reachable path: this caller
+		// resolves a non-zero user before loading. Falling through would
+		// dereference the nil session the status carries.
+		writeError(w, http.StatusUnauthorized, "Unauthorized", "Authentication required")
 		return
 	}
 
@@ -567,7 +609,7 @@ func (h *PlaybackHandler) HandleSubtitleStream(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	_, source, err := h.resolvePlaybackRoute(r, session, chiURLParam(r, "routeMediaSourceId"), chiURLParam(r, "routeMediaSourceId"))
+	playSession, source, err := h.resolvePlaybackRoute(r, session, chiURLParam(r, "routeMediaSourceId"), chiURLParam(r, "routeMediaSourceId"))
 	if err != nil || source == nil {
 		writeError(w, http.StatusNotFound, "NotFound", "Playback session not found")
 		return
@@ -582,6 +624,10 @@ func (h *PlaybackHandler) HandleSubtitleStream(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusNotFound, "NotFound", "Media file not found")
 		return
 	}
+	// Identity is fully known here. The later 400/404 branches for a bad index or
+	// a missing subtitle then record an outcome on a real session, which is
+	// correct: they are failures by an already-authorized principal.
+	attachCompatStream(r.Context(), session, playSession, source.FileID)
 
 	routeIndex := chiURLParam(r, "routeIndex")
 	trackIndex, parseErr := strconv.Atoi(routeIndex)
@@ -1354,13 +1400,18 @@ func (h *PlaybackHandler) handlePlaybackReport(w http.ResponseWriter, r *http.Re
 // (PlaybackSession.Recipe); direct/remux need only identity, rebuilt here from
 // the compat session and the negotiated source.
 func (h *PlaybackHandler) upstreamRecipeCard(ps *PlaybackSession, cs *Session, source PlaybackMediaSource, method string) playback.RecipeCard {
+	var card playback.RecipeCard
 	if ps != nil && ps.Recipe != nil {
-		return *ps.Recipe
+		card = *ps.Recipe
+	} else if method == "remux" {
+		card = playback.NewRemuxRecipeCard(ps.UpstreamSessionID, cs.StreamAppUserID, cs.ProfileID, source.FileID, source.TranscodeAudio, compatAudioTrackIndexOrDefault(source))
+	} else {
+		card = playback.NewDirectRecipeCard(ps.UpstreamSessionID, cs.StreamAppUserID, cs.ProfileID, source.FileID)
 	}
-	if method == "remux" {
-		return playback.NewRemuxRecipeCard(ps.UpstreamSessionID, cs.StreamAppUserID, cs.ProfileID, source.FileID, source.TranscodeAudio, compatAudioTrackIndexOrDefault(source))
+	if ps != nil && !ps.CreatedAt.IsZero() {
+		card.OriginalStartedAt = ps.CreatedAt
 	}
-	return playback.NewDirectRecipeCard(ps.UpstreamSessionID, cs.StreamAppUserID, cs.ProfileID, source.FileID)
+	return card
 }
 
 // reportMatchesPlaySession rejects an alias-resolved session whose item or
@@ -1400,6 +1451,19 @@ func (h *PlaybackHandler) reviveUpstreamForReport(ctx context.Context, session *
 		return nil
 	}
 	return revived
+}
+
+// refreshPlaySession re-reads a play session from the store so a caller that
+// just triggered upstream-session creation sees the minted UpstreamSessionID.
+// Returns the original on a miss so callers never have to nil-check.
+func (h *PlaybackHandler) refreshPlaySession(current *PlaybackSession) *PlaybackSession {
+	if current == nil {
+		return nil
+	}
+	if refreshed, ok := h.playbackStore.Get(current.ID); ok && refreshed != nil {
+		return refreshed
+	}
+	return current
 }
 
 func (h *PlaybackHandler) ensureUpstreamPlayback(ctx context.Context, compatSession *Session, playSessionID string, source PlaybackMediaSource, method string) (*PlaybackSession, error) {

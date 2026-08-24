@@ -3184,7 +3184,7 @@ func sameFileModifiedAt(existing *time.Time, current time.Time) bool {
 }
 
 func normalizeFileModifiedAt(ts time.Time) time.Time {
-	return ts.UTC().Truncate(time.Microsecond)
+	return models.NormalizeFileModifiedAt(ts)
 }
 
 func needsCriticalProbeRepairScanState(file *scanStateFile) bool {

@@ -351,6 +351,8 @@ func (h *PlaybackHandler) buildProxyRedirectURL(
 	method string,
 	file *models.MediaFile,
 	source PlaybackMediaSource,
+	compatSession *Session,
+	createdAt time.Time,
 	transcodeNodeURL string,
 	seekSeconds float64,
 	proxyNode *nodepool.Node,
@@ -373,6 +375,14 @@ func (h *PlaybackHandler) buildProxyRedirectURL(
 		AudioOnly:       file.IsAudioOnly(),
 		TranscodeNode:   transcodeNodeURL,
 		DVProfile:       file.PrimaryDVProfile(),
+	}
+	if compatSession != nil {
+		claims.UserID = compatSession.StreamAppUserID
+		claims.ProfileID = compatSession.ProfileID
+		claims.MediaFileID = source.FileID
+	}
+	if !createdAt.IsZero() {
+		claims.OriginalStartedAtUnixNano = createdAt.UnixNano()
 	}
 	token, err := streamtoken.Sign(claims, h.JWTSecret, 24*time.Hour)
 	if err != nil {
@@ -545,6 +555,10 @@ func (h *PlaybackHandler) persistTranscodeRecipe(
 	playSessionID, upstreamSessionID string,
 	opts playback.TranscodeOpts,
 ) error {
+	var playSession *PlaybackSession
+	if h.playbackStore != nil {
+		playSession, _ = h.playbackStore.Get(playSessionID)
+	}
 	var recipe *playback.RecipeCard
 	if h.sessionMgr != nil {
 		if upstream, err := h.sessionMgr.GetSession(upstreamSessionID); err == nil && upstream != nil {
@@ -556,6 +570,9 @@ func (h *PlaybackHandler) persistTranscodeRecipe(
 			card.ClientVersion = upstream.ClientVersion
 			card.ClientUserAgent = upstream.ClientUserAgent
 			card.IsJellyfinCompat = upstream.IsJellyfinCompat
+			if playSession != nil {
+				card.OriginalStartedAt = playSession.CreatedAt
+			}
 			recipe = &card
 		}
 	}
@@ -609,6 +626,11 @@ func (h *PlaybackHandler) HandleCapabilitiesFull(w http.ResponseWriter, r *http.
 
 // HandleBitrateTest returns a small binary payload for clients that probe bandwidth.
 func (h *PlaybackHandler) HandleBitrateTest(w http.ResponseWriter, r *http.Request) {
+	// Jellyfin's authenticated bandwidth probe: transfer-observed, cap-exempt
+	// (§4.2 "classify but exempt"). It resolves no play session, so the subject
+	// is all the identity there is; an unauthenticated probe attaches nothing and
+	// its bytes fall into Unattributed*.
+	attachCompatTransfer(r.Context(), SessionFromContext(r.Context()), 0)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(make([]byte, 1024*1024))

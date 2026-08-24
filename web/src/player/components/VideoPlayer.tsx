@@ -27,6 +27,7 @@ import { usePlayerConfig } from "../context/PlayerConfigContext";
 import { qualityOptionsFromPlanV3 } from "../playback-info";
 import { preconnectToStreamOrigin } from "../stream-url";
 import { WatchTogetherPanel } from "./WatchTogetherPanel";
+import { readPlanInvalidatedPayload, VIDEO_PLAYBACK_COMMANDS } from "../realtime-protocol";
 import type {
   PlaybackRealtimeCommandEnvelope,
   PlaybackRealtimeEventEnvelope,
@@ -109,6 +110,12 @@ interface VideoPlayerProps {
   onSubtitleTrackChange?: (combinedIndex: number | null, currentPosition: number) => void;
   /** `failure_recovery` replan after the client could not play the plan. */
   onPlanFailure?: (failure: FailureV3, currentPosition: number) => void;
+  /**
+   * Replan for a plan the server invalidated over the realtime
+   * `plan_invalidated` command. Resolving false rejects the command, which is
+   * what tells the server to stop the session instead.
+   */
+  onPlanInvalidated?: (planId: string, reason: string, currentPosition: number) => Promise<boolean>;
   /** `seek_reanchor` replan when a seek target falls outside the seekable window. */
   onReanchorSeek?: (positionSeconds: number) => void;
   preferredSubtitleLanguage?: string | null;
@@ -221,6 +228,7 @@ export function VideoPlayer({
   onQualitySelect,
   onSubtitleTrackChange,
   onPlanFailure,
+  onPlanInvalidated,
   onReanchorSeek,
   preferredSubtitleLanguage,
   preferredSubtitleTrackSignature,
@@ -2450,6 +2458,28 @@ export function VideoPlayer({
             tone: "warning",
           });
           return;
+        case "plan_invalidated": {
+          // The server decided the route it planned cannot serve this source
+          // after all. Ack (already sent by the transport), replan off it, and
+          // report the outcome: a rejection is the server's cue to stop the
+          // session so the client's own recovery can mint a fresh attempt.
+          const invalidated = readPlanInvalidatedPayload(command.payload);
+          if (!invalidated) {
+            throw new Error("invalid_plan_invalidated_payload");
+          }
+          if (!onPlanInvalidated) {
+            throw new Error("plan_invalidation_unsupported");
+          }
+          const replaced = await onPlanInvalidated(
+            invalidated.plan_id,
+            invalidated.reason,
+            currentTimeRef.current,
+          );
+          if (!replaced) {
+            throw new Error("plan_invalidation_replan_failed");
+          }
+          return;
+        }
         case "stop":
         case "terminate":
           if (command.payload) {
@@ -2470,13 +2500,14 @@ export function VideoPlayer({
           throw new Error("unsupported");
       }
     },
-    [handleExit, performPlayerSeek],
+    [handleExit, onPlanInvalidated, performPlayerSeek],
   );
 
   const realtime = usePlaybackRealtime({
     sessionId,
     onCommand: executeRealtimeCommand,
     onEvent: handleRealtimeEvent,
+    supportedCommands: VIDEO_PLAYBACK_COMMANDS,
   });
 
   useEffect(() => {

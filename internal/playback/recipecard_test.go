@@ -3,6 +3,7 @@ package playback
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/Silo-Server/silo-server/internal/streamtoken"
 )
@@ -92,6 +93,39 @@ func TestRecipeCardRoundTripOpts(t *testing.T) {
 	}
 	if got.FFmpegPath != "/usr/bin/ffmpeg" {
 		t.Errorf("FFmpegPath not re-supplied: %q", got.FFmpegPath)
+	}
+}
+
+func TestRecipeCardOriginalStartedAtRoundTripAndReconstruct(t *testing.T) {
+	started := time.Date(2026, 8, 16, 12, 34, 56, 987654321, time.UTC)
+	card := NewRecipeCard(42, "profile-1", 77, "", TranscodeOpts{SessionID: "started", InputPath: "/media/movie.mkv"})
+	card.OriginalStartedAt = started
+	encoded, err := json.Marshal(card)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored RecipeCard
+	if err := json.Unmarshal(encoded, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if !stored.OriginalStartedAt.Equal(started) {
+		t.Fatalf("stored-card round trip = %s, want %s", stored.OriginalStartedAt, started)
+	}
+
+	claims := card.ToClaims()
+	if claims.OriginalStartedAtUnixNano != started.UnixNano() {
+		t.Fatalf("ostn = %d, want %d", claims.OriginalStartedAtUnixNano, started.UnixNano())
+	}
+	back := RecipeCardFromClaims(&claims)
+	if !back.OriginalStartedAt.Equal(started) {
+		t.Fatalf("claim round trip = %s, want %s", back.OriginalStartedAt, started)
+	}
+
+	tm := NewTranscodeManager()
+	tm.Sessions = NewSessionManager(0, 0)
+	session := tm.ReconstructSession(t.Context(), "started", 42, back)
+	if session == nil || !session.StartedAt.Equal(started) {
+		t.Fatalf("reconstructed StartedAt = %v, want %s", session, started)
 	}
 }
 

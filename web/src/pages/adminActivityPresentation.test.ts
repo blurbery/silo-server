@@ -4,6 +4,8 @@ import {
   classifyActivityMethod,
   compareActivityMethods,
   isJellyfinSession,
+  formatAudioDetail,
+  formatAudioSummary,
   formatContainerDetail,
   formatDeliveredAudioSummary,
   formatDeliveredContainerSummary,
@@ -61,6 +63,7 @@ function makeSession(overrides: Partial<AdminSession> = {}): AdminSession {
     source_audio_channels: overrides.source_audio_channels ?? 2,
     audio_decision: overrides.audio_decision,
     target_audio_codec: overrides.target_audio_codec,
+    target_audio_channels: overrides.target_audio_channels,
     requested_video_codec: overrides.requested_video_codec ?? "hevc",
     requested_video_resolution: overrides.requested_video_resolution ?? "2160p",
   };
@@ -91,6 +94,7 @@ describe("adminActivityPresentation", () => {
       source_audio_codec: "eac3",
       source_audio_channels: 6,
       target_audio_codec: "aac",
+      target_audio_channels: 6,
     });
 
     expect(formatPlaybackDecisionSummary(session)).toBe("transcode");
@@ -150,7 +154,35 @@ describe("adminActivityPresentation", () => {
           transcode_hw_accel: "qsv",
         }),
       ),
-    ).toBe("Audio SW");
+      // Audio-only re-encodes have no video encoder, so they get named for the
+      // work rather than for an acceleration mode they never used.
+    ).toBe("Audio Transcode");
+  });
+
+  it("labels a transcode's audio with the target channel count, never the source's", () => {
+    // TrueHD 7.1 downmixed to AAC 5.1 must not claim 7.1 output.
+    const downmixed = makeSession({
+      audio_decision: "transcode",
+      source_audio_codec: "truehd",
+      source_audio_channels: 8,
+      target_audio_codec: "aac",
+      target_audio_channels: 6,
+    });
+    expect(formatDeliveredAudioSummary(downmixed)).toBe("AAC 5.1");
+    expect(formatAudioDetail(downmixed)).toBe("→ AAC 5.1");
+
+    // Server did not report a target count → codec alone, not the source's.
+    const unknownTarget = makeSession({
+      audio_decision: "transcode",
+      source_audio_codec: "truehd",
+      source_audio_channels: 8,
+      target_audio_codec: "aac",
+    });
+    expect(formatDeliveredAudioSummary(unknownTarget)).toBe("AAC");
+    expect(formatAudioDetail(unknownTarget)).toBe("→ AAC");
+
+    // The source summary still describes the source in full.
+    expect(formatAudioSummary(unknownTarget)).toBe("TrueHD 7.1");
   });
 
   it("buckets activity sessions by the backend's per-stream decisions", () => {

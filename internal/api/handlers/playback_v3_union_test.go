@@ -150,13 +150,13 @@ func TestPlanNodeSessionV3PrefersCapabilityMatchingNode(t *testing.T) {
 			{Name: "audio_to_aac", Executor: "server", RecipeVersion: "1"},
 		},
 	}
-	selected := handler.planNodeSessionV3(context.Background(), &playback.Session{ID: "session-hetero"}, playback.PlannerResultV3{Plan: plan, PlayMethod: playback.PlayTranscode})
+	selected := handler.planNodeSessionV3(context.Background(), &playback.Session{ID: "session-hetero"}, playback.PlannerResultV3{Plan: plan, PlayMethod: playback.PlayTranscode}, false)
 	if selected.TranscodeNode == nil || selected.TranscodeNode.URL != capable.URL {
 		t.Fatalf("capability-requiring plan selected %+v, want the capable node", selected.TranscodeNode)
 	}
 
 	free := &playback.PlanV3{PlanID: "plan:copy", Delivery: playback.DeliveryRemuxHLSV3, Transformations: []playback.TransformationV3{}}
-	loadBased := handler.planNodeSessionV3(context.Background(), &playback.Session{ID: "session-copy"}, playback.PlannerResultV3{Plan: free, PlayMethod: playback.PlayRemux})
+	loadBased := handler.planNodeSessionV3(context.Background(), &playback.Session{ID: "session-copy"}, playback.PlannerResultV3{Plan: free, PlayMethod: playback.PlayRemux}, false)
 	if loadBased.TranscodeNode == nil || loadBased.TranscodeNode.URL != incapable.URL {
 		t.Fatalf("transformation-free plan selected %+v, want load-based selection", loadBased.TranscodeNode)
 	}
@@ -177,7 +177,7 @@ func TestPrepareTransportV3LocalFallbackRejectsUnavailableTransformations(t *tes
 		},
 	}
 	request := httptest.NewRequest(http.MethodPost, "/", nil)
-	_, transportErr := handler.prepareTransportV3(request, &playback.Session{ID: "session-local-capability"}, v3HandlerFixtureFile(t), playback.PlannerResultV3{Plan: plan, PlayMethod: playback.PlayTranscode, TargetVideoCodec: "h264", TargetAudioCodec: "aac"})
+	_, transportErr := handler.prepareTransportV3(request, &playback.Session{ID: "session-local-capability"}, v3HandlerFixtureFile(t), playback.PlannerResultV3{Plan: plan, PlayMethod: playback.PlayTranscode, TargetVideoCodec: "h264", TargetAudioCodec: "aac"}, mediaAuthModeV3{})
 	if transportErr == nil || transportErr.reason != "transcode_node_capability_unavailable" || !transportErr.retryable {
 		t.Fatalf("transport error = %#v", transportErr)
 	}

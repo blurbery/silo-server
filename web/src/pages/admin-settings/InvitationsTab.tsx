@@ -9,6 +9,7 @@ import {
 } from "@/hooks/queries/admin/invitations";
 import { useAccessGroups } from "@/hooks/queries/admin/accessGroups";
 import { useAdminLibraries } from "@/hooks/queries/admin/libraries";
+import { effectiveAccessGroupID } from "@/components/UserPolicyFields";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -295,7 +296,7 @@ function CreateInvitationForm({
       {
         email,
         role,
-        access_group_id: role === "admin" ? null : accessGroupID,
+        access_group_id: effectiveAccessGroupID(role, accessGroupID),
         library_ids: libraryIDs,
         create_profile: createProfile,
         show_tour: showTour,

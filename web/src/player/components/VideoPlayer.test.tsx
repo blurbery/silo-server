@@ -4,13 +4,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PlayerConfigProvider, type PlayerConfig } from "../context/PlayerConfigContext";
 import { fixturePlanV3 } from "../protocol-v3.fixtures";
-import type { PlaybackRealtimeEventEnvelope } from "../realtime-protocol";
+import type {
+  PlaybackRealtimeCommandEnvelope,
+  PlaybackRealtimeEventEnvelope,
+} from "../realtime-protocol";
 import type { PlayerSubtitleInfo } from "../types";
 import { HLS_STARTUP_TIMEOUT_MS } from "../utils/hlsStartupGuard";
 import { VideoPlayer } from "./VideoPlayer";
 
 const realtimeOptions = vi.hoisted(() => ({
-  current: null as null | { onEvent?: (event: PlaybackRealtimeEventEnvelope) => void },
+  current: null as null | {
+    onEvent?: (event: PlaybackRealtimeEventEnvelope) => void;
+    onCommand: (command: PlaybackRealtimeCommandEnvelope) => Promise<void> | void;
+  },
 }));
 const controls = vi.hoisted(() => ({
   current: null as null | {
@@ -119,6 +125,22 @@ function renderPlayer(overrides: Partial<Parameters<typeof VideoPlayer>[0]> = {}
     rerenderPlayer(next: Partial<Parameters<typeof VideoPlayer>[0]>) {
       rendered.rerender(createElement(VideoPlayer, { ...props, ...next }));
     },
+  };
+}
+
+function planInvalidatedCommand(
+  payload: Record<string, unknown> = {
+    reason: "video_copy_unsafe",
+    plan_id: directPlan.plan_id,
+  },
+): PlaybackRealtimeCommandEnvelope {
+  return {
+    type: "command",
+    command_id: "cmd-invalidate-1",
+    session_id: "session-1",
+    name: "plan_invalidated",
+    deadline_ms: 8_000,
+    payload,
   };
 }
 
@@ -233,6 +255,45 @@ describe("VideoPlayer plan failure recovery", () => {
 
     fireEvent.error(video);
     expect(onPlanFailure).toHaveBeenCalledTimes(2);
+  });
+
+  it("replans off a plan the server invalidated", async () => {
+    const onPlanInvalidated = vi.fn().mockResolvedValue(true);
+    renderPlayer({ onPlanInvalidated });
+    const onCommand = realtimeOptions.current?.onCommand;
+    if (!onCommand) throw new Error("expected the realtime command handler");
+
+    await act(async () => {
+      await onCommand(planInvalidatedCommand());
+    });
+
+    expect(onPlanInvalidated).toHaveBeenCalledWith(directPlan.plan_id, "video_copy_unsafe", 0);
+  });
+
+  // A rejected result is the server's cue to stop the session, which is what
+  // lets the client's own recovery mint a fresh attempt against the persisted
+  // verdict. Swallowing the failure here would leave the copy route playing.
+  it("rejects the invalidation command when no replacement plan is adopted", async () => {
+    const onPlanInvalidated = vi.fn().mockResolvedValue(false);
+    renderPlayer({ onPlanInvalidated });
+    const onCommand = realtimeOptions.current?.onCommand;
+    if (!onCommand) throw new Error("expected the realtime command handler");
+
+    await expect(onCommand(planInvalidatedCommand())).rejects.toThrow(
+      "plan_invalidation_replan_failed",
+    );
+  });
+
+  it("rejects an invalidation command that names no plan", async () => {
+    const onPlanInvalidated = vi.fn().mockResolvedValue(true);
+    renderPlayer({ onPlanInvalidated });
+    const onCommand = realtimeOptions.current?.onCommand;
+    if (!onCommand) throw new Error("expected the realtime command handler");
+
+    await expect(
+      onCommand(planInvalidatedCommand({ reason: "video_copy_unsafe" })),
+    ).rejects.toThrow("invalid_plan_invalidated_payload");
+    expect(onPlanInvalidated).not.toHaveBeenCalled();
   });
 
   it("does not retry an auto-selected subtitle after its replan is refused", async () => {

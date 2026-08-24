@@ -731,6 +731,89 @@ func TestReconstructFromToken_JellycompatRecipeFetch(t *testing.T) {
 	})
 }
 
+// nativeTransportCard is the shape central stores for a header-authenticated
+// remote transcode: the recipe is keyed by the plan-scoped TRANSPORT id the node
+// serves it under, which is not the playback session id.
+func nativeTransportCard(sessionID, transportID string) *playback.RecipeCard {
+	return &playback.RecipeCard{
+		SessionID:            sessionID,
+		TranscodeTransportID: transportID,
+		PlayMethod:           playback.PlayTranscode,
+		InputPath:            "/media/movie.mkv",
+		TargetCodecVideo:     "h264",
+		TargetCodecAudio:     "aac",
+		SegmentDuration:      2,
+	}
+}
+
+// A header-authenticated attempt publishes no stream token, so nothing forwards
+// one to this node — the request that arrives after a node restart carries only
+// the static bearer that already authorized it. The stored recipe is then the
+// only reconstruct source, and it is keyed by the transport id in the URL, so
+// the node must accept the native (TranscodeTransportID) card shape too.
+func TestReconstructFromToken_TokenlessRebuildsFromTheStoredTransportRecipe(t *testing.T) {
+	const sessionID = "sess-tokenless-1"
+	const transportID = sessionID + "-plan1234-abcd1234"
+
+	s := newTestServer(t)
+	s.tracker = nodesessions.NewTracker(nil, "http://node", "node", "transcode")
+	ffmpegPath := filepath.Join(t.TempDir(), "looping-ffmpeg.sh")
+	if err := os.WriteFile(ffmpegPath, []byte("#!/bin/sh\nwhile :; do sleep 0.1; done\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.watcher.Config().Playback.FFmpegPath = ffmpegPath
+	store := &stubRecipeStore{ok: true, card: nativeTransportCard(sessionID, transportID)}
+	s.SetRecipeStore(store)
+
+	session := s.reconstructFromToken(requestWithToken(transportID, ""), transportID, 5)
+	if session == nil {
+		t.Fatal("tokenless request did not reconstruct; a node restart would 404 this session until the client replans")
+	}
+	defer func() { _ = session.CloseProcess() }()
+	if store.hits != 1 {
+		t.Fatalf("recipe store consulted %d times, want 1", store.hits)
+	}
+	if got := session.Opts().SessionID; got != transportID {
+		t.Fatalf("rebuilt session id = %q, want the transport id %q the node serves under", got, transportID)
+	}
+	if got := session.Opts().StartSegmentNumber; got != 5 {
+		t.Fatalf("rebuilt start segment = %d, want the segment the client is fetching", got)
+	}
+}
+
+// Without a recipe to rebuild from, a tokenless request is still a genuine
+// not-found: the node must never spawn ffmpeg on a guess.
+func TestReconstructFromToken_TokenlessWithoutARecipeIsNotFound(t *testing.T) {
+	const transportID = "sess-tokenless-2-plan1234-abcd1234"
+
+	t.Run("no recipe store wired", func(t *testing.T) {
+		s := newTestServer(t)
+		if got := s.reconstructFromToken(requestWithToken(transportID, ""), transportID, 5); got != nil {
+			t.Fatalf("expected nil without a recipe store, got %v", got)
+		}
+	})
+
+	t.Run("store miss", func(t *testing.T) {
+		s := newTestServer(t)
+		store := &stubRecipeStore{ok: false}
+		s.SetRecipeStore(store)
+		if got := s.reconstructFromToken(requestWithToken(transportID, ""), transportID, 5); got != nil {
+			t.Fatalf("expected nil on store miss, got %v", got)
+		}
+		if store.hits != 1 {
+			t.Fatalf("recipe store consulted %d times, want 1", store.hits)
+		}
+	})
+
+	t.Run("stored recipe for another transport", func(t *testing.T) {
+		s := newTestServer(t)
+		s.SetRecipeStore(&stubRecipeStore{ok: true, card: nativeTransportCard("sess-tokenless-2", "some-other-transport")})
+		if got := s.reconstructFromToken(requestWithToken(transportID, ""), transportID, 5); got != nil {
+			t.Fatalf("expected nil for a recipe keyed to another transport, got %v", got)
+		}
+	})
+}
+
 // handleStop is a deliberate teardown, so it must drop the session's recipe to
 // stop a buffered/retrying post-restart request from reconstructing a brand-new
 // ffmpeg for an already-stopped session. A zero-value TranscodeSession needs no

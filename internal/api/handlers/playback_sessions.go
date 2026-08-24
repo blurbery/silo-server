@@ -21,69 +21,76 @@ import (
 // method for the active stream; component-level behavior is exposed separately
 // via video_decision and audio_decision.
 type playbackSessionRow struct {
-	SessionID                string    `json:"session_id"`
-	UserID                   int       `json:"user_id"`
-	Username                 string    `json:"username"`
-	ProfileID                string    `json:"profile_id"`
-	ProfileName              string    `json:"profile_name,omitempty"`
-	MediaFileID              int       `json:"media_file_id"`
-	RequestedMediaFileID     int       `json:"requested_media_file_id"`
-	ContentID                string    `json:"content_id,omitempty"`
-	MediaTitle               string    `json:"media_title"`
-	MediaType                string    `json:"media_type"`
-	SeriesName               string    `json:"series_name,omitempty"`
-	EpisodeName              string    `json:"episode_name,omitempty"`
-	SeasonNumber             *int      `json:"season_number,omitempty"`
-	EpisodeNumber            *int      `json:"episode_number,omitempty"`
-	PosterURL                string    `json:"poster_url,omitempty"`
-	PlayMethod               string    `json:"play_method"`
-	ReportingNode            string    `json:"reporting_node"`
-	NodeDisplayName          string    `json:"node_display_name,omitempty"`
-	FileDuration             *int      `json:"file_duration"`
-	StartedAt                time.Time `json:"started_at"`
-	UpdatedAt                time.Time `json:"updated_at"`
-	PositionSeconds          float64   `json:"position_seconds"`
-	IsPaused                 bool      `json:"is_paused"`
-	HasPlaybackControl       bool      `json:"has_playback_control"`
-	ClientIP                 string    `json:"client_ip,omitempty"`
-	ClientName               string    `json:"client_name,omitempty"`
-	ClientVersion            string    `json:"client_version,omitempty"`
-	ClientBuild              string    `json:"client_build,omitempty"`
-	ClientChannel            string    `json:"client_channel,omitempty"`
-	ClientLabel              string    `json:"client_label,omitempty"`
-	ClientLabelFull          string    `json:"client_label_full,omitempty"`
-	ClientUserAgent          string    `json:"client_user_agent,omitempty"`
-	AudioTrackIndex          int       `json:"audio_track_index"`
-	TranscodeAudio           bool      `json:"transcode_audio"`
-	StreamBitrateKbps        *int      `json:"stream_bitrate_kbps"`
-	TranscodeNodeURL         string    `json:"-"`
-	TargetResolution         string    `json:"target_resolution,omitempty"`
-	TargetVideoCodec         string    `json:"target_video_codec,omitempty"`
-	TargetAudioCodec         string    `json:"target_audio_codec,omitempty"`
-	TargetBitrateKbps        *int      `json:"target_bitrate_kbps"`
-	TranscodeHWAccel         string    `json:"transcode_hw_accel,omitempty"`
-	SourceContainer          string    `json:"source_container,omitempty"`
-	SourceBitrateKbps        *int      `json:"source_bitrate_kbps"`
-	SourceVideoCodec         string    `json:"source_video_codec,omitempty"`
-	SourceVideoResolution    string    `json:"source_video_resolution,omitempty"`
-	SourceAudioCodec         string    `json:"source_audio_codec,omitempty"`
-	SourceAudioChannels      *int      `json:"source_audio_channels"`
-	SourceAudioLanguage      string    `json:"source_audio_language,omitempty"`
-	SourceAudioTitle         string    `json:"source_audio_title,omitempty"`
-	SourceAudioLayout        string    `json:"source_audio_layout,omitempty"`
-	RequestedVideoCodec      string    `json:"requested_video_codec,omitempty"`
-	RequestedVideoResolution string    `json:"requested_video_resolution,omitempty"`
-	VideoDecision            string    `json:"video_decision,omitempty"`
-	AudioDecision            string    `json:"audio_decision,omitempty"`
-	EffectivePlayMethod      string    `json:"effective_play_method,omitempty"`
-	IsJellyfinClient         bool      `json:"is_jellyfin_client,omitempty"`
-	CompatOrigin             bool      `json:"-"`
+	SessionID            string    `json:"session_id"`
+	UserID               int       `json:"user_id"`
+	Username             string    `json:"username"`
+	ProfileID            string    `json:"profile_id"`
+	ProfileName          string    `json:"profile_name,omitempty"`
+	MediaFileID          int       `json:"media_file_id"`
+	RequestedMediaFileID int       `json:"requested_media_file_id"`
+	ContentID            string    `json:"content_id,omitempty"`
+	MediaTitle           string    `json:"media_title"`
+	MediaType            string    `json:"media_type"`
+	SeriesName           string    `json:"series_name,omitempty"`
+	EpisodeName          string    `json:"episode_name,omitempty"`
+	SeasonNumber         *int      `json:"season_number,omitempty"`
+	EpisodeNumber        *int      `json:"episode_number,omitempty"`
+	PosterURL            string    `json:"poster_url,omitempty"`
+	PlayMethod           string    `json:"play_method"`
+	ReportingNode        string    `json:"reporting_node"`
+	NodeDisplayName      string    `json:"node_display_name,omitempty"`
+	FileDuration         *int      `json:"file_duration"`
+	StartedAt            time.Time `json:"started_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+	PositionSeconds      float64   `json:"position_seconds"`
+	IsPaused             bool      `json:"is_paused"`
+	HasPlaybackControl   bool      `json:"has_playback_control"`
+	ClientIP             string    `json:"client_ip,omitempty"`
+	ClientName           string    `json:"client_name,omitempty"`
+	ClientVersion        string    `json:"client_version,omitempty"`
+	ClientBuild          string    `json:"client_build,omitempty"`
+	ClientChannel        string    `json:"client_channel,omitempty"`
+	ClientLabel          string    `json:"client_label,omitempty"`
+	ClientLabelFull      string    `json:"client_label_full,omitempty"`
+	ClientUserAgent      string    `json:"client_user_agent,omitempty"`
+	AudioTrackIndex      int       `json:"audio_track_index"`
+	TranscodeAudio       bool      `json:"transcode_audio"`
+	StreamBitrateKbps    *int      `json:"stream_bitrate_kbps"`
+	TranscodeNodeURL     string    `json:"-"`
+	TargetResolution     string    `json:"target_resolution,omitempty"`
+	TargetVideoCodec     string    `json:"target_video_codec,omitempty"`
+	TargetAudioCodec     string    `json:"target_audio_codec,omitempty"`
+	// TargetAudioChannels is the channel count the transcode actually encodes.
+	// Absent when the reporting node did not know it — clients must then show
+	// the target codec with no channel layout rather than reusing
+	// SourceAudioChannels, which is what made a 7.1 source downmixed to AAC 5.1
+	// read as "AAC 7.1".
+	TargetAudioChannels      *int   `json:"target_audio_channels,omitempty"`
+	TargetBitrateKbps        *int   `json:"target_bitrate_kbps"`
+	TranscodeHWAccel         string `json:"transcode_hw_accel,omitempty"`
+	SourceContainer          string `json:"source_container,omitempty"`
+	SourceBitrateKbps        *int   `json:"source_bitrate_kbps"`
+	SourceVideoCodec         string `json:"source_video_codec,omitempty"`
+	SourceVideoResolution    string `json:"source_video_resolution,omitempty"`
+	SourceAudioCodec         string `json:"source_audio_codec,omitempty"`
+	SourceAudioChannels      *int   `json:"source_audio_channels"`
+	SourceAudioLanguage      string `json:"source_audio_language,omitempty"`
+	SourceAudioTitle         string `json:"source_audio_title,omitempty"`
+	SourceAudioLayout        string `json:"source_audio_layout,omitempty"`
+	RequestedVideoCodec      string `json:"requested_video_codec,omitempty"`
+	RequestedVideoResolution string `json:"requested_video_resolution,omitempty"`
+	VideoDecision            string `json:"video_decision,omitempty"`
+	AudioDecision            string `json:"audio_decision,omitempty"`
+	EffectivePlayMethod      string `json:"effective_play_method,omitempty"`
+	IsJellyfinClient         bool   `json:"is_jellyfin_client,omitempty"`
+	CompatOrigin             bool   `json:"-"`
 }
 
 // playbackSessionsCapabilitiesResponse advertises the additive fields of the
 // live admin session payload so independently deployed clients (Android,
-// Apple) can feature-detect them. Both fields are omitempty on the wire, so
-// absence on a row is otherwise indistinguishable from an older server.
+// Apple) can feature-detect them. The advertised fields are omitempty on the
+// wire, so absence on a row is otherwise indistinguishable from an older
+// server.
 type playbackSessionsCapabilitiesResponse struct {
 	// EffectivePlayMethod reports that rows carry effective_play_method.
 	EffectivePlayMethod bool `json:"effective_play_method"`
@@ -97,6 +104,10 @@ type playbackSessionsCapabilitiesResponse struct {
 	ClientBuild bool `json:"client_build"`
 	// ClientChannel reports that rows carry client_channel.
 	ClientChannel bool `json:"client_channel"`
+	// TargetAudioChannels reports that rows carry target_audio_channels;
+	// absent on a row then means the reporting node did not know the encoded
+	// layout.
+	TargetAudioChannels bool `json:"target_audio_channels"`
 }
 
 // HandleGetSessionsCapabilities exposes additive feature support for the live
@@ -108,6 +119,7 @@ func (h *AdminHandler) HandleGetSessionsCapabilities(w http.ResponseWriter, _ *h
 		IsJellyfinClient:          true,
 		ClientBuild:               true,
 		ClientChannel:             true,
+		TargetAudioChannels:       true,
 	})
 }
 
@@ -202,6 +214,7 @@ func (l *PlaybackSessionsLoader) Load(
 			COALESCE(s.target_resolution, ''),
 			COALESCE(s.target_video_codec, ''),
 			COALESCE(s.target_audio_codec, ''),
+			s.target_audio_channels,
 			s.target_bitrate_kbps,
 			COALESCE(s.transcode_hw_accel, ''),
 			COALESCE(mf.container, ''),
@@ -241,6 +254,7 @@ func (l *PlaybackSessionsLoader) Load(
 		var s playbackSessionRow
 		var posterPath string
 		var streamBitrateKbps *int
+		var targetAudioChannels *int
 		var targetBitrateKbps *int
 		var sourceBitrateKbps *int
 		var sourceAudioChannels *int
@@ -253,7 +267,8 @@ func (l *PlaybackSessionsLoader) Load(
 			&s.PositionSeconds, &s.IsPaused, &s.HasPlaybackControl, &s.ClientIP, &s.ClientName, &s.ClientVersion,
 			&s.ClientBuild, &s.ClientChannel,
 			&s.ClientUserAgent, &s.AudioTrackIndex, &s.TranscodeAudio, &streamBitrateKbps,
-			&s.TranscodeNodeURL, &s.TargetResolution, &s.TargetVideoCodec, &s.TargetAudioCodec, &targetBitrateKbps,
+			&s.TranscodeNodeURL, &s.TargetResolution, &s.TargetVideoCodec, &s.TargetAudioCodec,
+			&targetAudioChannels, &targetBitrateKbps,
 			&s.TranscodeHWAccel, &s.SourceContainer, &sourceBitrateKbps, &s.SourceVideoCodec, &s.SourceVideoResolution,
 			&s.SourceAudioCodec, &sourceAudioChannels, &audioTracksJSON, &s.RequestedVideoCodec, &s.RequestedVideoResolution,
 			&s.CompatOrigin,
@@ -262,6 +277,7 @@ func (l *PlaybackSessionsLoader) Load(
 		}
 		s.PosterURL = l.presignPosterURL(r, posterPath)
 		s.StreamBitrateKbps = streamBitrateKbps
+		s.TargetAudioChannels = targetAudioChannels
 		s.TargetBitrateKbps = targetBitrateKbps
 		s.SourceBitrateKbps = sourceBitrateKbps
 		s.SourceAudioChannels = sourceAudioChannels
