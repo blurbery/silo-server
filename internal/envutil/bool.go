@@ -13,12 +13,14 @@ import (
 	"strings"
 )
 
+const trueValue = "true"
+
 // Truthy reports whether a raw environment value means "on". Case and
 // surrounding whitespace are ignored. Anything else, including an empty or
 // unset value, is false — a flag has to be turned on deliberately.
 func Truthy(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "true", "yes", "on", "enabled":
+	case "1", trueValue, "yes", "on", "enabled":
 		return true
 	default:
 		return false
@@ -32,7 +34,7 @@ func Bool(name string) bool { return Truthy(os.Getenv(name)) }
 // to def when the variable is unset or empty — whitespace-only counts as empty,
 // since a value that survives a shell only as spaces was never really supplied.
 //
-// A value that IS present but unrecognised ("flase", "no", "0") reads as false
+// A value that IS present but unrecognized ("flase", "no", "0") reads as false
 // rather than as def. For a flag that defaults on, that means a typo in the kill
 // switch turns the flag OFF, which is the fail-safe direction: the operator was
 // reaching for "off", and a mistyped disable that silently left the feature
@@ -47,6 +49,6 @@ func BoolDefault(name string, def bool) bool {
 // IsSet reports whether the named environment variable carries a non-empty value
 // once surrounding whitespace is trimmed. It answers "did the operator touch this
 // knob?", which a default-on flag has to ask separately from "is it on?" — an
-// unset knob and one explicitly set to false want different behaviour when
+// unset knob and one explicitly set to false want different behavior when
 // something else would otherwise derive the value.
 func IsSet(name string) bool { return strings.TrimSpace(os.Getenv(name)) != "" }
