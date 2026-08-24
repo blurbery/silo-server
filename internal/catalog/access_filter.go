@@ -14,7 +14,7 @@ const LibraryCollectionVisibilityVisible = "visible"
 type AccessFilter struct {
 	AllowedLibraryIDs     []int
 	AllowedContentIDs     []string
-	DisabledLibraryIDs    []int // user-disabled libraries (only set when AllowedLibraryIDs is nil)
+	DisabledLibraryIDs    []int // libraries whose membership globally hides an item
 	PresentationLibraryID *int
 	PresentationLanguage  string
 	// ProfilePreferredLanguage is the viewer profile's preferred metadata

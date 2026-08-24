@@ -25,7 +25,7 @@ type BrowseFilters struct {
 	ContentIDs         []string // optional allowlist of exact content IDs
 	LibraryID          int      // filter by specific library
 	LibraryIDs         []int    // accessible library IDs (nil = all)
-	DisabledLibraryIDs []int    // user-disabled libraries to exclude (only used when LibraryIDs is nil)
+	DisabledLibraryIDs []int    // libraries whose membership globally hides an item
 	MaxContentRating   string   // maximum allowed content rating ceiling
 	YearMin            int      // minimum year (inclusive)
 	YearMax            int      // maximum year (inclusive)
