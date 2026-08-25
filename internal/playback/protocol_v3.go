@@ -187,13 +187,13 @@ const (
 	TransformationServerDV8BaseV3   = "server_dv8_to_compatible_base"
 	TransformationHDRToSDRToneMapV3 = "hdr_to_sdr_tonemap"
 
-	TransformationVideoToH264RecipeVersionV3    = "2"
-	TransformationServerDV7HDR10RecipeVersionV3 = "3"
-	TransformationServerDV8BaseRecipeVersionV3  = "2"
+	TransformationVideoToH264RecipeVersionV3     = "2"
+	TransformationServerDV7HDR10RecipeVersionV3  = "3"
+	TransformationServerDV8BaseRecipeVersionV3   = "2"
 	TransformationHDRToSDRToneMapRecipeVersionV3 = "1"
-	VideoSampleEntryHEV1V3                      = "hev1"
-	VideoSampleEntryHVC1V3                      = "hvc1"
-	VideoSampleEntryDVH1V3                      = "dvh1"
+	VideoSampleEntryHEV1V3                       = "hev1"
+	VideoSampleEntryHVC1V3                       = "hvc1"
+	VideoSampleEntryDVH1V3                       = "dvh1"
 )
 
 // Transformation executors: who runs the transformation. A "server"
