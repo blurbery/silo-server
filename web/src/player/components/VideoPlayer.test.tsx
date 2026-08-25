@@ -653,7 +653,7 @@ describe("VideoPlayer progressive resume timeline", () => {
 
     await waitFor(() => expect(video.src).toContain("/api/v1/stream/session-1"));
     expect(video.currentTime).toBe(0);
-    expect(play).toHaveBeenCalledOnce();
+    expect(play).not.toHaveBeenCalled();
 
     fireEvent.loadedMetadata(video);
     Object.defineProperty(video, "readyState", { configurable: true, value: 3 });
@@ -702,7 +702,7 @@ describe("VideoPlayer progressive resume timeline", () => {
     expect(play).not.toHaveBeenCalled();
   });
 
-  it("keeps Firefox zero-start progressive playback on the immediate path", async () => {
+  it("starts Firefox zero-start progressive playback when the stream is ready", async () => {
     const play = vi.mocked(HTMLMediaElement.prototype.play);
     const plan = fixturePlanV3({
       delivery: "server_remux_progressive",
@@ -719,7 +719,7 @@ describe("VideoPlayer progressive resume timeline", () => {
 
     await waitFor(() => expect(video.src).toContain("/api/v1/stream/session-1"));
     expect(video.currentTime).toBe(0);
-    expect(play).toHaveBeenCalledOnce();
+    expect(play).not.toHaveBeenCalled();
 
     Object.defineProperty(video, "readyState", { configurable: true, value: 3 });
     fireEvent.canPlay(video);
@@ -756,6 +756,8 @@ describe("VideoPlayer progressive resume timeline", () => {
     fireEvent.loadedMetadata(video);
     fireEvent.seeked(video);
     expect(video.currentTime).toBe(0);
+    Object.defineProperty(video, "readyState", { configurable: true, value: 3 });
+    fireEvent.canPlay(video);
     expect(play).toHaveBeenCalledOnce();
 
     const replacementPlan = fixturePlanV3({
@@ -777,6 +779,7 @@ describe("VideoPlayer progressive resume timeline", () => {
     fireEvent.seeked(video);
     fireEvent.loadedMetadata(video);
     fireEvent.seeked(video);
+    fireEvent.canPlay(video);
 
     expect(video.currentTime).toBe(0);
     expect(play).toHaveBeenCalledTimes(2);
