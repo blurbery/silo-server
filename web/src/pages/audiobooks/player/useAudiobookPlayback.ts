@@ -218,6 +218,7 @@ export function useAudiobookPlayback({
   // The video player's later HDR/output refinement must not restart an active
   // audiobook session; audio codecs are still tested against audio/video MP4.
   const capabilityProbe = useMemo(probeWebCapabilities, []);
+  const capabilitiesSettled = true;
   const clientCapabilities = useMemo(
     () => buildClientCapabilitiesV3(capabilityProbe),
     [capabilityProbe],
@@ -530,6 +531,7 @@ export function useAudiobookPlayback({
       playbackAttemptIdRef.current = null;
       return;
     }
+    if (!capabilitiesSettled) return;
 
     let canceled = false;
     let startedSessionId: string | null = null;
@@ -634,6 +636,7 @@ export function useAudiobookPlayback({
     adoptPlan,
     clientCapabilities,
     clientPlaybackContext,
+    capabilitiesSettled,
     config,
     fileId,
     sourceRevision,

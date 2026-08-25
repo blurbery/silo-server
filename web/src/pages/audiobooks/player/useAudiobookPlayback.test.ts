@@ -251,6 +251,21 @@ describe("useAudiobookPlayback", () => {
     });
   });
 
+  it("does not wait for the video-only capability probe before starting playback", async () => {
+    const probeResult = new Promise<MediaCapabilitiesDecodingInfo>(() => {});
+    vi.stubGlobal("navigator", {
+      userAgent: "test-browser",
+      mediaCapabilities: { decodingInfo: vi.fn(() => probeResult) },
+    });
+
+    const { result } = renderAudiobookPlayback();
+    await flushAsyncWork();
+    expect(result.current.streamUrl).toBe("/api/v1/stream/session-1?token=token");
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/playback/start")),
+    ).toHaveLength(1);
+  });
+
   it("advertises the delivery classes the audio-only planner routes to", async () => {
     renderAudiobookPlayback();
 

@@ -524,6 +524,7 @@ export interface DegradationWarningV3 {
  */
 export interface AvailableQualityV3 {
   label: string;
+  display_name?: string;
   height?: number;
   bitrate_kbps?: number;
   preserves_source: boolean;

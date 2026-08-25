@@ -128,7 +128,9 @@ describe("probeWebCapabilities", () => {
   it("advertises native Dolby Vision Profile 8 from the dvh1 sample entry", () => {
     vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("high") }));
     vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockImplementation((mime) =>
-      mime === 'video/mp4; codecs="dvh1.08.06"' ? "probably" : "",
+      mime === "application/vnd.apple.mpegurl" || mime === 'video/mp4; codecs="dvh1.08.06"'
+        ? "probably"
+        : "",
     );
 
     const capabilities = probeWebCapabilities();
@@ -142,6 +144,7 @@ describe("probeWebCapabilities", () => {
     });
     expect(capabilities.codecsVideo).not.toContain("hevc");
     expect(capabilities.progressiveCodecsVideo).toContain("hevc");
+    expect(capabilities.nativeHls).toBe(true);
   });
 
   it("advertises native Profile 5 through Safari's exact level-7 answer", () => {
@@ -288,12 +291,13 @@ describe("probeWebCapabilities", () => {
       },
     });
 
-    const { result, unmount } = renderHook(() => useCodecDetection());
-    expect(result.current.hdrDetails.hdr10).toBe(false);
-    expect(result.current.codecsVideo).not.toContain("hevc");
-    expect(result.current.progressiveCodecsVideo).not.toContain("hevc");
+    const { result, unmount } = renderHook(() => useCodecDetectionState());
+    expect(result.current.settled).toBe(false);
+    expect(result.current.probe.hdrDetails.hdr10).toBe(false);
+    expect(result.current.probe.codecsVideo).not.toContain("hevc");
+    expect(result.current.probe.progressiveCodecsVideo).not.toContain("hevc");
     await waitFor(() =>
-      expect(result.current.hdrDetails).toMatchObject({
+      expect(result.current.probe.hdrDetails).toMatchObject({
         hdr10: true,
         hdr10_max_width: 3840,
         hdr10_max_height: 2160,
@@ -301,8 +305,9 @@ describe("probeWebCapabilities", () => {
         hdr10_max_bitrate_kbps: 80_000,
       }),
     );
-    expect(result.current.codecsVideo).not.toContain("hevc");
-    expect(result.current.progressiveCodecsVideo).toContain("hevc");
+    expect(result.current.probe.codecsVideo).not.toContain("hevc");
+    expect(result.current.probe.progressiveCodecsVideo).toContain("hevc");
+    expect(result.current.settled).toBe(true);
     unmount();
   });
 

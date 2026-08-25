@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Silo-Server/silo-server/internal/streamtoken"
+	"github.com/Silo-Server/silo-server/internal/tonemap"
 )
 
 // RecipeCard is the small, durable "recipe" needed to reconstruct a transcode
@@ -39,10 +40,12 @@ type RecipeCard struct {
 
 	// Client metadata mirrored from the session so admin views (client label,
 	// Jellyfin pill) survive reconstruction. Carried only by stored cards —
-	// deliberately NOT projected into stream-token claims, where a user agent
+	// deliberately NOT projected into stream-token claims, where client metadata
 	// would bloat every stream URL.
 	ClientName       string `json:"client_name,omitempty"`
 	ClientVersion    string `json:"client_version,omitempty"`
+	ClientBuild      string `json:"client_build,omitempty"`
+	ClientChannel    string `json:"client_channel,omitempty"`
 	ClientUserAgent  string `json:"client_user_agent,omitempty"`
 	IsJellyfinCompat bool   `json:"is_jellyfin_compat,omitempty"`
 
@@ -56,33 +59,44 @@ type RecipeCard struct {
 	// profile to strip a dangling Profile 7 RPU, and the audio-only flag to keep
 	// the content type the plan promised. They ride the card so a proxy serving
 	// this session from a grant produces the same bytes the API would have.
-	DVProfile              int     `json:"dv_profile,omitempty"`
-	AudioOnly              bool    `json:"audio_only,omitempty"`
-	SourceVideoCodec       string  `json:"source_video_codec,omitempty"`
-	SourceVideoProfile     string  `json:"source_video_profile,omitempty"`
-	SourceVideoBitDepth    int     `json:"source_video_bit_depth,omitempty"`
-	SoftwareVideoDecode    bool    `json:"software_video_decode,omitempty"`
-	VideoBitstreamFilter   string  `json:"video_bitstream_filter,omitempty"`
-	VideoSampleEntry       string  `json:"video_sample_entry,omitempty"`
-	SeekSeconds            float64 `json:"seek_seconds"`
-	StreamOriginSeconds    float64 `json:"stream_origin_seconds,omitempty"`
-	CopySeekAnchorResolved bool    `json:"copy_seek_anchor_resolved,omitempty"`
-	TargetResolution       string  `json:"target_resolution,omitempty"`
-	TargetCodecVideo       string  `json:"target_codec_video,omitempty"`
-	TargetCodecAudio       string  `json:"target_codec_audio,omitempty"`
-	TargetAudioChannels    int     `json:"target_audio_channels,omitempty"`
-	TargetAudioBitrateKbps int     `json:"target_audio_bitrate_kbps,omitempty"`
-	SegmentDuration        int     `json:"segment_duration"`
-	StartSegmentNumber     int     `json:"start_segment_number"`
-	HWAccel                string  `json:"hw_accel,omitempty"`
-	HWDevice               string  `json:"hw_device,omitempty"`
-	SubtitleTrackIndex     int     `json:"subtitle_track_index"`
-	SubtitleBurnIn         bool    `json:"subtitle_burn_in,omitempty"`
-	SubtitleCodec          string  `json:"subtitle_codec,omitempty"`
-	AudioTrackIndex        int     `json:"audio_track_index"`
-	TargetBitrateKbps      int     `json:"target_bitrate_kbps,omitempty"`
-	TotalDuration          float64 `json:"total_duration"`
-	FastStart              bool    `json:"fast_start,omitempty"`
+	DVProfile                  int                    `json:"dv_profile,omitempty"`
+	AudioOnly                  bool                   `json:"audio_only,omitempty"`
+	SourceVideoCodec           string                 `json:"source_video_codec,omitempty"`
+	SourceVideoProfile         string                 `json:"source_video_profile,omitempty"`
+	SourceVideoBitDepth        int                    `json:"source_video_bit_depth,omitempty"`
+	SoftwareVideoDecode        bool                   `json:"software_video_decode,omitempty"`
+	ToneMapPolicy              tonemap.Policy         `json:"tone_map_policy,omitempty"`
+	ToneMapMode                tonemap.Mode           `json:"tone_map_mode,omitempty"`
+	ToneMapSourceKind          tonemap.SourceKind     `json:"tone_map_source_kind,omitempty"`
+	ToneMapFilter              string                 `json:"tone_map_filter,omitempty"`
+	ToneMapRecipeVersion       string                 `json:"tone_map_recipe_version,omitempty"`
+	ToneMapPreflightRequired   bool                   `json:"tone_map_preflight_required,omitempty"`
+	ToneMapSourceRevision      tonemap.SourceRevision `json:"tone_map_source_revision,omitzero"`
+	ToneMapDVConfigPresent     bool                   `json:"tone_map_dv_config_present,omitempty"`
+	ToneMapDVBLCompatIDPresent bool                   `json:"tone_map_dv_bl_compat_id_present,omitempty"`
+	ToneMapDVBLPresent         bool                   `json:"tone_map_dv_bl_present,omitempty"`
+	ToneMapDVRPUPresent        bool                   `json:"tone_map_dv_rpu_present,omitempty"`
+	VideoBitstreamFilter       string                 `json:"video_bitstream_filter,omitempty"`
+	VideoSampleEntry           string                 `json:"video_sample_entry,omitempty"`
+	SeekSeconds                float64                `json:"seek_seconds"`
+	StreamOriginSeconds        float64                `json:"stream_origin_seconds,omitempty"`
+	CopySeekAnchorResolved     bool                   `json:"copy_seek_anchor_resolved,omitempty"`
+	TargetResolution           string                 `json:"target_resolution,omitempty"`
+	TargetCodecVideo           string                 `json:"target_codec_video,omitempty"`
+	TargetCodecAudio           string                 `json:"target_codec_audio,omitempty"`
+	TargetAudioChannels        int                    `json:"target_audio_channels,omitempty"`
+	TargetAudioBitrateKbps     int                    `json:"target_audio_bitrate_kbps,omitempty"`
+	SegmentDuration            int                    `json:"segment_duration"`
+	StartSegmentNumber         int                    `json:"start_segment_number"`
+	HWAccel                    string                 `json:"hw_accel,omitempty"`
+	HWDevice                   string                 `json:"hw_device,omitempty"`
+	SubtitleTrackIndex         int                    `json:"subtitle_track_index"`
+	SubtitleBurnIn             bool                   `json:"subtitle_burn_in,omitempty"`
+	SubtitleCodec              string                 `json:"subtitle_codec,omitempty"`
+	AudioTrackIndex            int                    `json:"audio_track_index"`
+	TargetBitrateKbps          int                    `json:"target_bitrate_kbps,omitempty"`
+	TotalDuration              float64                `json:"total_duration"`
+	FastStart                  bool                   `json:"fast_start,omitempty"`
 }
 
 // NewRecipeCard builds a RecipeCard from the durable identity fields plus the
@@ -107,6 +121,17 @@ func NewRecipeCard(userID int, profileID string, mediaFileID int, transcodeNodeU
 		SourceVideoProfile:         opts.SourceVideoProfile,
 		SourceVideoBitDepth:        opts.SourceVideoBitDepth,
 		SoftwareVideoDecode:        opts.SoftwareVideoDecode,
+		ToneMapPolicy:              opts.ToneMapPolicy,
+		ToneMapMode:                opts.ToneMapMode,
+		ToneMapSourceKind:          opts.ToneMapSourceKind,
+		ToneMapFilter:              opts.ToneMapFilter,
+		ToneMapRecipeVersion:       opts.ToneMapRecipeVersion,
+		ToneMapPreflightRequired:   opts.ToneMapPreflightRequired,
+		ToneMapSourceRevision:      opts.ToneMapSourceRevision,
+		ToneMapDVConfigPresent:     opts.ToneMapDVConfigPresent,
+		ToneMapDVBLCompatIDPresent: opts.ToneMapDVBLCompatIDPresent,
+		ToneMapDVBLPresent:         opts.ToneMapDVBLPresent,
+		ToneMapDVRPUPresent:        opts.ToneMapDVRPUPresent,
 		VideoBitstreamFilter:       opts.VideoBitstreamFilter,
 		VideoSampleEntry:           opts.VideoSampleEntry,
 		RemuxDVMode:                opts.RemuxDVMode,
@@ -181,7 +206,9 @@ func (c RecipeCard) VideoStreamCopy() bool {
 
 // TranscodeOpts rebuilds the encode parameters for a reconstruct. outputDir,
 // ffmpegPath and logSink are supplied by the caller from live config because
-// they are environment-specific and not pinned in the card.
+// they are environment-specific and not pinned in the card. ToneMapFilter may
+// also be empty after token reconstruction and is resolved from live capability
+// data before the transcode starts.
 func (c RecipeCard) TranscodeOpts(outputDir, ffmpegPath string, logSink FFmpegLogSink) TranscodeOpts {
 	return TranscodeOpts{
 		InputPath:                  c.InputPath,
@@ -193,6 +220,17 @@ func (c RecipeCard) TranscodeOpts(outputDir, ffmpegPath string, logSink FFmpegLo
 		SourceVideoProfile:         c.SourceVideoProfile,
 		SourceVideoBitDepth:        c.SourceVideoBitDepth,
 		SoftwareVideoDecode:        c.SoftwareVideoDecode,
+		ToneMapPolicy:              c.ToneMapPolicy,
+		ToneMapMode:                c.ToneMapMode,
+		ToneMapSourceKind:          c.ToneMapSourceKind,
+		ToneMapFilter:              c.ToneMapFilter,
+		ToneMapRecipeVersion:       c.ToneMapRecipeVersion,
+		ToneMapPreflightRequired:   c.ToneMapPreflightRequired,
+		ToneMapSourceRevision:      c.ToneMapSourceRevision,
+		ToneMapDVConfigPresent:     c.ToneMapDVConfigPresent,
+		ToneMapDVBLCompatIDPresent: c.ToneMapDVBLCompatIDPresent,
+		ToneMapDVBLPresent:         c.ToneMapDVBLPresent,
+		ToneMapDVRPUPresent:        c.ToneMapDVRPUPresent,
 		VideoBitstreamFilter:       c.VideoBitstreamFilter,
 		VideoSampleEntry:           c.VideoSampleEntry,
 		RemuxDVMode:                c.RemuxDVMode,
@@ -237,13 +275,20 @@ const MaxTokenTTL = 24 * time.Hour
 // they are re-resolved from live config on reconstruct, so an operator's config
 // change applies to reconstructed sessions too.
 func (c RecipeCard) ToClaims() streamtoken.Claims {
+	playMethod := string(c.PlayMethod)
+	if c.PlayMethod == PlayTranscode && c.ToneMapMode != "" {
+		// Older binaries do not understand the frozen tone-map claims. Give
+		// them a method they reject instead of silently reconstructing SDR
+		// output without the required recipe.
+		playMethod = streamtoken.PlayMethodToneMapTranscode
+	}
 	return streamtoken.Claims{
 		SessionID:                  c.SessionID,
 		MediaPath:                  c.InputPath,
 		OutputSubdir:               c.OutputSubdir,
 		DVProfile:                  c.DVProfile,
 		AudioOnly:                  c.AudioOnly,
-		PlayMethod:                 string(c.PlayMethod),
+		PlayMethod:                 playMethod,
 		TranscodeAudio:             c.TranscodeAudio,
 		RemuxDVMode:                string(c.RemuxDVMode),
 		DropInitialLeadingPictures: c.DropInitialLeadingPictures,
@@ -261,40 +306,60 @@ func (c RecipeCard) ToClaims() streamtoken.Claims {
 			}
 			return c.OriginalStartedAt.UnixNano()
 		}(),
-		SourceVideoCodec:       c.SourceVideoCodec,
-		SourceVideoProfile:     c.SourceVideoProfile,
-		SourceVideoBitDepth:    c.SourceVideoBitDepth,
-		SoftwareVideoDecode:    c.SoftwareVideoDecode,
-		VideoBitstreamFilter:   c.VideoBitstreamFilter,
-		VideoSampleEntry:       c.VideoSampleEntry,
-		SeekSeconds:            c.SeekSeconds,
-		StreamOriginSeconds:    c.StreamOriginSeconds,
-		CopySeekAnchorResolved: c.CopySeekAnchorResolved,
-		SegmentDuration:        c.SegmentDuration,
-		StartSegmentNumber:     c.StartSegmentNumber,
-		SubtitleTrackIndex:     c.SubtitleTrackIndex,
-		SubtitleBurnIn:         c.SubtitleBurnIn,
-		SubtitleCodec:          c.SubtitleCodec,
-		TargetBitrateKbps:      c.TargetBitrateKbps,
-		TotalDuration:          c.TotalDuration,
-		FastStart:              c.FastStart,
-		TargetCodecAudio:       c.TargetCodecAudio,
-		TargetAudioChannels:    c.TargetAudioChannels,
-		TargetAudioBitrateKbps: c.TargetAudioBitrateKbps,
+		SourceVideoCodec:           c.SourceVideoCodec,
+		SourceVideoProfile:         c.SourceVideoProfile,
+		SourceVideoBitDepth:        c.SourceVideoBitDepth,
+		SoftwareVideoDecode:        c.SoftwareVideoDecode,
+		ToneMapPolicy:              string(c.ToneMapPolicy),
+		ToneMapMode:                string(c.ToneMapMode),
+		ToneMapSourceKind:          string(c.ToneMapSourceKind),
+		ToneMapRecipeVersion:       c.ToneMapRecipeVersion,
+		ToneMapPreflightRequired:   c.ToneMapPreflightRequired,
+		ToneMapSourceRevision:      c.ToneMapSourceRevision.Encode(),
+		ToneMapDVConfigPresent:     c.ToneMapDVConfigPresent,
+		ToneMapDVBLCompatIDPresent: c.ToneMapDVBLCompatIDPresent,
+		ToneMapDVBLPresent:         c.ToneMapDVBLPresent,
+		ToneMapDVRPUPresent:        c.ToneMapDVRPUPresent,
+		VideoBitstreamFilter:       c.VideoBitstreamFilter,
+		VideoSampleEntry:           c.VideoSampleEntry,
+		SeekSeconds:                c.SeekSeconds,
+		StreamOriginSeconds:        c.StreamOriginSeconds,
+		CopySeekAnchorResolved:     c.CopySeekAnchorResolved,
+		SegmentDuration:            c.SegmentDuration,
+		StartSegmentNumber:         c.StartSegmentNumber,
+		SubtitleTrackIndex:         c.SubtitleTrackIndex,
+		SubtitleBurnIn:             c.SubtitleBurnIn,
+		SubtitleCodec:              c.SubtitleCodec,
+		TargetBitrateKbps:          c.TargetBitrateKbps,
+		TotalDuration:              c.TotalDuration,
+		FastStart:                  c.FastStart,
+		TargetCodecAudio:           c.TargetCodecAudio,
+		TargetAudioChannels:        c.TargetAudioChannels,
+		TargetAudioBitrateKbps:     c.TargetAudioBitrateKbps,
 	}
 }
 
 // RecipeCardFromClaims rebuilds the reconstruction recipe from verified
-// stream-token claims. HWAccel/HWDevice are deliberately absent (re-resolved
-// from live config by the reconstruct path). An empty PlayMethod decodes to
-// PlayTranscode for back-compat with any token minted before the discriminator.
+// stream-token claims. HWAccel, HWDevice, and ToneMapFilter are deliberately
+// absent (re-resolved from live config by the reconstruct path). An empty
+// PlayMethod decodes to PlayTranscode for back-compat with any token minted
+// before the discriminator.
 func RecipeCardFromClaims(c *streamtoken.Claims) RecipeCard {
 	if c == nil {
 		return RecipeCard{}
 	}
 	method := PlayMethod(c.PlayMethod)
+	if c.PlayMethod == streamtoken.PlayMethodToneMapTranscode {
+		method = PlayTranscode
+	}
 	if method == "" {
 		method = PlayTranscode
+	}
+	sourceRevision, err := tonemap.DecodeSourceRevision(c.ToneMapSourceRevision)
+	if err != nil {
+		// A malformed frozen revision must fail source validation rather than
+		// silently becoming an unfrozen legacy recipe.
+		sourceRevision = tonemap.SourceRevision{MediaFileID: -1}
 	}
 	card := RecipeCard{
 		SessionID:                  c.SessionID,
@@ -315,6 +380,16 @@ func RecipeCardFromClaims(c *streamtoken.Claims) RecipeCard {
 		SourceVideoProfile:         c.SourceVideoProfile,
 		SourceVideoBitDepth:        c.SourceVideoBitDepth,
 		SoftwareVideoDecode:        c.SoftwareVideoDecode,
+		ToneMapPolicy:              tonemap.Policy(c.ToneMapPolicy),
+		ToneMapMode:                tonemap.Mode(c.ToneMapMode),
+		ToneMapSourceKind:          tonemap.SourceKind(c.ToneMapSourceKind),
+		ToneMapRecipeVersion:       c.ToneMapRecipeVersion,
+		ToneMapPreflightRequired:   c.ToneMapPreflightRequired,
+		ToneMapSourceRevision:      sourceRevision,
+		ToneMapDVConfigPresent:     c.ToneMapDVConfigPresent,
+		ToneMapDVBLCompatIDPresent: c.ToneMapDVBLCompatIDPresent,
+		ToneMapDVBLPresent:         c.ToneMapDVBLPresent,
+		ToneMapDVRPUPresent:        c.ToneMapDVRPUPresent,
 		VideoBitstreamFilter:       c.VideoBitstreamFilter,
 		VideoSampleEntry:           c.VideoSampleEntry,
 		SeekSeconds:                c.SeekSeconds,

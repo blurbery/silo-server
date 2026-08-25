@@ -258,6 +258,7 @@ export function usePlaybackSession(
   maxBitrateKbps?: number | null,
   resumeHints?: ResumeHints,
   explicitAudioTrackIndex?: number | null,
+  initialSubtitleTrackIndexByFileId?: Record<number, number>,
 ): UsePlaybackSessionResult {
   const config = usePlayerConfig();
   const { probe, settled: capabilityDetectionSettled } = useCodecDetectionState();
@@ -507,6 +508,7 @@ export function usePlaybackSession(
         position,
         forceStartPosition,
         explicitAudioTrackIndex,
+        subtitleTrackIndex: initialSubtitleTrackIndexByFileId?.[targetFileId],
         metered: detectMeteredV3(),
         bandwidthEstimateKbps: detectBandwidthEstimateKbpsV3(),
         bandwidthCapKbps: maxBitrateKbps,
@@ -519,7 +521,14 @@ export function usePlaybackSession(
         body: JSON.stringify(body),
       });
     },
-    [clientCapabilities, clientPlaybackContext, config, explicitAudioTrackIndex, maxBitrateKbps],
+    [
+      clientCapabilities,
+      clientPlaybackContext,
+      config,
+      explicitAudioTrackIndex,
+      initialSubtitleTrackIndexByFileId,
+      maxBitrateKbps,
+    ],
   );
 
   const stopSession = useCallback(

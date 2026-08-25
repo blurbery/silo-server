@@ -35,6 +35,7 @@ import type {
 import { resolvePendingSeekTime } from "../utils/pendingSeek";
 import { resolveVersionAudioLanguage } from "../utils/effectiveAudioLanguage";
 import { HlsStartupGuard } from "../utils/hlsStartupGuard";
+import { resolveHLSEngineV3 } from "../utils/hlsEngine";
 import { normalizeSubtitleMode } from "../utils/subtitleMode";
 import type {
   PlaybackExitState,
@@ -68,6 +69,25 @@ import {
   setWatchTogetherGuestControl,
 } from "@/lib/watchTogetherActions";
 import { toast } from "sonner";
+
+let hlsJSModule: Promise<typeof HlsType> | null = null;
+
+function loadHLSJS(): Promise<typeof HlsType> {
+  hlsJSModule ??= import("hls.js").then(
+    (module) => module.default,
+    (error) => {
+      // Drop the memoized rejection so a later playback retries the fetch.
+      hlsJSModule = null;
+      throw error;
+    },
+  );
+  return hlsJSModule;
+}
+
+// Warm the hls.js chunk at module load so the first playback's time to first
+// frame doesn't pay the cold dynamic-import latency on top of plan resolution.
+// A failed warm-up stays quiet here; playback retries and reports it.
+void loadHLSJS().catch(() => {});
 
 // Reserved index for the in-progress live AI translation track. Sits well above
 // any real subtitle index so it never collides.
@@ -165,15 +185,19 @@ interface VideoPlayerProps {
   watchTogetherConnection?: WatchTogetherRoomConnectionResult;
 }
 
-let hlsPromise: Promise<typeof HlsType> | null = null;
-
-/** Load hls.js once, only when a non-native HLS stream needs it. */
-function loadHls() {
-  hlsPromise ??= import("hls.js").then((module) => module.default);
-  return hlsPromise;
-}
 const EXIT_PROGRESS_FLUSH_TIMEOUT_MS = 1_000;
 const FIREFOX_COMPATIBILITY_FALLBACK_DELAY_MS = 8_000;
+// How often a rejected autoplay is retried, and how many times. A transport
+// swap tears the previous source down with `load()`, and the media element load
+// algorithm is required to reject any play that is still pending with an
+// AbortError — so the first attempt against a replacement transport can fail
+// for a reason that is gone a moment later. The retry is timed rather than
+// purely event-driven because the failure leaves nothing to wake it: once the
+// engine has filled its buffer it stops fetching, so no further readiness event
+// arrives. The budget is small so a genuinely blocked autoplay settles into a
+// paused player with working controls instead of retrying forever.
+const AUTOPLAY_RETRY_DELAY_MS = 400;
+const MAX_AUTOPLAY_ATTEMPTS = 4;
 
 interface PlaybackNoticeState {
   title?: string;
@@ -1385,6 +1409,7 @@ export function VideoPlayer({
   // Only the bitrate matters for buffer sizing, and the plan states what is
   // actually being delivered rather than what the source file happens to hold.
   const plannedBitrateKbps = plan.effective_recipe.bitrate_kbps ?? 0;
+  const plannedDynamicRange = plan.effective_recipe.dynamic_range;
 
   // -- hls.js lifecycle --
   useEffect(() => {
@@ -1393,7 +1418,10 @@ export function VideoPlayer({
 
     let hls: HlsType | null = null;
     let destroyed = false;
-    let autoplayStarted = false;
+    let playbackStarted = false;
+    let autoplayInFlight = false;
+    let autoplayAttempts = 0;
+    let autoplayRetryTimer: ReturnType<typeof setTimeout> | null = null;
     let nativeHLSMetadataHandler: (() => void) | null = null;
     const skipFirefoxProgressiveInitialSeek =
       isFirefoxBrowser &&
@@ -1404,7 +1432,14 @@ export function VideoPlayer({
     setError(null);
     setAwaitingFirstFrame(true);
 
+    const clearAutoplayRetry = () => {
+      if (autoplayRetryTimer === null) return;
+      clearTimeout(autoplayRetryTimer);
+      autoplayRetryTimer = null;
+    };
+
     const cleanupStartupListeners = () => {
+      clearAutoplayRetry();
       video.removeEventListener("loadeddata", attemptAutoplayWhenReady);
       video.removeEventListener("canplay", attemptAutoplayWhenReady);
       video.removeEventListener("loadedmetadata", attemptAutoplayWhenReady);
@@ -1414,55 +1449,95 @@ export function VideoPlayer({
       }
     };
 
-    const completeStartup = () => {
-      if (destroyed || autoplayStarted || hlsStartupGuardRef.current?.hasFailed()) return;
-      autoplayStarted = true;
+    // Settles the player into a deliberate paused state: the startup guard is
+    // told playback is viable so it does not report a bogus startup timeout,
+    // and the first frame is shown with the controls up.
+    const settlePaused = () => {
+      playbackStarted = true;
       cleanupStartupListeners();
-      if (!shouldAutoPlay) {
-        hlsStartupGuardRef.current?.markPlaybackStarted();
-        setAwaitingFirstFrame(false);
-        setPlaying(false);
-        return;
-      }
-      video.play().catch(() => {
-        if (!destroyed) setPlaying(false);
-      });
+      hlsStartupGuardRef.current?.markPlaybackStarted();
+      setAwaitingFirstFrame(false);
+      setPlaying(false);
     };
 
     const attemptAutoplayWhenReady = () => {
+      if (destroyed || playbackStarted || autoplayInFlight) return;
+      if (hlsStartupGuardRef.current?.hasFailed()) return;
       // HAVE_FUTURE_DATA means the browser has enough media to advance beyond
-      // the current frame. Starting HLS earlier can produce a visible first-
-      // frame freeze where audio advances before video begins moving.
+      // the current frame. Starting earlier can produce a visible first-frame
+      // freeze where audio advances before video begins moving.
       if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) return;
-      completeStartup();
+      if (!shouldAutoPlay) {
+        settlePaused();
+        return;
+      }
+
+      clearAutoplayRetry();
+      autoplayInFlight = true;
+      autoplayAttempts += 1;
+      video.play().then(
+        () => {
+          autoplayInFlight = false;
+          if (destroyed) return;
+          playbackStarted = true;
+          cleanupStartupListeners();
+        },
+        (error: unknown) => {
+          autoplayInFlight = false;
+          if (destroyed) return;
+          // The element is paused now, whatever happens next, so the transport
+          // reflects that immediately.
+          setPlaying(false);
+          if (autoplayAttempts < MAX_AUTOPLAY_ATTEMPTS) {
+            // Deliberately keeps the readiness listeners armed: whichever
+            // wakes first — a later `canplay` or this timer — retries.
+            autoplayRetryTimer = setTimeout(() => {
+              autoplayRetryTimer = null;
+              attemptAutoplayWhenReady();
+            }, AUTOPLAY_RETRY_DELAY_MS);
+            return;
+          }
+          // Out of retries. The engine has media buffered and simply is not
+          // allowed to start it, so stop pretending startup is still in
+          // progress and leave the viewer a player they can press play on.
+          console.warn("[player] playback did not resume after the transport changed", error);
+          settlePaused();
+        },
+      );
     };
 
     video.addEventListener("loadeddata", attemptAutoplayWhenReady);
     video.addEventListener("canplay", attemptAutoplayWhenReady);
+
+    const attachNativeHLS = () => {
+      video.src = effectiveStreamUrl;
+      nativeHLSMetadataHandler = () => {
+        video.currentTime = effectiveInitialPosition;
+        attemptAutoplayWhenReady();
+      };
+      video.addEventListener("loadedmetadata", nativeHLSMetadataHandler, { once: true });
+    };
 
     async function init() {
       if (!video || destroyed) return;
 
       if (isHlsStream) {
         try {
-          // Honor the delivery capability this client advertised to the
-          // planner. Safari's exact HEVC/HDR evidence comes from its native
-          // media element, so routing the resulting plan through hls.js/MSE
-          // can accept the plan and then stall on a resumed fMP4 window.
-          if (video.canPlayType("application/vnd.apple.mpegurl")) {
-            video.src = effectiveStreamUrl;
-            nativeHLSMetadataHandler = () => {
-              video.currentTime = effectiveInitialPosition;
-              attemptAutoplayWhenReady();
-            };
-            video.addEventListener("loadedmetadata", nativeHLSMetadataHandler, { once: true });
-            return;
-          }
-
-          const Hls = await loadHls();
+          const nativeSupported = video.canPlayType("application/vnd.apple.mpegurl") !== "";
+          const resolution = await resolveHLSEngineV3(
+            plannedDynamicRange,
+            nativeSupported,
+            loadHLSJS,
+            (error) => {
+              console.error("[hls.js] Failed to initialize, falling back to native HLS:", error);
+            },
+          );
           if (destroyed || hlsStartupGuardRef.current?.hasFailed()) return;
 
-          if (Hls.isSupported()) {
+          if (resolution.engine === "native") {
+            attachNativeHLS();
+          } else if (resolution.engine === "hlsjs") {
+            const Hls = resolution.hlsjs;
             const maxBufferLength = plannedBitrateKbps >= 25000 ? 60 : 120;
             const retryingLoadPolicy = {
               maxTimeToFirstByteMs: 45000,
@@ -1593,9 +1668,7 @@ export function VideoPlayer({
         if (!skipFirefoxProgressiveInitialSeek) {
           video.currentTime = effectiveInitialPosition;
         }
-        if (shouldAutoPlay) {
-          completeStartup();
-        }
+        attemptAutoplayWhenReady();
       }
     }
 
@@ -1628,6 +1701,7 @@ export function VideoPlayer({
     plan.timeline.stream_origin_seconds,
     planRevision,
     plannedBitrateKbps,
+    plannedDynamicRange,
     reportCurrentPlanFailure,
     shouldAutoPlay,
   ]);
