@@ -1,8 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  detectHLSSupport,
-  type WebCapabilityProbe,
-} from "../client-context-v3";
+import { detectHLSSupport, type WebCapabilityProbe } from "../client-context-v3";
 
 /** Maps our codec names to the MIME declarations browsers expose for them. */
 const VIDEO_CODEC_MAP: Record<string, string> = {
