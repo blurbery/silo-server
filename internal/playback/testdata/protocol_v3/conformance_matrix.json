@@ -3370,6 +3370,7 @@
         "video_level": 153,
         "bit_depth": 10,
         "color_range": "tv",
+        "color_transfer": "smpte2084",
         "width": 3840,
         "height": 2160,
         "frame_rate": 23.976023976023978,

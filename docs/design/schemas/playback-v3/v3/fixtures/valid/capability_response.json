@@ -53,6 +53,14 @@
       ]
     },
     {
+      "name": "server_dv8_to_compatible_base",
+      "executor": "server",
+      "recipe_version": "2",
+      "validated_claims": [
+        "dolby_vision_metadata_removed"
+      ]
+    },
+    {
       "name": "video_to_h264",
       "executor": "server",
       "recipe_version": "2",
