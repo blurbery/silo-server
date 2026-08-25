@@ -32,7 +32,11 @@ import (
 // Jellyfin Web is sensitive to startup latency. Use shorter compat segments
 // than the native global playback default so the first requested HLS chunk and
 // the near-head follow-up segments arrive quickly enough for browser playback.
-const compatSegmentDuration = 2
+const (
+	compatSegmentDuration    = 2
+	transcodeUnavailableCode = "TranscodeUnavailable"
+	transcodeUnsupportedCode = "TranscodeUnsupported"
+)
 
 // errUpstreamReplaced signals that a concurrent request attached a different
 // upstream session to the play session while this one was being created.
@@ -267,10 +271,10 @@ func (h *PlaybackHandler) HandleMasterManifest(w http.ResponseWriter, r *http.Re
 			if planErr != nil {
 				failRemoteStart()
 				if errors.Is(planErr, errToneMapCapabilityUnavailable) {
-					writeError(w, http.StatusServiceUnavailable, "TranscodeUnavailable", planErr.Error())
+					writeError(w, http.StatusServiceUnavailable, transcodeUnavailableCode, planErr.Error())
 					return
 				}
-				writeError(w, http.StatusUnsupportedMediaType, "TranscodeUnsupported", planErr.Error())
+				writeError(w, http.StatusUnsupportedMediaType, transcodeUnsupportedCode, planErr.Error())
 				return
 			}
 			failedNodeURLs := make(map[string]struct{})
@@ -317,7 +321,7 @@ func (h *PlaybackHandler) HandleMasterManifest(w http.ResponseWriter, r *http.Re
 							return
 						}
 						if errors.Is(err, errHDRTranscodeUnsupported) {
-							writeError(w, http.StatusUnsupportedMediaType, "TranscodeUnsupported", err.Error())
+							writeError(w, http.StatusUnsupportedMediaType, transcodeUnsupportedCode, err.Error())
 							return
 						}
 						writeError(w, http.StatusBadGateway, "TranscodeStartFailed", "Transcode node rejected the request")
@@ -401,16 +405,16 @@ func writeCompatTranscodeError(w http.ResponseWriter, err error) {
 		errors.Is(err, playback.ErrToneMapSourceValidationUnavailable),
 		errors.Is(err, playback.ErrToneMapExecutorUnavailable):
 		slog.Warn("compat transcode unavailable", "component", "jellycompat", "error", err)
-		writeError(w, http.StatusServiceUnavailable, "TranscodeUnavailable", "Transcode is temporarily unavailable")
+		writeError(w, http.StatusServiceUnavailable, transcodeUnavailableCode, "Transcode is temporarily unavailable")
 	case errors.Is(err, tonemap.ErrSourceRevisionChanged):
 		slog.Warn("compat transcode source changed", "component", "jellycompat", "error", err)
-		writeError(w, http.StatusUnsupportedMediaType, "TranscodeUnsupported", "The media source changed; refresh playback information")
+		writeError(w, http.StatusUnsupportedMediaType, transcodeUnsupportedCode, "The media source changed; refresh playback information")
 	case errors.Is(err, tonemap.ErrSourcePreflightRejected):
-		writeError(w, http.StatusUnsupportedMediaType, "TranscodeUnsupported", "The media source is unsupported by the selected tone-map executor")
+		writeError(w, http.StatusUnsupportedMediaType, transcodeUnsupportedCode, "The media source is unsupported by the selected tone-map executor")
 	case errors.Is(err, errTranscode4KDisallowed):
 		writeError(w, http.StatusForbidden, "Forbidden", "4K video transcoding is disabled on this server")
 	case errors.Is(err, errHDRTranscodeUnsupported):
-		writeError(w, http.StatusUnsupportedMediaType, "TranscodeUnsupported", err.Error())
+		writeError(w, http.StatusUnsupportedMediaType, transcodeUnsupportedCode, err.Error())
 	case errors.Is(err, playback.ErrManifestNotReady):
 		writeError(w, http.StatusServiceUnavailable, "NotReady", "Transcode playlist not ready")
 	case errors.Is(err, playback.ErrTranscodeFailed):
@@ -674,13 +678,13 @@ func (h *PlaybackHandler) HandleHLSSegment(w http.ResponseWriter, r *http.Reques
 func hlsSegmentErrorResponse(err error) (status int, code, message string) {
 	switch {
 	case errors.Is(err, tonemap.ErrSourceRevisionChanged):
-		return http.StatusUnsupportedMediaType, "TranscodeUnsupported", "The media source changed; refresh playback information"
+		return http.StatusUnsupportedMediaType, transcodeUnsupportedCode, "The media source changed; refresh playback information"
 	case errors.Is(err, playback.ErrToneMapSourceValidationUnavailable):
-		return http.StatusServiceUnavailable, "TranscodeUnavailable", "Transcode is temporarily unavailable"
+		return http.StatusServiceUnavailable, transcodeUnavailableCode, "Transcode is temporarily unavailable"
 	case errors.Is(err, playback.ErrToneMapExecutorUnavailable):
-		return http.StatusServiceUnavailable, "TranscodeUnavailable", "Transcode is temporarily unavailable"
+		return http.StatusServiceUnavailable, transcodeUnavailableCode, "Transcode is temporarily unavailable"
 	case errors.Is(err, tonemap.ErrSourcePreflightRejected):
-		return http.StatusUnsupportedMediaType, "TranscodeUnsupported", "The media source is unsupported by the selected tone-map executor"
+		return http.StatusUnsupportedMediaType, transcodeUnsupportedCode, "The media source is unsupported by the selected tone-map executor"
 	case errors.Is(err, playback.ErrSegmentNotFound), errors.Is(err, playback.ErrTranscodeFailed):
 		return http.StatusNotFound, "NotFound", "Segment not found"
 	default:

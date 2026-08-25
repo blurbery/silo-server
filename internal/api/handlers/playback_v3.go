@@ -1059,7 +1059,7 @@ func (h *PlaybackHandler) handleStartPlaybackV3(w http.ResponseWriter, r *http.R
 			return
 		}
 		failureAttrs := []any{
-			"component", "playback",
+			logComponentKey, "playback",
 			"reason", statusErr.reason,
 			"retryable", statusErr.retryable,
 			"playback_attempt_id", req.PlaybackAttemptID,

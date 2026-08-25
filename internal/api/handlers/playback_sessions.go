@@ -13,6 +13,7 @@ import (
 
 	"github.com/Silo-Server/silo-server/internal/catalog"
 	"github.com/Silo-Server/silo-server/internal/models"
+	"github.com/Silo-Server/silo-server/internal/tonemap"
 	"github.com/Silo-Server/silo-server/internal/userstore"
 )
 
@@ -126,7 +127,7 @@ func (h *AdminHandler) HandleGetSessionsCapabilities(w http.ResponseWriter, _ *h
 		IsJellyfinClient:          true,
 		TranscodeHWAccel:          true,
 		ToneMapMode:               true,
-		ToneMapModeValues:         []string{"hardware", "software"},
+		ToneMapModeValues:         []string{string(tonemap.ModeHardware), string(tonemap.ModeSoftware)},
 		ClientBuild:               true,
 		ClientChannel:             true,
 		TargetAudioChannels:       true,

@@ -23,6 +23,11 @@ import (
 	"github.com/Silo-Server/silo-server/internal/s3client"
 )
 
+const (
+	scanReasonExternalSubtitleChanged = "external_subtitle_changed"
+	scanReasonProbeRepair             = "probe_repair"
+)
+
 // videoExtensions is the set of file extensions recognized as media files.
 var videoExtensions = map[string]bool{
 	".mkv": true,
@@ -3091,11 +3096,11 @@ func scanStateUpdateReasons(
 		reasons = append(reasons, "was_missing")
 	}
 	if canRepairProbe && needsCriticalProbeRepairScanState(existing) {
-		reasons = append(reasons, "probe_repair")
+		reasons = append(reasons, scanReasonProbeRepair)
 	}
 	if externalSubtitlesChecked {
 		if !sameStringSet(existing.ExternalSubtitlePaths, currentExternalSubtitlePaths) {
-			reasons = append(reasons, "external_subtitle_changed")
+			reasons = append(reasons, scanReasonExternalSubtitleChanged)
 		}
 	} else if hasMissingExternalSubtitlePath(existing.ExternalSubtitlePaths) {
 		reasons = append(reasons, "external_subtitle_missing")
@@ -3216,7 +3221,7 @@ func scannerUpdateReasons(
 		reasons = append(reasons, "was_missing")
 	}
 	if canRepairProbe && NeedsCriticalProbeRepair(existing) {
-		reasons = append(reasons, "probe_repair")
+		reasons = append(reasons, scanReasonProbeRepair)
 	}
 	if rootAssignmentChanged(existing, assignment, libraryType) {
 		reasons = append(reasons, "root_assignment_changed")
@@ -3327,9 +3332,9 @@ func shouldPreserveExistingProbeAfterProbeFailure(updateReasons []string, probe 
 	foundRepair := false
 	for _, reason := range updateReasons {
 		switch reason {
-		case "probe_repair":
+		case scanReasonProbeRepair:
 			foundRepair = true
-		case "group_assignment_changed", "root_assignment_changed", "external_subtitle_changed", "external_subtitle_missing":
+		case "group_assignment_changed", "root_assignment_changed", scanReasonExternalSubtitleChanged, "external_subtitle_missing":
 		default:
 			return false
 		}

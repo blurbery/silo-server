@@ -158,6 +158,7 @@ const (
 	transcodeHWQSV     = "qsv"
 	transcodeHWVAAPI   = "vaapi"
 	transcodeHWNVENC   = "nvenc"
+	qsvHWMapFilter     = "hwmap=derive_device=qsv"
 )
 
 // TranscodeSession manages a running ffmpeg HLS transcode process.
@@ -1185,7 +1186,7 @@ func toneMappedTextSubtitleFilter(opts TranscodeOpts) string {
 	}
 	switch opts.HWAccel {
 	case transcodeHWQSV:
-		return softwareToneMapUploadFilter(opts) + tonemap.QSVFilter(opts.ToneMapSourceKind) + ",hwdownload,format=nv12," + cpuTail + ",format=nv12,hwupload,hwmap=derive_device=qsv:mode=read+write,format=qsv," + tonemap.HDRMetadataRemovalFilter()
+		return softwareToneMapUploadFilter(opts) + tonemap.QSVFilter(opts.ToneMapSourceKind) + ",hwdownload,format=nv12," + cpuTail + ",format=nv12,hwupload," + qsvHWMapFilter + ":mode=read+write,format=qsv," + tonemap.HDRMetadataRemovalFilter()
 	case transcodeHWVAAPI:
 		return softwareToneMapUploadFilter(opts) + tonemap.VAAPIFilter(opts.ToneMapSourceKind) + ",hwdownload,format=nv12," + cpuTail + ",format=nv12,hwupload," + tonemap.HDRMetadataRemovalFilter()
 	case transcodeHWNVENC:
@@ -1401,7 +1402,7 @@ func softwareDecodedBitmapBurnInGraph(opts TranscodeOpts, subInput string, qsv b
 	}
 	filters += ",format=nv12,hwupload"
 	if qsv {
-		filters += ",hwmap=derive_device=qsv,format=qsv"
+		filters += "," + qsvHWMapFilter + ",format=qsv"
 	}
 	return "[0:v:0]format=yuv420p[vmain];[vmain]" + filters + "[vout]"
 }
@@ -1433,13 +1434,13 @@ func appendSubtitleBurnInArgs(args []string, opts TranscodeOpts) []string {
 	switch opts.HWAccel {
 	case "qsv":
 		if opts.SoftwareVideoDecode {
-			vf := "format=yuv420p," + cpuFilters + ",format=nv12,hwupload,hwmap=derive_device=qsv,format=qsv"
+			vf := "format=yuv420p," + cpuFilters + ",format=nv12,hwupload," + qsvHWMapFilter + ",format=qsv"
 			return append(args, "-vf", vf)
 		}
 		// VAAPI→QSV pipeline: download from VAAPI surface to CPU, apply subtitle
 		// and scale filters, convert to nv12 (required by hwupload for VAAPI
 		// surfaces), upload back to VAAPI, then map to QSV for the encoder.
-		vf := "hwdownload,format=yuv420p," + cpuFilters + ",format=nv12,hwupload,hwmap=derive_device=qsv,format=qsv"
+		vf := "hwdownload,format=yuv420p," + cpuFilters + ",format=nv12,hwupload," + qsvHWMapFilter + ",format=qsv"
 		args = append(args, "-vf", vf)
 	case "vaapi":
 		if opts.SoftwareVideoDecode {
@@ -1487,7 +1488,7 @@ func qsvScaleFilter(res string) string {
 }
 
 func qsvScaleFilterWithMapMode(res, mapMode string) string {
-	hwmap := "hwmap=derive_device=qsv"
+	hwmap := qsvHWMapFilter
 	if mapMode != "" {
 		hwmap += ":mode=" + mapMode
 	}
@@ -1525,7 +1526,7 @@ func qsvSoftwareDecodeFilter(res string) string {
 	// upload, matching the proven text-subtitle path; uploading first and then
 	// invoking scale_vaapi can leave the VAAPI/QSV graph alive without ever
 	// producing its initial HLS window.
-	return cpuFilters + "format=nv12,hwupload,hwmap=derive_device=qsv,format=qsv"
+	return cpuFilters + "format=nv12,hwupload," + qsvHWMapFilter + ",format=qsv"
 }
 
 // vaapiScaleFilter keeps VAAPI frames in hardware and converts them to a
