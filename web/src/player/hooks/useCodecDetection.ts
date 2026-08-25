@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import {
   detectHLSSupport,
-  detectNativeHLSSupport,
   type WebCapabilityProbe,
 } from "../client-context-v3";
 
@@ -362,6 +361,7 @@ export function probeWebCapabilities(): WebCapabilityProbe {
     dolby_vision_profiles: [] as number[],
     dolby_vision_profile_levels: [],
   };
+  const hlsSupport = detectHLSSupport();
 
   return {
     containers,
@@ -373,8 +373,8 @@ export function probeWebCapabilities(): WebCapabilityProbe {
     hdr,
     hdrDetails,
     hlsHDRDetails,
-    hls: detectHLSSupport(),
-    nativeHls: detectNativeHLSSupport(),
+    hls: hlsSupport.supported,
+    nativeHls: hlsSupport.native,
   };
 }
 

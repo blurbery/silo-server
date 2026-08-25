@@ -76,6 +76,9 @@ const (
 	DeviceQuirkRegistryRevisionV3    = "2026-08-15.1"
 )
 
+// Degradation warning codes reported by playback plans.
+const DegradationWarningHDRToneMappedV3 = "hdr_tone_mapped"
+
 // ServerFeaturesV3 returns the complete feature set advertised by protocol-v3
 // capability and decision responses. A fresh slice prevents callers from
 // mutating the shared contract.
@@ -178,14 +181,16 @@ const (
 // Server transformation names. A plan names the transformations its serving
 // executor must run; the registry keys availability by the same names.
 const (
-	TransformationAudioToAACV3     = "audio_to_aac"
-	TransformationVideoToH264V3    = "video_to_h264"
-	TransformationServerDV7HDR10V3 = "server_dv7_to_hdr10"
-	TransformationServerDV8BaseV3  = "server_dv8_to_compatible_base"
+	TransformationAudioToAACV3      = "audio_to_aac"
+	TransformationVideoToH264V3     = "video_to_h264"
+	TransformationServerDV7HDR10V3  = "server_dv7_to_hdr10"
+	TransformationServerDV8BaseV3   = "server_dv8_to_compatible_base"
+	TransformationHDRToSDRToneMapV3 = "hdr_to_sdr_tonemap"
 
 	TransformationVideoToH264RecipeVersionV3    = "2"
 	TransformationServerDV7HDR10RecipeVersionV3 = "3"
 	TransformationServerDV8BaseRecipeVersionV3  = "2"
+	TransformationHDRToSDRToneMapRecipeVersionV3 = "1"
 	VideoSampleEntryHEV1V3                      = "hev1"
 	VideoSampleEntryHVC1V3                      = "hvc1"
 	VideoSampleEntryDVH1V3                      = "dvh1"
@@ -209,6 +214,8 @@ const (
 	ClaimHLGBaseLayerPreservedV3      = "hlg_base_layer_preserved"
 	ClaimSDRBaseLayerPreservedV3      = "sdr_base_layer_preserved"
 	ClaimEnhancementLayerDiscardedV3  = "enhancement_layer_discarded"
+	ClaimHDRMetadataRemovedV3         = "hdr_metadata_removed"
+	ClaimSDRBT709OutputV3             = "sdr_bt709_output"
 )
 
 // DV7ToHDR10ClaimsV3 returns the claims the server DV7→HDR10 transformation
@@ -232,6 +239,7 @@ func DV8ToBaseLayerClaimsV3(rangeClaim string) []string {
 const (
 	TerminalAudioConversionUnsupportedV3 = "audio_conversion_unsupported"
 	TerminalVideoConversionUnsupportedV3 = "video_conversion_unsupported"
+	TerminalHDRTranscodeUnsupportedV3    = "hdr_transcode_unsupported"
 	TerminalDVConversionUnsupportedV3    = "dv_conversion_unsupported"
 )
 
@@ -763,11 +771,29 @@ type DegradationWarningV3 struct {
 // a track's original language.
 const QualityOriginalV3 = "original"
 
+// Compound ladder rung labels pin a bitrate as well as a resolution class.
+// The plain resolution labels remain valid for stored/default preferences;
+// menu selections use these explicit variants so every visible entry has
+// unambiguous quality semantics, including at the source's own resolution.
+const (
+	QualityRung2160pHighV3   = "2160p-high"
+	QualityRung2160pMediumV3 = "2160p-medium"
+	QualityRung2160pLowV3    = "2160p-low"
+	QualityRung1080pHighV3   = "1080p-high"
+	QualityRung1080pMediumV3 = "1080p-medium"
+	QualityRung1080pLowV3    = "1080p-low"
+	QualityRung720pHighV3    = "720p-high"
+	QualityRung720pMediumV3  = "720p-medium"
+	QualityRung720pLowV3     = "720p-low"
+)
+
 // AvailableQualityV3 is one server-ladder rung valid for this source and
 // client, published on the plan so clients can render a quality menu without
-// owning a bitrate table. The QualityOriginalV3 entry preserves the source.
+// owning a bitrate table. The QualityOriginalV3 entry preserves the source;
+// DisplayName gives compound rungs their human-facing High/Medium/Low label.
 type AvailableQualityV3 struct {
 	Label           string `json:"label"`
+	DisplayName     string `json:"display_name,omitempty"`
 	Height          int    `json:"height,omitempty"`
 	BitrateKbps     int    `json:"bitrate_kbps,omitempty"`
 	PreservesSource bool   `json:"preserves_source"`
@@ -901,11 +927,17 @@ func NormalizeQualityV3(value string) (string, bool) {
 	case "480p", "sd":
 		return "480p", false
 	default:
+		if rung, ok := ladderRungForLabelV3(value); ok {
+			return rung.Label, false
+		}
 		return "auto", true
 	}
 }
 
-func (r ReplanRequestV3) Validate() error {
+func (r *ReplanRequestV3) Validate() error {
+	if r == nil {
+		return errors.New("replan request is required")
+	}
 	if r.ProtocolVersion != ProtocolV3 || !boundedIdentifierV3.MatchString(r.PlaybackAttemptID) || !boundedIdentifierV3.MatchString(r.ReplanRequestID) {
 		return errors.New("invalid replan identity")
 	}
@@ -1007,14 +1039,15 @@ func validateCapabilitiesV3(c *ClientCodecCapabilitiesV3, ctx *ClientPlaybackCon
 	if !validCapabilityEvidenceV3(c.AudioEvidence) {
 		return errors.New("audio_evidence is required and must be exact, platform_attested, or declared")
 	}
-	if len(c.CodecsVideo) > 64 || len(c.CodecsVideoHardware) > 64 || len(c.CodecsAudio) > 64 || len(c.Containers) > 64 || len(c.VideoDecode) > 64 || len(ctx.Deliveries) > 16 || len(ctx.Device.Platform) > 32 || len(ctx.FormFactor) > 32 || len(ctx.AppVersion) > 64 {
+	if len(c.CodecsVideo) > 64 || len(c.CodecsVideoHardware) > 64 || len(c.CodecsAudio) > 64 || len(c.Containers) > 64 || len(c.VideoDecode) > 64 || len(ctx.Deliveries) > 16 || len(ctx.Device.Platform) > 32 || len(ctx.FormFactor) > 32 {
 		return errors.New("capability list exceeds supported size")
 	}
-	// Build and channel are opaque diagnostic labels, so an over-long value is
+	// Version, build, and channel are diagnostic labels, so an over-long value is
 	// worth clamping and never worth refusing playback over. The header route
-	// (X-Silo-Client-Build / -Channel) clamps with the same helper; rejecting
+	// (X-Silo-Client-Version / -Build / -Channel) clamps with the same helper; rejecting
 	// here would mean the same string plays from a header and 400s from the
 	// body.
+	ctx.AppVersion = normalizeClientMetadataValue(ctx.AppVersion, 64)
 	ctx.AppBuild = normalizeClientMetadataValue(ctx.AppBuild, 64)
 	ctx.AppChannel = normalizeClientMetadataValue(ctx.AppChannel, 32)
 	deviceValues := []string{

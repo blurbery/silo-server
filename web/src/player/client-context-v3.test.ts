@@ -21,7 +21,7 @@ describe("detectHLSSupport", () => {
       createElement: () => ({ canPlayType: () => "maybe" }),
     });
 
-    expect(detectHLSSupport()).toBe(true);
+    expect(detectHLSSupport()).toEqual({ supported: true, native: true });
     expect(detectNativeHLSSupport()).toBe(true);
   });
 
@@ -31,7 +31,7 @@ describe("detectHLSSupport", () => {
     });
     vi.stubGlobal("MediaSource", { isTypeSupported: () => true });
 
-    expect(detectHLSSupport()).toBe(true);
+    expect(detectHLSSupport()).toEqual({ supported: true, native: false });
     expect(detectNativeHLSSupport()).toBe(false);
   });
 });
@@ -131,9 +131,21 @@ describe("structured HDR capabilities", () => {
   it("publishes exact media-element HDR evidence to native HLS", () => {
     const deliveries = buildDeliveriesV3({ ...probe, nativeHls: true });
 
+    expect(deliveries.progressive?.hdr_details?.dolby_vision_profiles).toEqual([]);
     expect(deliveries.hls?.hdr_details).toEqual(probe.hdrDetails);
     expect(deliveries.hls?.video_codecs).toEqual(probe.progressiveCodecsVideo);
     expect(deliveries.hls?.features).toContain("native_hls_playback_v1");
+    expect(deliveries.original_http?.hdr_details?.hdr10).toBe(false);
+    expect(deliveries.original_http?.hdr_details?.dolby_vision_profiles).toEqual([]);
+  });
+
+  it("keeps normalized HDR sample entries on progressive without native HLS", () => {
+    const deliveries = buildDeliveriesV3({ ...probe, nativeHls: false });
+
+    expect(deliveries.progressive?.hdr_details).toEqual(probe.hdrDetails);
+    expect(deliveries.hls?.hdr_details).toEqual(probe.hlsHDRDetails);
+    expect(deliveries.original_http?.hdr_details?.hdr10).toBe(false);
+    expect(deliveries.original_http?.hdr_details?.dolby_vision_profiles).toEqual([]);
   });
 
   it("keeps media-element-only HEVC evidence out of original and HLS delivery", () => {

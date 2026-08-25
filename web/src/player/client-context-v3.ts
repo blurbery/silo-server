@@ -41,30 +41,39 @@ const WEB_SUBTITLE_CAPABILITIES: DeliverySubtitleCapabilitiesV3 = {
   font_attachments: true,
 };
 
-/** Detects whether the media element itself can play HLS without hls.js. */
-export function detectNativeHLSSupport(): boolean {
+export interface HLSSupportProbe {
+  supported: boolean;
+  native: boolean;
+}
+
+/** Detects whether HLS is available and whether the media element handles it natively. */
+export function detectHLSSupport(): HLSSupportProbe {
   if (typeof document !== "undefined") {
     try {
       const video = document.createElement("video");
-      if (video.canPlayType("application/vnd.apple.mpegurl") !== "") return true;
+      if (video.canPlayType("application/vnd.apple.mpegurl") !== "") {
+        return { supported: true, native: true };
+      }
     } catch {
       // An unavailable or restricted media element is not a native-HLS claim.
     }
   }
-  return false;
-}
-
-/** Detects whether either hls.js or the native media element can play HLS. */
-export function detectHLSSupport(): boolean {
-  if (detectNativeHLSSupport()) return true;
-  if (typeof MediaSource === "undefined") return false;
+  if (typeof MediaSource === "undefined") return { supported: false, native: false };
   try {
     // hls.js muxes into fMP4/TS; the baseline it requires is an MSE that can
     // take an mp4 segment at all.
-    return MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01E"');
+    return {
+      supported: MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01E"'),
+      native: false,
+    };
   } catch {
-    return false;
+    return { supported: false, native: false };
   }
+}
+
+/** Detects whether the media element itself can play HLS without hls.js. */
+export function detectNativeHLSSupport(): boolean {
+  return detectHLSSupport().native;
 }
 
 export interface WebCapabilityProbe {
@@ -166,19 +175,22 @@ export function buildDeliveriesV3(
   // When that element passes the exact HEVC/HDR probe, its native HLS route
   // may carry the same normalized fMP4 samples. hls.js keeps the conservative
   // MSE-only declaration because the file probe says nothing about its path.
+  const progressiveHDRDetails = probe.nativeHls ? nonProgressiveHDRDetails : probe.hdrDetails;
   const hlsHDRDetails = probe.nativeHls ? probe.hdrDetails : probe.hlsHDRDetails;
+  const hlsVideoCodecs = probe.nativeHls ? probe.progressiveCodecsVideo : probe.hlsCodecsVideo;
   return {
     original_http: buildDeliveryCapability(probe, {
       hdr_details: nonProgressiveHDRDetails,
     }),
     progressive: buildDeliveryCapability(probe, {
       video_codecs: probe.progressiveCodecsVideo,
+      hdr_details: progressiveHDRDetails,
     }),
     hls: buildDeliveryCapability(probe, {
       supported_on_device: probe.hls,
       ...(probe.hls ? {} : { failure_reason: "media_source_extensions_unavailable" }),
       containers: ["hls"],
-      video_codecs: probe.nativeHls ? probe.progressiveCodecsVideo : probe.hlsCodecsVideo,
+      video_codecs: hlsVideoCodecs,
       hdr_details: hlsHDRDetails,
       features: probe.nativeHls ? ["native_hls_playback_v1"] : [],
     }),
