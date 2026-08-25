@@ -776,7 +776,6 @@ export function usePlaybackSession(
   }, [
     capabilityDetectionSettled,
     capabilityRequestKey,
-    capabilitiesSettled,
     fileId,
     forceInitialPosition,
     initialPosition,

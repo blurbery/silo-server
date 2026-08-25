@@ -4719,22 +4719,6 @@ func videoBitstreamFilterForPlanV3(plan *playback.PlanV3) string {
 	return ""
 }
 
-func videoSampleEntryForPlanV3(plan *playback.PlanV3) string {
-	if plan == nil || plan.Delivery != playback.DeliveryRemuxHLSV3 {
-		return ""
-	}
-	for _, transformation := range plan.Transformations {
-		if transformation.Name == playback.TransformationServerDV7HDR10V3 {
-			return playback.VideoSampleEntryHVC1
-		}
-	}
-	if plan.EffectiveRecipe.DynamicRange == playback.DynamicRangeDolbyVisionV3 &&
-		(plan.Source.DVProfile == 5 || plan.Source.DVProfile == 8) {
-		return playback.VideoSampleEntryDVH1
-	}
-	return ""
-}
-
 // lazyDVRPUStrippableV3 defers (and memoizes) the per-source RPU probe so the
 // planner only shells out to ffmpeg when a Dolby Vision strip route is
 // genuinely on the table; every other start never touches it.
