@@ -2918,7 +2918,7 @@ func TestPrepareTransportV3SendsResolvedCopyAnchorToRemoteExecutor(t *testing.T)
 	transport, transportErr := handler.prepareTransportV3(
 		httptest.NewRequest(http.MethodPost, "/", nil),
 		&playback.Session{ID: "session-remote-copy-anchor", UserID: 7, ProfileID: "profile-1"},
-		&models.MediaFile{ID: 42, FilePath: "/media/movie.mkv", CodecVideo: "h264"},
+		&models.MediaFile{ID: 42, FilePath: "/media/movie.mkv", CodecVideo: "hevc"},
 		playback.PlannerResultV3{Plan: plan, PlayMethod: playback.PlayRemux, TargetAudioCodec: "aac"}, mediaAuthModeV3{})
 	if transportErr != nil {
 		t.Fatalf("prepare remote copy transport: %v", transportErr)

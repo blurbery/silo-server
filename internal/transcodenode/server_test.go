@@ -2255,7 +2255,7 @@ func TestHandleStartPreservesVideoSampleEntry(t *testing.T) {
 	server.watcher.Config().Playback.FFmpegPath = ffmpegPath
 	requestBody, err := json.Marshal(TranscodeStartRequest{
 		SessionID: "sample-entry-start-1", InputPath: "/media/movie.mkv",
-		VideoSampleEntry: playback.VideoSampleEntryHVC1,
+		SourceVideoCodec: "hevc", VideoSampleEntry: playback.VideoSampleEntryHVC1,
 		TargetCodecVideo: "copy", TargetCodecAudio: "copy", SegmentDuration: 2,
 	})
 	if err != nil {

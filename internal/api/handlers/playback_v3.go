@@ -4700,7 +4700,22 @@ func videoSampleEntryForPlanV3(plan *playback.PlanV3) string {
 	if plan == nil {
 		return ""
 	}
-	return plan.EffectiveRecipe.VideoSampleEntry
+	if plan.EffectiveRecipe.VideoSampleEntry != "" {
+		return plan.EffectiveRecipe.VideoSampleEntry
+	}
+	if plan.Delivery != playback.DeliveryRemuxHLSV3 {
+		return ""
+	}
+	for _, transformation := range plan.Transformations {
+		if transformation.Name == playback.TransformationServerDV7HDR10V3 {
+			return playback.VideoSampleEntryHVC1
+		}
+	}
+	if plan.EffectiveRecipe.DynamicRange == playback.DynamicRangeDolbyVisionV3 &&
+		(plan.Source.DVProfile == 5 || plan.Source.DVProfile == 8) {
+		return playback.VideoSampleEntryDVH1
+	}
+	return ""
 }
 
 func videoBitstreamFilterForPlanV3(plan *playback.PlanV3) string {
