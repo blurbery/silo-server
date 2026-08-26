@@ -116,7 +116,12 @@ export default function SectionRow({ section, libraryId }: SectionRowProps) {
           })()
         : section.items.map((item) => (
             <div key={item.content_id} className={posterWidthClasses} role="listitem">
-              <SectionItemCard item={item} libraryId={libraryId} />
+              <SectionItemCard
+                item={item}
+                libraryId={libraryId}
+                overlayPrefs={overlayPrefs}
+                quickActionMode={quickActionMode}
+              />
             </div>
           ))}
     </MediaCarousel>

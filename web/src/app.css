@@ -1259,6 +1259,15 @@
     transform: translateY(-4px);
   }
 
+  /* Home/library pages can contain hundreds of cards across off-screen rows.
+     Let supporting engines skip layout and paint for those rows until they
+     approach the viewport. Browsers without content-visibility ignore this
+     and keep the existing rendering path. */
+  .media-carousel {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 24rem;
+  }
+
   /* Card actions stay hidden at rest so touch devices get clean artwork; a
      long press opens the action sheet instead. Keyboard focus and an open
      menu reveal them on every device so keyboard and assistive-tech users

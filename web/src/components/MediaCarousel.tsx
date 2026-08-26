@@ -53,7 +53,7 @@ export default function MediaCarousel({
     : Children.toArray(children);
 
   return (
-    <section className="section-row group/carousel relative isolate">
+    <section className="section-row media-carousel group/carousel relative isolate">
       <div className={`mb-5 flex items-end justify-between gap-4${headerPadX}`}>
         <div className="flex items-center gap-2">
           {titleHref ? (

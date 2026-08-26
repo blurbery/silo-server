@@ -1,9 +1,15 @@
 import { useMemo, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import { useEffectiveSettings, useSetSettingValue } from "@/hooks/queries/settingValues";
+import {
+  effectiveSettingsQueryKey,
+  isDefinitiveSettingMutationRejection,
+  useEffectiveSettings,
+  useSetSettingValue,
+  type EffectiveSettingsMap,
+} from "@/hooks/queries/settingValues";
 import type { SettingIdentity } from "@/hooks/queries/settingValues";
-import { SETTING_KEYS } from "@/lib/settingsContract";
+import { SETTING_KEYS, type SettingKey } from "@/lib/settingsContract";
 import { settingsKeys } from "@/hooks/queries/keys";
 import { storage } from "@/utils/storage";
 import { parseOverlayPrefs, serializeOverlayPrefs, type CardOverlayPrefs } from "@/lib/overlays";
@@ -42,13 +48,54 @@ function useOverlayConfig() {
 export function useOverlayPrefs() {
   // The effective endpoint requires a profile header; without one the user
   // has no stored preference and the admin defaults apply on their own.
-  const hasProfile = Boolean(storage.get(storage.KEYS.PROFILE_ID));
+  const profileId = storage.get(storage.KEYS.PROFILE_ID);
+  const hasProfile = Boolean(profileId);
   const { data: effective, isLoading: userLoading } = useEffectiveSettings({
     keys: OVERLAY_KEYS,
     enabled: hasProfile,
   });
   const { data: config, isLoading: configLoading } = useOverlayConfig();
   const setValue = useSetSettingValue();
+  const queryClient = useQueryClient();
+  const effectiveQueryKey = useMemo(
+    () => effectiveSettingsQueryKey({ keys: OVERLAY_KEYS, profileId: profileId ?? undefined }),
+    // The active profile is part of effectiveSettingsQueryKey. Recompute the
+    // target when profile selection changes rather than writing into the
+    // previous profile's cache entry.
+    [profileId],
+  );
+
+  const setProfileValue = useCallback(
+    (key: SettingKey, value: unknown) => {
+      const previous = queryClient.getQueryData<EffectiveSettingsMap>(effectiveQueryKey);
+      queryClient.setQueryData<EffectiveSettingsMap>(effectiveQueryKey, (current) => ({
+        ...current,
+        [key]: { key, value, source: "profile", scope: "profile" },
+      }));
+      setValue.mutate(
+        { key, value, identity: PROFILE_SCOPE },
+        {
+          // The shared mutation invalidates on success and ambiguous errors.
+          // A definitive rejection never reached storage, so restore the exact
+          // key that this optimistic write replaced without clobbering another
+          // overlay control that may have saved concurrently.
+          onError: (error) => {
+            if (isDefinitiveSettingMutationRejection(error)) {
+              queryClient.setQueryData<EffectiveSettingsMap>(effectiveQueryKey, (current) => {
+                if (current?.[key]?.value !== value) return current;
+                const restored = { ...current };
+                const previousSetting = previous?.[key];
+                if (previousSetting) restored[key] = previousSetting;
+                else delete restored[key];
+                return restored;
+              });
+            }
+          },
+        },
+      );
+    },
+    [effectiveQueryKey, queryClient, setValue],
+  );
 
   // The contract default is null — "no preference expressed" — which is what
   // lets the server-wide admin default apply; a stored value wins outright.
@@ -85,9 +132,9 @@ export function useOverlayPrefs() {
       ) {
         return;
       }
-      setValue.mutate({ key: SETTING_KEYS.UI_CARD_OVERLAYS, value: next, identity: PROFILE_SCOPE });
+      setProfileValue(SETTING_KEYS.UI_CARD_OVERLAYS, next);
     },
-    [userValue, setValue],
+    [userValue, setProfileValue],
   );
 
   const setQuickActionMode = useCallback(
@@ -98,13 +145,9 @@ export function useOverlayPrefs() {
       ) {
         return;
       }
-      setValue.mutate({
-        key: SETTING_KEYS.UI_CARD_QUICK_ACTIONS,
-        value: next,
-        identity: PROFILE_SCOPE,
-      });
+      setProfileValue(SETTING_KEYS.UI_CARD_QUICK_ACTIONS, next);
     },
-    [quickActionUserValue, setValue],
+    [quickActionUserValue, setProfileValue],
   );
 
   const setQuickActionsEnabled = useCallback(
@@ -115,13 +158,9 @@ export function useOverlayPrefs() {
       ) {
         return;
       }
-      setValue.mutate({
-        key: SETTING_KEYS.UI_CARD_QUICK_ACTIONS_ENABLED,
-        value: next,
-        identity: PROFILE_SCOPE,
-      });
+      setProfileValue(SETTING_KEYS.UI_CARD_QUICK_ACTIONS_ENABLED, next);
     },
-    [quickActionsEnabledUserValue, setValue],
+    [quickActionsEnabledUserValue, setProfileValue],
   );
 
   // While either query is in flight, report null prefs instead of built-in

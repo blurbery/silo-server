@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import {
   Check,
@@ -76,6 +77,52 @@ import {
 } from "@/lib/cardQuickActions";
 
 type MediaItemType = ItemDetail["type"];
+
+const FINE_POINTER_QUERY = "(any-hover: hover) and (any-pointer: fine)";
+const finePointerSubscribers = new Set<() => void>();
+let finePointerMediaQuery: MediaQueryList | undefined;
+
+function getFinePointerMediaQuery(): MediaQueryList | null {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return null;
+  finePointerMediaQuery ??= window.matchMedia(FINE_POINTER_QUERY);
+  return finePointerMediaQuery;
+}
+
+function notifyFinePointerSubscribers() {
+  for (const subscriber of finePointerSubscribers) subscriber();
+}
+
+function subscribeToFinePointer(subscriber: () => void) {
+  const query = getFinePointerMediaQuery();
+  finePointerSubscribers.add(subscriber);
+  if (query && finePointerSubscribers.size === 1) {
+    if (typeof query.addEventListener === "function") {
+      query.addEventListener("change", notifyFinePointerSubscribers);
+    } else {
+      query.addListener(notifyFinePointerSubscribers);
+    }
+  }
+  return () => {
+    finePointerSubscribers.delete(subscriber);
+    if (query && finePointerSubscribers.size === 0) {
+      if (typeof query.removeEventListener === "function") {
+        query.removeEventListener("change", notifyFinePointerSubscribers);
+      } else {
+        query.removeListener(notifyFinePointerSubscribers);
+      }
+    }
+  };
+}
+
+function hasFinePointerSnapshot() {
+  // Preserve the established quick actions in SSR, tests, and older browsers
+  // without matchMedia. Touch-capable modern browsers report this accurately.
+  return getFinePointerMediaQuery()?.matches ?? true;
+}
+
+function useHasFinePointer() {
+  return useSyncExternalStore(subscribeToFinePointer, hasFinePointerSnapshot, () => true);
+}
 
 type MediaItemMenuEntry =
   | {
@@ -686,6 +733,7 @@ export default function MediaItemMenu({
   const isAdmin = useIsActingAdmin();
   const canCurateMetadata = profileIsResolved && canCurateMetadataForUser(user, currentProfile);
   const { cardPresentation } = useUICustomization();
+  const hasFinePointer = useHasFinePointer();
   const [currentUserState, setCurrentUserState] = useState(userState);
   const lastSyncedUserStateRef = useRef(userState);
   const [refreshDialogOpen, setRefreshDialogOpen] = useState(false);
@@ -747,6 +795,7 @@ export default function MediaItemMenu({
     enabled: model.length > 0,
   });
   const showPosterFavorite =
+    hasFinePointer &&
     variant === "poster" &&
     showFavoriteShortcut &&
     showsFavoriteQuickAction(quickActionMode) &&
@@ -757,6 +806,7 @@ export default function MediaItemMenu({
   const rootPosterSupportsWatchedShortcut =
     variant === "poster" && (mediaType === "movie" || mediaType === "series");
   const showWatchedQuickAction =
+    hasFinePointer &&
     showsWatchedQuickAction(quickActionMode) &&
     hasWatchedAction &&
     (rootPosterSupportsWatchedShortcut || showWatchedShortcut);
@@ -1006,19 +1056,21 @@ export default function MediaItemMenu({
           </DropdownMenu>
         )}
       </div>
-      <MediaItemActionSheet
-        open={actionSheetOpen}
-        onOpenChange={setActionSheetOpen}
-        title={itemTitle}
-        entries={model}
-        userState={currentUserState}
-        isPending={isPending}
-        isRefreshing={refreshMetadataMutation.isPending}
-        onSelectAction={(actionKey) => {
-          setActionSheetOpen(false);
-          void handleAction(actionKey);
-        }}
-      />
+      {actionSheetOpen && (
+        <MediaItemActionSheet
+          open
+          onOpenChange={setActionSheetOpen}
+          title={itemTitle}
+          entries={model}
+          userState={currentUserState}
+          isPending={isPending}
+          isRefreshing={refreshMetadataMutation.isPending}
+          onSelectAction={(actionKey) => {
+            setActionSheetOpen(false);
+            void handleAction(actionKey);
+          }}
+        />
+      )}
       <RefreshMetadataDialog
         open={refreshDialogOpen}
         onOpenChange={setRefreshDialogOpen}

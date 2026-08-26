@@ -15,6 +15,17 @@ vi.mock("@/api/client", () => ({
 }));
 
 vi.mock("@/hooks/queries/settingValues", () => ({
+  effectiveSettingsQueryKey: ({ keys }: { keys?: readonly string[] }) => [
+    "settings",
+    "values",
+    "effective",
+    mocks.profileId,
+    "",
+    keys ? [...keys].sort().join(",") : "*",
+    "",
+    "",
+  ],
+  isDefinitiveSettingMutationRejection: () => true,
   useEffectiveSettings: () => ({ data: mocks.effective, isLoading: false }),
   useSetSettingValue: () => ({ mutate: mocks.setValue }),
 }));
@@ -98,16 +109,22 @@ describe("useOverlayPrefs", () => {
 
     act(() => result.current.setQuickActionsEnabled(false));
     act(() => result.current.setQuickActionMode("both"));
-    expect(mocks.setValue).toHaveBeenCalledWith({
-      key: "ui.card_quick_actions_enabled",
-      value: false,
-      identity: { scope: "profile" },
-    });
-    expect(mocks.setValue).toHaveBeenCalledWith({
-      key: "ui.card_quick_actions",
-      value: "both",
-      identity: { scope: "profile" },
-    });
+    expect(mocks.setValue).toHaveBeenCalledWith(
+      {
+        key: "ui.card_quick_actions_enabled",
+        value: false,
+        identity: { scope: "profile" },
+      },
+      expect.objectContaining({ onError: expect.any(Function) }),
+    );
+    expect(mocks.setValue).toHaveBeenCalledWith(
+      {
+        key: "ui.card_quick_actions",
+        value: "both",
+        identity: { scope: "profile" },
+      },
+      expect.objectContaining({ onError: expect.any(Function) }),
+    );
   });
 
   it("refreshes the shared overlay configuration immediately after an admin save", async () => {
