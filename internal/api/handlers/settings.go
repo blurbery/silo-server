@@ -1236,7 +1236,8 @@ func (h *SettingsHandler) HandleGetOverlayConfig(w http.ResponseWriter, r *http.
 		if v, _ := h.serverSettings.Get(r.Context(), "defaults.card_quick_actions_enabled"); v == "false" {
 			resp.QuickActionsEnabled = false
 		}
-		if v, _ := h.serverSettings.Get(r.Context(), "defaults.card_quick_actions"); v == "both" || v == "favorites" || v == "watched" {
+		switch v, _ := h.serverSettings.Get(r.Context(), "defaults.card_quick_actions"); v {
+		case defaultCardQuickActionMode, "favorites", "watched":
 			resp.QuickActionsDefault = v
 		}
 	}
