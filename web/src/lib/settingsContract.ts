@@ -9,7 +9,7 @@
  */
 
 export const SETTINGS_API_VERSION = 1;
-export const SETTINGS_REVISION = 8;
+export const SETTINGS_REVISION = 9;
 
 export interface SettingSuggestedOption {
   value: string;
@@ -235,6 +235,10 @@ export const SETTING_KEYS = {
   UI_CARD_OVERLAYS: "ui.card_overlays",
   /** Media cards */
   UI_CARD_PRESENTATION: "ui.card_presentation",
+  /** Card quick actions */
+  UI_CARD_QUICK_ACTIONS: "ui.card_quick_actions",
+  /** Card quick actions enabled */
+  UI_CARD_QUICK_ACTIONS_ENABLED: "ui.card_quick_actions_enabled",
   /** Custom CSS */
   UI_CUSTOM_CSS: "ui.custom_css",
   /** Custom theme variables */
@@ -1036,6 +1040,43 @@ export const SETTING_DEFINITIONS: Record<SettingKey, SettingDefinition> = {
     category: "appearance",
     control: "panel",
     platforms: ["web", "ios", "tvos", "macos", "android", "android_tv"],
+  },
+  "ui.card_quick_actions": {
+    key: "ui.card_quick_actions",
+    type: "enum",
+    nullable: true,
+    persistence: "remote",
+    introducedIn: 9,
+    scopes: ["profile"],
+    scopeIntroducedIn: [9],
+    resolutionOrder: ["profile", "default"],
+    defaultValue: null,
+    label: "Card quick actions",
+    description: "Which favorite and watched shortcuts appear on media cards.",
+    category: "appearance",
+    control: "select",
+    platforms: ["web"],
+    values: [
+      { value: "both", label: "Both", introducedIn: 9 },
+      { value: "favorites", label: "Favorites only", introducedIn: 9 },
+      { value: "watched", label: "Watch indicator only", introducedIn: 9 },
+    ],
+  },
+  "ui.card_quick_actions_enabled": {
+    key: "ui.card_quick_actions_enabled",
+    type: "boolean",
+    nullable: true,
+    persistence: "remote",
+    introducedIn: 9,
+    scopes: ["profile"],
+    scopeIntroducedIn: [9],
+    resolutionOrder: ["profile", "default"],
+    defaultValue: null,
+    label: "Card quick actions enabled",
+    description: "Show the selected favorite and watched shortcuts on media cards.",
+    category: "appearance",
+    control: "switch",
+    platforms: ["web"],
   },
   "ui.custom_css": {
     key: "ui.custom_css",

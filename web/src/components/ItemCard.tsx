@@ -11,6 +11,7 @@ import { buildEpisodeCardLabels } from "@/lib/episodeCardLabels";
 import { formatDate as formatPreferredDate } from "@/lib/datetime";
 import { formatBitrate } from "@/lib/mediaFormat";
 import { useUICustomization } from "@/hooks/useUICustomization";
+import type { CardQuickActionMode } from "@/lib/cardQuickActions";
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -170,6 +171,7 @@ export default function ItemCard({
   libraryId,
   sortField,
   overlayPrefs,
+  quickActionMode = "both",
   narrowPosterActions = false,
   selectionMode = false,
   selected = false,
@@ -179,6 +181,7 @@ export default function ItemCard({
   libraryId?: number;
   sortField?: string;
   overlayPrefs?: CardOverlayPrefs | null;
+  quickActionMode?: CardQuickActionMode;
   narrowPosterActions?: boolean;
   selectionMode?: boolean;
   selected?: boolean;
@@ -307,6 +310,7 @@ export default function ItemCard({
           userState={item.user_state}
           variant="poster"
           narrowPosterActions={narrowPosterActions}
+          quickActionMode={quickActionMode}
         />
       </div>
       {showCaption ? (

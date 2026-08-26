@@ -7,20 +7,30 @@ import { SETTING_KEYS } from "@/lib/settingsContract";
 import { settingsKeys } from "@/hooks/queries/keys";
 import { storage } from "@/utils/storage";
 import { parseOverlayPrefs, serializeOverlayPrefs, type CardOverlayPrefs } from "@/lib/overlays";
+import {
+  normalizeCardQuickActionMode,
+  type EnabledCardQuickActionMode,
+} from "@/lib/cardQuickActions";
 
-/** `ui.card_overlays` is profile-wide in the contract (no device scope). */
+/** Card overlay preferences are profile-wide in the contract (no device scope). */
 const PROFILE_SCOPE: SettingIdentity = { scope: "profile" };
 
-const OVERLAY_KEYS = [SETTING_KEYS.UI_CARD_OVERLAYS] as const;
+const OVERLAY_KEYS = [
+  SETTING_KEYS.UI_CARD_OVERLAYS,
+  SETTING_KEYS.UI_CARD_QUICK_ACTIONS,
+  SETTING_KEYS.UI_CARD_QUICK_ACTIONS_ENABLED,
+] as const;
 
 interface OverlayConfig {
   enabled: boolean;
   defaults?: string;
+  quick_actions_enabled?: boolean;
+  quick_actions_default?: string;
 }
 
-// The admin kill switch and server-wide defaults live in server_settings, not
-// the user-settings contract, so this endpoint stays alongside the canonical
-// values API.
+// The overlay-badge kill switch and server-wide defaults live in
+// server_settings, not the user-settings contract, so this endpoint stays
+// alongside the canonical values API.
 function useOverlayConfig() {
   return useQuery({
     queryKey: settingsKeys.overlayConfig(),
@@ -43,6 +53,9 @@ export function useOverlayPrefs() {
   // The contract default is null — "no preference expressed" — which is what
   // lets the server-wide admin default apply; a stored value wins outright.
   const userValue = effective?.[SETTING_KEYS.UI_CARD_OVERLAYS]?.value ?? null;
+  const quickActionUserValue = effective?.[SETTING_KEYS.UI_CARD_QUICK_ACTIONS]?.value ?? null;
+  const quickActionsEnabledUserValue =
+    effective?.[SETTING_KEYS.UI_CARD_QUICK_ACTIONS_ENABLED]?.value;
 
   const prefs = useMemo(() => {
     // User setting takes priority; fall back to admin defaults
@@ -52,6 +65,14 @@ export function useOverlayPrefs() {
 
   // Admin kill switch: if disabled server-wide, return null prefs
   const enabled = config?.enabled !== false;
+  const quickActionsEnabled =
+    typeof quickActionsEnabledUserValue === "boolean"
+      ? quickActionsEnabledUserValue
+      : config?.quick_actions_enabled !== false;
+  const configuredQuickActionMode = normalizeCardQuickActionMode(
+    quickActionUserValue,
+    normalizeCardQuickActionMode(config?.quick_actions_default),
+  );
 
   const setPrefs = useCallback(
     (next: CardOverlayPrefs) => {
@@ -69,6 +90,40 @@ export function useOverlayPrefs() {
     [userValue, setValue],
   );
 
+  const setQuickActionMode = useCallback(
+    (next: EnabledCardQuickActionMode) => {
+      if (
+        quickActionUserValue != null &&
+        normalizeCardQuickActionMode(quickActionUserValue) === next
+      ) {
+        return;
+      }
+      setValue.mutate({
+        key: SETTING_KEYS.UI_CARD_QUICK_ACTIONS,
+        value: next,
+        identity: PROFILE_SCOPE,
+      });
+    },
+    [quickActionUserValue, setValue],
+  );
+
+  const setQuickActionsEnabled = useCallback(
+    (next: boolean) => {
+      if (
+        typeof quickActionsEnabledUserValue === "boolean" &&
+        quickActionsEnabledUserValue === next
+      ) {
+        return;
+      }
+      setValue.mutate({
+        key: SETTING_KEYS.UI_CARD_QUICK_ACTIONS_ENABLED,
+        value: next,
+        identity: PROFILE_SCOPE,
+      });
+    },
+    [quickActionsEnabledUserValue, setValue],
+  );
+
   // While either query is in flight, report null prefs instead of built-in
   // defaults: rendering defaults first would flash badges that vanish (or
   // change) the moment the user's own config or the admin kill switch loads.
@@ -77,6 +132,12 @@ export function useOverlayPrefs() {
   return {
     prefs: enabled && !isLoading ? prefs : null,
     setPrefs,
+    quickActionMode:
+      quickActionsEnabled && !isLoading ? configuredQuickActionMode : ("none" as const),
+    quickActionPreference: configuredQuickActionMode,
+    setQuickActionMode,
+    quickActionsEnabled,
+    setQuickActionsEnabled,
     isLoading,
     enabled,
   };

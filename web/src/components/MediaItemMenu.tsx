@@ -53,6 +53,11 @@ import {
 } from "@/components/mediaItemMenuTrigger";
 import { useUICustomization } from "@/hooks/useUICustomization";
 import { MediaActionIcon } from "@/components/mediaActionIcons";
+import {
+  showsFavoriteQuickAction,
+  showsWatchedQuickAction,
+  type CardQuickActionMode,
+} from "@/lib/cardQuickActions";
 
 type MediaItemType = ItemDetail["type"];
 
@@ -102,6 +107,8 @@ interface MediaItemMenuProps {
   showWatchedShortcut?: boolean;
   /** Uses smaller poster controls on narrow catalog cards. */
   narrowPosterActions?: boolean;
+  /** Which watched/favorite shortcuts appear outside the overflow menu. */
+  quickActionMode?: CardQuickActionMode;
 }
 
 export function buildMediaItemMenuModel({
@@ -562,6 +569,7 @@ export default function MediaItemMenu({
   hasPartialProgress = false,
   showWatchedShortcut = false,
   narrowPosterActions = false,
+  quickActionMode = "both",
 }: MediaItemMenuProps) {
   const navigate = useViewTransitionNavigate();
   const location = useLocation();
@@ -630,6 +638,7 @@ export default function MediaItemMenu({
   const showPosterFavorite =
     variant === "poster" &&
     showFavoriteShortcut &&
+    showsFavoriteQuickAction(quickActionMode) &&
     model.some((entry) => entry.kind === "action" && entry.key === "toggleFavorite");
   const hasWatchedAction = model.some(
     (entry) => entry.kind === "action" && entry.key === "toggleWatched",
@@ -637,7 +646,9 @@ export default function MediaItemMenu({
   const rootPosterSupportsWatchedShortcut =
     variant === "poster" && (mediaType === "movie" || mediaType === "series");
   const showWatchedQuickAction =
-    hasWatchedAction && (rootPosterSupportsWatchedShortcut || showWatchedShortcut);
+    showsWatchedQuickAction(quickActionMode) &&
+    hasWatchedAction &&
+    (rootPosterSupportsWatchedShortcut || showWatchedShortcut);
   const posterActionDensity: PosterActionDensity =
     variant === "poster" && narrowPosterActions
       ? "narrow"

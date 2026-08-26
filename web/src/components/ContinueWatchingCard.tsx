@@ -14,6 +14,7 @@ import { parseWatchHref } from "@/pages/watchRouteHelpers";
 import { buildItemHref, buildMediaPlayHref, isVideoWatchHref } from "@/lib/mediaNavigation";
 import { useUICustomization } from "@/hooks/useUICustomization";
 import { carouselCardWidthClasses } from "@/lib/uiCustomization";
+import type { CardQuickActionMode } from "@/lib/cardQuickActions";
 
 type ContinueWatchingCardProps = (
   | {
@@ -28,6 +29,7 @@ type ContinueWatchingCardProps = (
     }
 ) & {
   overlayPrefs?: CardOverlayPrefs | null;
+  quickActionMode?: CardQuickActionMode;
   libraryId?: number;
   variant?: "wide" | "poster";
 };
@@ -297,6 +299,7 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
           showFavoriteShortcut={false}
           dismissAction={dismissAction}
           hasPartialProgress={hasPartialProgress}
+          quickActionMode={props.quickActionMode}
         />
       </div>
 

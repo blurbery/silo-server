@@ -21,7 +21,12 @@ interface SensitiveStatusResponse {
 }
 
 function affectsOverlayConfig(key: string) {
-  return key === "overlays.enabled" || key === "defaults.card_overlays";
+  return (
+    key === "overlays.enabled" ||
+    key === "defaults.card_overlays" ||
+    key === "defaults.card_quick_actions_enabled" ||
+    key === "defaults.card_quick_actions"
+  );
 }
 
 export interface CatalogSearchStatus {

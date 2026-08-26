@@ -27,7 +27,7 @@ export default function SectionItemCard({ item, libraryId }: SectionItemCardProp
   const itemHref = `/item/${encodeURIComponent(item.content_id)}${
     libraryId ? `?libraryId=${libraryId}` : ""
   }`;
-  const { prefs: overlayPrefs } = useOverlayPrefs();
+  const { prefs: overlayPrefs, quickActionMode } = useOverlayPrefs();
   const upcomingEvent = item.upcoming_event;
   const subtitle = upcomingEvent ? formatUpcomingSubtitle(upcomingEvent) : "";
   const airDateLabel = upcomingEvent ? formatUpcomingDate(upcomingEvent.air_date) : "";
@@ -99,6 +99,7 @@ export default function SectionItemCard({ item, libraryId }: SectionItemCardProp
           libraryId={libraryId}
           userState={item.user_state}
           variant="poster"
+          quickActionMode={quickActionMode}
         />
       </div>
       {showCaption ? (

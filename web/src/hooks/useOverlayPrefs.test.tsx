@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   api: vi.fn(),
   setValue: vi.fn(),
+  effective: undefined as Record<string, { value: unknown }> | undefined,
+  profileId: null as string | null,
 }));
 
 vi.mock("@/api/client", () => ({
@@ -13,14 +15,14 @@ vi.mock("@/api/client", () => ({
 }));
 
 vi.mock("@/hooks/queries/settingValues", () => ({
-  useEffectiveSettings: () => ({ data: undefined, isLoading: false }),
+  useEffectiveSettings: () => ({ data: mocks.effective, isLoading: false }),
   useSetSettingValue: () => ({ mutate: mocks.setValue }),
 }));
 
 vi.mock("@/utils/storage", () => ({
   storage: {
     KEYS: { PROFILE_ID: "profile_id" },
-    get: () => null,
+    get: () => mocks.profileId,
   },
 }));
 
@@ -40,6 +42,8 @@ describe("useOverlayPrefs", () => {
   beforeEach(() => {
     mocks.api.mockReset();
     mocks.setValue.mockReset();
+    mocks.effective = undefined;
+    mocks.profileId = null;
   });
 
   afterEach(cleanup);
@@ -52,7 +56,58 @@ describe("useOverlayPrefs", () => {
 
     expect(mocks.api).toHaveBeenCalledWith("/settings/overlay-config");
     expect(result.current.enabled).toBe(true);
+    expect(result.current.quickActionsEnabled).toBe(true);
+    expect(result.current.quickActionPreference).toBe("both");
+    expect(result.current.quickActionMode).toBe("both");
     expect(result.current).not.toHaveProperty("watchedIndicatorStyle");
+  });
+
+  it("uses disabled and mode values from the admin defaults for an unset profile", async () => {
+    mocks.api.mockResolvedValue({
+      enabled: true,
+      quick_actions_enabled: false,
+      quick_actions_default: "favorites",
+    });
+    const { result } = renderHook(() => useOverlayPrefs(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.quickActionsEnabled).toBe(false);
+    expect(result.current.quickActionPreference).toBe("favorites");
+    expect(result.current.quickActionMode).toBe("none");
+  });
+
+  it("lets a profile enable quick actions and override an admin default of disabled", async () => {
+    mocks.profileId = "profile-1";
+    mocks.effective = {
+      "ui.card_quick_actions": { value: "watched" },
+      "ui.card_quick_actions_enabled": { value: true },
+    };
+    mocks.api.mockResolvedValue({
+      enabled: true,
+      quick_actions_enabled: false,
+      quick_actions_default: "favorites",
+    });
+    const { result } = renderHook(() => useOverlayPrefs(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.quickActionsEnabled).toBe(true);
+    expect(result.current.quickActionPreference).toBe("watched");
+    expect(result.current.quickActionMode).toBe("watched");
+
+    act(() => result.current.setQuickActionsEnabled(false));
+    act(() => result.current.setQuickActionMode("both"));
+    expect(mocks.setValue).toHaveBeenCalledWith({
+      key: "ui.card_quick_actions_enabled",
+      value: false,
+      identity: { scope: "profile" },
+    });
+    expect(mocks.setValue).toHaveBeenCalledWith({
+      key: "ui.card_quick_actions",
+      value: "both",
+      identity: { scope: "profile" },
+    });
   });
 
   it("refreshes the shared overlay configuration immediately after an admin save", async () => {
@@ -66,7 +121,7 @@ describe("useOverlayPrefs", () => {
     const { result } = renderHook(() => useUpdateServerSettings(), { wrapper });
 
     await act(async () => {
-      await result.current.mutateAsync({ "defaults.card_overlays": "{}" });
+      await result.current.mutateAsync({ "defaults.card_quick_actions": "favorites" });
     });
 
     expect(invalidateQueries).toHaveBeenCalledWith({

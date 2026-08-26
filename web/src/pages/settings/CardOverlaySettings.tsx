@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CARD_QUICK_ACTION_OPTIONS, type EnabledCardQuickActionMode } from "@/lib/cardQuickActions";
 
 interface SettingRowProps {
   label: string;
@@ -268,11 +269,30 @@ function PresetPicker({ value, onChange }: PresetPickerProps) {
 }
 
 export default function CardOverlaySettings() {
-  const { prefs, setPrefs, isLoading, enabled } = useOverlayPrefs();
+  const {
+    prefs,
+    setPrefs,
+    quickActionPreference,
+    setQuickActionMode,
+    quickActionsEnabled,
+    setQuickActionsEnabled,
+    isLoading,
+    enabled,
+  } = useOverlayPrefs();
   const [previewVariant, setPreviewVariant] = useState<"movie" | "show">("movie");
 
   const handleUpdate = (next: CardOverlayPrefs) => {
     setPrefs(next);
+    toast.success("Setting saved");
+  };
+
+  const handleQuickActionModeChange = (next: EnabledCardQuickActionMode) => {
+    setQuickActionMode(next);
+    toast.success("Setting saved");
+  };
+
+  const handleQuickActionsEnabledChange = (next: boolean) => {
+    setQuickActionsEnabled(next);
     toast.success("Setting saved");
   };
 
@@ -284,10 +304,45 @@ export default function CardOverlaySettings() {
       <div className="space-y-3">
         <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">Card Overlays</h2>
         <p className="text-muted-foreground max-w-2xl text-sm leading-relaxed">
-          Choose which badges appear on poster cards, where they sit, and how they look. Inspired by
-          Kometa.
+          Choose the quick actions and badges shown on media cards, where badges sit, and how they
+          look. Inspired by Kometa.
         </p>
       </div>
+
+      <SettingsGroup title="General" description="Override the server defaults for this profile.">
+        <SettingRow
+          label="Card quick actions"
+          description="Show favorite and watched shortcuts on media cards."
+          control={({ id }) => (
+            <div className="flex items-center gap-2">
+              <Select
+                value={quickActionPreference}
+                disabled={!quickActionsEnabled}
+                onValueChange={(value) =>
+                  handleQuickActionModeChange(value as EnabledCardQuickActionMode)
+                }
+              >
+                <SelectTrigger className="w-[190px]" aria-label="Card quick action mode">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {CARD_QUICK_ACTION_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Switch
+                id={id}
+                checked={quickActionsEnabled}
+                onCheckedChange={handleQuickActionsEnabledChange}
+                aria-label="Enable card quick actions"
+              />
+            </div>
+          )}
+        />
+      </SettingsGroup>
 
       {!enabled && (
         <div className="surface-panel-subtle rounded-2xl border px-4 py-3 text-sm">

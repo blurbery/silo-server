@@ -22,7 +22,7 @@ export default function SeasonEpisodeGrid({
   isLoading,
   episodeLinkState,
 }: SeasonEpisodeGridProps) {
-  const { prefs: overlayPrefs } = useOverlayPrefs();
+  const { prefs: overlayPrefs, quickActionMode } = useOverlayPrefs();
   const prefetchEpisodeDetail = usePrefetchCatalogItemDetail();
 
   if (isLoading) {
@@ -110,6 +110,7 @@ export default function SeasonEpisodeGrid({
                 showCollectionActions={false}
                 showWatchedShortcut
                 hasPartialProgress={hasPartialProgress}
+                quickActionMode={quickActionMode}
               />
             </div>
             <Link to={`/item/${episode.content_id}`} state={episodeLinkState} className="block">

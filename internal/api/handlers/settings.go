@@ -1203,18 +1203,24 @@ func (h *SettingsHandler) resolveEffectiveSetting(
 
 const retiredWebWatchedIndicatorStyle = "none"
 
+const defaultCardQuickActionMode = "both"
+
 // overlayConfigResponse is returned by GET /settings/overlay-config.
 type overlayConfigResponse struct {
-	Enabled          bool   `json:"enabled"`
-	Defaults         string `json:"defaults,omitempty"`
-	WatchedIndicator string `json:"watched_indicator"`
+	Enabled             bool   `json:"enabled"`
+	Defaults            string `json:"defaults,omitempty"`
+	QuickActionsEnabled bool   `json:"quick_actions_enabled"`
+	QuickActionsDefault string `json:"quick_actions_default"`
+	WatchedIndicator    string `json:"watched_indicator"`
 }
 
 // HandleGetOverlayConfig returns the server-wide overlay configuration.
 // Available to all authenticated users (not admin-only).
 func (h *SettingsHandler) HandleGetOverlayConfig(w http.ResponseWriter, r *http.Request) {
 	resp := overlayConfigResponse{
-		Enabled: true,
+		Enabled:             true,
+		QuickActionsEnabled: true,
+		QuickActionsDefault: defaultCardQuickActionMode,
 		// Retain the response field for existing /api/v1 clients while the
 		// configurable watched-indicator setting is retired.
 		WatchedIndicator: retiredWebWatchedIndicatorStyle,
@@ -1226,6 +1232,12 @@ func (h *SettingsHandler) HandleGetOverlayConfig(w http.ResponseWriter, r *http.
 		}
 		if v, _ := h.serverSettings.Get(r.Context(), "defaults.card_overlays"); v != "" {
 			resp.Defaults = v
+		}
+		if v, _ := h.serverSettings.Get(r.Context(), "defaults.card_quick_actions_enabled"); v == "false" {
+			resp.QuickActionsEnabled = false
+		}
+		if v, _ := h.serverSettings.Get(r.Context(), "defaults.card_quick_actions"); v == "both" || v == "favorites" || v == "watched" {
+			resp.QuickActionsDefault = v
 		}
 	}
 

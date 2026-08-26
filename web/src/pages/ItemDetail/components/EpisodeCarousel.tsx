@@ -10,6 +10,7 @@ import MediaItemMenu from "@/components/MediaItemMenu";
 import type { EpisodeNavigationState } from "../itemDetailLayout";
 import { useCarouselEmbla } from "@/hooks/useCarouselEmbla";
 import { usePrefetchCatalogItemDetail } from "@/hooks/queries/catalogRead";
+import { useOverlayPrefs } from "@/hooks/useOverlayPrefs";
 
 interface EpisodeCarouselProps {
   episodes: EpisodeListItem[];
@@ -26,6 +27,7 @@ export default function EpisodeCarousel({
     (episode) => episode.episode_number === currentEpisodeNumber,
   );
   const prefetchEpisodeDetail = usePrefetchCatalogItemDetail();
+  const { quickActionMode } = useOverlayPrefs();
   const { emblaApi, emblaRef, canScrollPrev, canScrollNext, scrollPrev, scrollNext } =
     useCarouselEmbla({
       options: {
@@ -144,6 +146,7 @@ export default function EpisodeCarousel({
                         showCollectionActions={false}
                         showWatchedShortcut
                         hasPartialProgress={progress != null}
+                        quickActionMode={quickActionMode}
                       />
                     </div>
                     <Link
