@@ -11,6 +11,7 @@ vi.mock("@/hooks/useOverlayPrefs", () => ({
     quickActionPreference: "favorites",
     setQuickActionMode: vi.fn(),
     quickActionsEnabled: false,
+    quickActionsGloballyEnabled: false,
     setQuickActionsEnabled: vi.fn(),
     isLoading: false,
     enabled: true,
@@ -42,5 +43,7 @@ describe("CardOverlaySettings", () => {
     expect(markup).toContain("Watch indicator only");
     expect(markup.indexOf("Card quick actions")).toBeLessThan(markup.indexOf("Overlay preview"));
     expect(markup).toContain('aria-label="Enable card quick actions"');
+    expect(markup).toContain("Card quick actions have been disabled by your server administrator.");
+    expect(markup).toContain('disabled=""');
   });
 });

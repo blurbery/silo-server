@@ -68,6 +68,7 @@ describe("useOverlayPrefs", () => {
     expect(mocks.api).toHaveBeenCalledWith("/settings/overlay-config");
     expect(result.current.enabled).toBe(true);
     expect(result.current.quickActionsEnabled).toBe(true);
+    expect(result.current.quickActionsGloballyEnabled).toBe(true);
     expect(result.current.quickActionPreference).toBe("both");
     expect(result.current.quickActionMode).toBe("both");
     expect(result.current).not.toHaveProperty("watchedIndicatorStyle");
@@ -84,11 +85,12 @@ describe("useOverlayPrefs", () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     expect(result.current.quickActionsEnabled).toBe(false);
+    expect(result.current.quickActionsGloballyEnabled).toBe(false);
     expect(result.current.quickActionPreference).toBe("favorites");
     expect(result.current.quickActionMode).toBe("none");
   });
 
-  it("lets a profile enable quick actions and override an admin default of disabled", async () => {
+  it("treats the admin quick-action switch as a policy lock for every profile", async () => {
     mocks.profileId = "profile-1";
     mocks.effective = {
       "ui.card_quick_actions": { value: "watched" },
@@ -103,16 +105,42 @@ describe("useOverlayPrefs", () => {
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    expect(result.current.quickActionsEnabled).toBe(true);
+    expect(result.current.quickActionsEnabled).toBe(false);
+    expect(result.current.quickActionsGloballyEnabled).toBe(false);
     expect(result.current.quickActionPreference).toBe("watched");
-    expect(result.current.quickActionMode).toBe("watched");
+    expect(result.current.quickActionMode).toBe("none");
 
     act(() => result.current.setQuickActionsEnabled(false));
+    act(() => result.current.setQuickActionMode("both"));
+    expect(mocks.setValue).not.toHaveBeenCalled();
+  });
+
+  it("lets a profile customize quick actions while the admin switch is enabled", async () => {
+    mocks.profileId = "profile-1";
+    mocks.effective = {
+      "ui.card_quick_actions": { value: "watched" },
+      "ui.card_quick_actions_enabled": { value: false },
+    };
+    mocks.api.mockResolvedValue({
+      enabled: true,
+      quick_actions_enabled: true,
+      quick_actions_default: "favorites",
+    });
+    const { result } = renderHook(() => useOverlayPrefs(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.quickActionsGloballyEnabled).toBe(true);
+    expect(result.current.quickActionsEnabled).toBe(false);
+    expect(result.current.quickActionPreference).toBe("watched");
+    expect(result.current.quickActionMode).toBe("none");
+
+    act(() => result.current.setQuickActionsEnabled(true));
     act(() => result.current.setQuickActionMode("both"));
     expect(mocks.setValue).toHaveBeenCalledWith(
       {
         key: "ui.card_quick_actions_enabled",
-        value: false,
+        value: true,
         identity: { scope: "profile" },
       },
       expect.objectContaining({ onError: expect.any(Function) }),

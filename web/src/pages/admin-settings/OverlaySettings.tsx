@@ -62,7 +62,8 @@ function QuickActionsField({
           Card quick actions
         </Label>
         <p id={hintId} className="text-muted-foreground text-xs">
-          Set the default favorite and watched shortcuts. Each profile can override this choice.
+          Globally enable quick actions and set their default mode. When disabled, no profile can
+          show them.
         </p>
       </div>
       <div className="flex items-center gap-2">
@@ -214,7 +215,7 @@ export default function OverlaySettings() {
         <h2 className="text-xl font-semibold tracking-tight">Card Overlays</h2>
         <p className="text-muted-foreground text-sm leading-relaxed">
           Configure card quick actions, default overlay badges, and the style preset shown on poster
-          cards. Users can override these in their personal settings.
+          cards. Users can customize the defaults while the server-wide controls are enabled.
         </p>
       </div>
 

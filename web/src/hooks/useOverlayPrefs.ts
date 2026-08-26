@@ -112,10 +112,14 @@ export function useOverlayPrefs() {
 
   // Admin kill switch: if disabled server-wide, return null prefs
   const enabled = config?.enabled !== false;
-  const quickActionsEnabled =
-    typeof quickActionsEnabledUserValue === "boolean"
-      ? quickActionsEnabledUserValue
-      : config?.quick_actions_enabled !== false;
+  // Match the overlay-badge rules: the server setting is a policy gate, while
+  // a profile may only customize quick actions when that gate is open. Keep
+  // the stored profile preference intact so it becomes effective again if an
+  // administrator later re-enables quick actions.
+  const quickActionsGloballyEnabled = config?.quick_actions_enabled !== false;
+  const quickActionsEnabledByProfile =
+    typeof quickActionsEnabledUserValue === "boolean" ? quickActionsEnabledUserValue : true;
+  const quickActionsEnabled = quickActionsGloballyEnabled && quickActionsEnabledByProfile;
   const configuredQuickActionMode = normalizeCardQuickActionMode(
     quickActionUserValue,
     normalizeCardQuickActionMode(config?.quick_actions_default),
@@ -139,6 +143,7 @@ export function useOverlayPrefs() {
 
   const setQuickActionMode = useCallback(
     (next: EnabledCardQuickActionMode) => {
+      if (!quickActionsGloballyEnabled) return;
       if (
         quickActionUserValue != null &&
         normalizeCardQuickActionMode(quickActionUserValue) === next
@@ -147,11 +152,12 @@ export function useOverlayPrefs() {
       }
       setProfileValue(SETTING_KEYS.UI_CARD_QUICK_ACTIONS, next);
     },
-    [quickActionUserValue, setProfileValue],
+    [quickActionUserValue, quickActionsGloballyEnabled, setProfileValue],
   );
 
   const setQuickActionsEnabled = useCallback(
     (next: boolean) => {
+      if (!quickActionsGloballyEnabled) return;
       if (
         typeof quickActionsEnabledUserValue === "boolean" &&
         quickActionsEnabledUserValue === next
@@ -160,7 +166,7 @@ export function useOverlayPrefs() {
       }
       setProfileValue(SETTING_KEYS.UI_CARD_QUICK_ACTIONS_ENABLED, next);
     },
-    [quickActionsEnabledUserValue, setProfileValue],
+    [quickActionsEnabledUserValue, quickActionsGloballyEnabled, setProfileValue],
   );
 
   // While either query is in flight, report null prefs instead of built-in
@@ -176,6 +182,7 @@ export function useOverlayPrefs() {
     quickActionPreference: configuredQuickActionMode,
     setQuickActionMode,
     quickActionsEnabled,
+    quickActionsGloballyEnabled,
     setQuickActionsEnabled,
     isLoading,
     enabled,

@@ -118,6 +118,7 @@ describe("OverlaySettings", () => {
       ],
     });
     expect(markup).toContain("Card quick actions");
+    expect(markup).toContain("When disabled, no profile can show them.");
     expect(markup).toContain("Favorites only");
     expect(markup).toContain("Watch indicator only");
     expect(markup.indexOf("Card quick actions")).toBeLessThan(

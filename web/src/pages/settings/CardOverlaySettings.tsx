@@ -275,6 +275,7 @@ export default function CardOverlaySettings() {
     quickActionPreference,
     setQuickActionMode,
     quickActionsEnabled,
+    quickActionsGloballyEnabled,
     setQuickActionsEnabled,
     isLoading,
     enabled,
@@ -312,7 +313,7 @@ export default function CardOverlaySettings() {
       <SettingsGroup title="General" description="Override the server defaults for this profile.">
         <SettingRow
           label="Card quick actions"
-          description="Show favorite and watched shortcuts on media cards."
+          description="Choose the favorite and watched shortcuts shown for this profile."
           control={({ id }) => (
             <div className="flex items-center gap-2">
               <Select
@@ -336,6 +337,7 @@ export default function CardOverlaySettings() {
               <Switch
                 id={id}
                 checked={quickActionsEnabled}
+                disabled={!quickActionsGloballyEnabled}
                 onCheckedChange={handleQuickActionsEnabledChange}
                 aria-label="Enable card quick actions"
               />
@@ -343,6 +345,12 @@ export default function CardOverlaySettings() {
           )}
         />
       </SettingsGroup>
+
+      {!quickActionsGloballyEnabled && (
+        <div className="surface-panel-subtle rounded-2xl border px-4 py-3 text-sm">
+          Card quick actions have been disabled by your server administrator.
+        </div>
+      )}
 
       {!enabled && (
         <div className="surface-panel-subtle rounded-2xl border px-4 py-3 text-sm">
