@@ -541,10 +541,10 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 				// codecs; a native codec rejected by the scoped client claim
 				// keeps the normal compatibility downmix policy.
 				hlsAudioChannels = aacOutputChannelsV3(input.Request, DeliveryClassHLSV3, source.AudioChannels, !hlsNativeAudioCodecV3(source.AudioCodec))
-				plan.EffectiveRecipe.AudioCodec = "aac"
+				plan.EffectiveRecipe.AudioCodec = audioCodecAACV3
 				plan.EffectiveRecipe.AudioChannels = intPointerV3(hlsAudioChannels)
 				plan.EffectiveRecipe.AudioLayout = audioLayoutForChannelsV3(hlsAudioChannels)
-				plan.Claims.Audio = AudioClaimsV3{Codec: "aac", Reason: hlsAudioAdaptationReasonV3}
+				plan.Claims.Audio = AudioClaimsV3{Codec: audioCodecAACV3, Reason: hlsAudioAdaptationReasonV3}
 				plan.Transformations = append(plan.Transformations, TransformationV3{Name: TransformationAudioToAACV3, Executor: ExecutorServerV3, RecipeVersion: TransformationAudioToAACRecipeVersionV3, ValidatedClaims: []string{ClaimAudioDecodeV3}})
 				plan.DegradationWarnings = append(plan.DegradationWarnings, DegradationWarningV3{Code: degradationAudioConvertedV3, Message: "The selected audio track is converted to AAC for HLS delivery."})
 			}
@@ -554,10 +554,10 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 				}
 				hlsTranscodeAudio = true
 				hlsAudioChannels = aacOutputChannelsV3(input.Request, DeliveryClassHLSV3, source.AudioChannels, false)
-				plan.EffectiveRecipe.AudioCodec = "aac"
+				plan.EffectiveRecipe.AudioCodec = audioCodecAACV3
 				plan.EffectiveRecipe.AudioChannels = intPointerV3(hlsAudioChannels)
 				plan.EffectiveRecipe.AudioLayout = audioLayoutForChannelsV3(hlsAudioChannels)
-				plan.Claims.Audio = AudioClaimsV3{Codec: "aac", Reason: "device_hls_audio_adaptation"}
+				plan.Claims.Audio = AudioClaimsV3{Codec: audioCodecAACV3, Reason: "device_hls_audio_adaptation"}
 				plan.Transformations = append(plan.Transformations, TransformationV3{Name: TransformationAudioToAACV3, Executor: ExecutorServerV3, RecipeVersion: TransformationAudioToAACRecipeVersionV3, ValidatedClaims: []string{ClaimAudioDecodeV3}})
 				plan.DegradationWarnings = append(plan.DegradationWarnings, DegradationWarningV3{Code: degradationAudioConvertedV3, Message: fmt.Sprintf("The selected audio track is converted to AAC %s for this device's HLS route.", audioLayoutForChannelsV3(hlsAudioChannels))})
 				appendAppliedQuirkV3(&plan, *hlsAudioQuirk, "")
