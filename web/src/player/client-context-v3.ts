@@ -181,9 +181,7 @@ export function buildDeliveriesV3(
   const nativeHLSPreferred = probe.nativeHls && isSafariBrowserV3(userAgent);
   const progressiveHDRDetails = nativeHLSPreferred ? nonProgressiveHDRDetails : probe.hdrDetails;
   const hlsHDRDetails = nativeHLSPreferred ? probe.hdrDetails : probe.hlsHDRDetails;
-  const hlsVideoCodecs = nativeHLSPreferred
-    ? probe.progressiveCodecsVideo
-    : probe.hlsCodecsVideo;
+  const hlsVideoCodecs = nativeHLSPreferred ? probe.progressiveCodecsVideo : probe.hlsCodecsVideo;
   return {
     original_http: buildDeliveryCapability(probe, {
       hdr_details: nonProgressiveHDRDetails,
