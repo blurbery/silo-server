@@ -106,6 +106,10 @@ type TranscodeOpts struct {
 	// Empty preserves the legacy text path for callers minted before the field.
 	SubtitleCodec   string
 	AudioTrackIndex int // -1 = default (first track), >= 0 = specific track
+	// SourceAudioChannels is the selected source stream's channel count. Zero
+	// means unknown and deliberately disables stereo downmix gain: boosting an
+	// already-stereo stream would change its authored level.
+	SourceAudioChannels int
 	// TargetAudioChannels selects mono (1), stereo (2/default), or 5.1 (6+)
 	// output. Ignored for copy/passthrough audio targets.
 	TargetAudioChannels int
@@ -251,10 +255,20 @@ const defaultSegmentDuration = 2
 // embedded length matches what the node actually produces.
 const DefaultSegmentDuration = defaultSegmentDuration
 
-// maxSyntheticManifestSegments preserves the historical worst-case playlist
-// size (100,000 seconds at two-second segments). Longer media uses FFmpeg's
-// real sliding playlist instead of allocating a complete synthetic manifest.
+// maxSyntheticManifestSegments caps complete synthetic playlists by entry
+// count. At the default two-second duration this preserves the historical
+// 100,000-second limit; shorter fragments reach the same bound sooner.
 const maxSyntheticManifestSegments = 50_000
+
+// Large synthetic playlists used to repeat the full access and reconstruction
+// query on every segment URI. For a feature-length title that turns a small
+// index into several megabytes of duplicate JWT text, delaying both transfer
+// and hls.js parsing. HLS variable substitution keeps the query once while
+// preserving the exact resolved segment URLs. Keep small playlists on the
+// simpler legacy form; below this byte threshold the saving is immaterial.
+const minManifestQuerySubstitutionSavings = 64 * 1024
+
+const manifestQueryVariable = "silo_query"
 
 // remountStartOffsetSeconds is a positive, effectively-zero HLS start offset.
 // Media3 suppresses live-edge position projection for EVENT playlists only
@@ -931,7 +945,7 @@ func appendHWAccelArgs(args []string, opts TranscodeOpts) []string {
 		}
 		// VAAPI→QSV hardware pipeline: derive QSV from VAAPI device.
 		args = append(args,
-			"-init_hw_device", fmt.Sprintf("vaapi=va:%s,driver=iHD,kernel_driver=i915,vendor_id=0x8086", hwDevice),
+			"-init_hw_device", qsvVAAPIInitDevice(hwDevice),
 			"-init_hw_device", "qsv=qs@va",
 		)
 		if opts.ToneMapMode == tonemap.ModeHardware && opts.ToneMapFilter == tonemap.HardwareFilterOpenCL {
@@ -965,6 +979,10 @@ func appendHWAccelArgs(args []string, opts TranscodeOpts) []string {
 		}
 	}
 	return args
+}
+
+func qsvVAAPIInitDevice(device string) string {
+	return fmt.Sprintf("vaapi=va:%s,driver=iHD,kernel_driver=i915,vendor_id=0x8086", device)
 }
 
 // videoPreset returns an encoder-compatible preset. CPU encoders use a faster
@@ -1267,7 +1285,32 @@ func nvencSDRFallbackDownload(opts TranscodeOpts) string {
 // cards, and the compat mirror — must share this predicate or the activity
 // bucket flips between remux and audio across restarts.
 func TranscodesAudio(targetCodecAudio string) bool {
-	return !strings.EqualFold(targetCodecAudio, "copy")
+	return !strings.EqualFold(strings.TrimSpace(targetCodecAudio), "copy")
+}
+
+// IsAudioToAACStereoDownmixV3 reports whether the frozen audio facts select
+// the versioned surround-to-stereo AAC recipe. A zero target channel count is
+// the historical AAC default and therefore resolves to stereo; every other
+// codec or output layout remains on its ordinary recipe.
+func IsAudioToAACStereoDownmixV3(sourceChannels int, targetCodecAudio string, targetAudioChannels int) bool {
+	codec := strings.TrimSpace(targetCodecAudio)
+	return sourceChannels > 2 &&
+		(codec == "" || strings.EqualFold(codec, "aac")) &&
+		(targetAudioChannels == 0 || targetAudioChannels == 2)
+}
+
+const stereoDownmixBoostFilterV3 = "aresample=out_chlayout=stereo,alimiter=level_in=2:limit=0.794328235:attack=5:release=50:level=false:latency=true"
+
+// appendStereoDownmixBoostArgs applies the playback downmix policy only after
+// the source is explicitly rematrixed to stereo. The order matters: limiting
+// the source channels before FFmpeg sums them would still allow the final
+// stereo signal to clip. The limiter's input gain is +6.0206 dB; its -2 dBFS
+// sample ceiling leaves headroom for lossy-codec and inter-sample overshoot.
+func appendStereoDownmixBoostArgs(args []string, sourceChannels, outputChannels int) []string {
+	if sourceChannels <= 2 || outputChannels != 2 {
+		return args
+	}
+	return append(args, "-af", stereoDownmixBoostFilterV3)
 }
 
 // appendAudioArgs adds audio codec arguments. Supports "copy" for passthrough,
@@ -1278,7 +1321,7 @@ func TranscodesAudio(targetCodecAudio string) bool {
 func appendAudioArgs(args []string, opts TranscodeOpts) []string {
 	// Case-insensitive so the switch agrees with TranscodesAudio for any
 	// client-supplied spelling.
-	codec := strings.ToLower(opts.TargetCodecAudio)
+	codec := strings.ToLower(strings.TrimSpace(opts.TargetCodecAudio))
 	if codec == "" {
 		codec = "aac"
 	}
@@ -1298,6 +1341,9 @@ func appendAudioArgs(args []string, opts TranscodeOpts) []string {
 	default:
 		channels, bitrateKbps := resolvedAACOutputV3(opts.TargetAudioChannels, opts.TargetAudioBitrateKbps)
 		args = append(args, "-c:a", "aac", "-b:a", strconv.Itoa(bitrateKbps)+"k", "-ac", strconv.Itoa(channels))
+		if IsAudioToAACStereoDownmixV3(opts.SourceAudioChannels, opts.TargetCodecAudio, opts.TargetAudioChannels) {
+			args = appendStereoDownmixBoostArgs(args, opts.SourceAudioChannels, channels)
+		}
 	}
 
 	return args
@@ -1634,9 +1680,24 @@ const minManifestSegments = 3
 // unnecessary latency at playback start.
 const minCopyManifestSegments = 2
 
+// minFreshHardwareManifestSegments keeps one complete fragment of headroom
+// after the first playable fragment. A fresh hardware encoder produces that
+// window comfortably ahead of real time, while CPU encodes and reconstructed
+// generations retain the larger three-fragment safety margin below.
+const minFreshHardwareManifestSegments = 2
+
 func startupSegmentRequirement(opts TranscodeOpts) int {
 	if strings.EqualFold(opts.TargetCodecVideo, "copy") {
 		return minCopyManifestSegments
+	}
+	if opts.FastStart {
+		switch opts.HWAccel {
+		case transcodeHWQSV, transcodeHWVAAPI, transcodeHWNVENC:
+			if bitmapBurnInActive(opts) {
+				return 1
+			}
+			return minFreshHardwareManifestSegments
+		}
 	}
 	return minManifestSegments
 }
@@ -2303,20 +2364,21 @@ func (s *TranscodeSession) GenerateFullManifest(segPrefix, rawQuery string) []by
 		segCount = 1
 	}
 
-	var suffix string
-	if rawQuery != "" {
-		suffix = "?" + rawQuery
-	}
+	queryDefinition, suffix, queryVersion := syntheticManifestQuery(segCount, rawQuery)
 
 	segExt := hlsSegmentExtension(opts)
 	hlsVersion := 3
 	if segExt == ".m4s" {
 		hlsVersion = 7
 	}
+	if queryVersion > hlsVersion {
+		hlsVersion = queryVersion
+	}
 
 	var buf bytes.Buffer
 	buf.WriteString("#EXTM3U\n")
 	buf.WriteString(fmt.Sprintf("#EXT-X-VERSION:%d\n", hlsVersion))
+	buf.WriteString(queryDefinition)
 	buf.WriteString(fmt.Sprintf("#EXT-X-TARGETDURATION:%d\n", segDur))
 	buf.WriteString("#EXT-X-MEDIA-SEQUENCE:0\n")
 	buf.WriteString("#EXT-X-PLAYLIST-TYPE:VOD\n")
@@ -2340,6 +2402,20 @@ func (s *TranscodeSession) GenerateFullManifest(segPrefix, rawQuery string) []by
 
 	buf.WriteString("#EXT-X-ENDLIST\n")
 	return buf.Bytes()
+}
+
+func syntheticManifestQuery(segmentCount int, rawQuery string) (definition, suffix string, minVersion int) {
+	if rawQuery == "" {
+		return "", "", 0
+	}
+	legacySuffix := "?" + rawQuery
+	variableSuffix := "?{$" + manifestQueryVariable + "}"
+	savingsPerSegment := len(legacySuffix) - len(variableSuffix)
+	if savingsPerSegment <= 0 || int64(segmentCount)*int64(savingsPerSegment) < minManifestQuerySubstitutionSavings || strings.ContainsAny(rawQuery, "\"\r\n") {
+		return "", legacySuffix, 0
+	}
+	definition = fmt.Sprintf("#EXT-X-DEFINE:NAME=\"%s\",VALUE=\"%s\"\n", manifestQueryVariable, rawQuery)
+	return definition, variableSuffix, 8
 }
 
 // GetSegment returns the file path of a named segment if it exists.
@@ -2443,6 +2519,15 @@ func (s *TranscodeSession) SetAudioTrackIndex(index int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.opts.AudioTrackIndex = index
+}
+
+// SetSourceAudioChannels updates the selected source track's channel count in
+// the session's opts. Must be called before Restart() so the rebuilt ffmpeg
+// command applies (or removes) the stereo-downmix loudness filter.
+func (s *TranscodeSession) SetSourceAudioChannels(channels int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.opts.SourceAudioChannels = channels
 }
 
 // cleanStaleSegments removes segment files at or after startSegment and the

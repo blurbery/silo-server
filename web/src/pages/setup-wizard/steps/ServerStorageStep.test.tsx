@@ -97,6 +97,14 @@ function mockStep({
 describe("ServerStorageStep", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
   });
 
   it("renders connection check actions for Redis and public/private S3 storage", () => {

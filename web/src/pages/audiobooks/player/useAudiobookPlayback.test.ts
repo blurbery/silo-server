@@ -9,6 +9,7 @@ import {
 } from "./useAudiobookPlayback";
 import type { AudiobookFile } from "@/lib/audiobooks/types";
 import type { PlaybackRealtimeCommandEnvelope } from "@/player/realtime-protocol";
+import { resetCodecDetectionForTests } from "@/player/hooks/useCodecDetection";
 
 const realtimeOptions = vi.hoisted(() => ({
   current: null as null | {
@@ -215,6 +216,7 @@ describe("useAudiobookPlayback", () => {
   });
 
   afterEach(() => {
+    resetCodecDetectionForTests();
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();

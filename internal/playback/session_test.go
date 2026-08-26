@@ -794,6 +794,7 @@ func TestSessionReplacementAppliesAndRollsBackAtomically(t *testing.T) {
 		TranscodeRouteSet:    true,
 		SubtitleTrackIndex:   -1,
 		StreamBitrateKbps:    8_000,
+		SourceAudioChannels:  6,
 		TranscodeHWAccel:     "qsv",
 		ToneMapMode:          tonemap.ModeHardware,
 		TranscodeNodeURL:     "http://old-node",
@@ -812,6 +813,7 @@ func TestSessionReplacementAppliesAndRollsBackAtomically(t *testing.T) {
 			TranscodeRouteSet:    true,
 			SubtitleTrackIndex:   1,
 			StreamBitrateKbps:    3_500,
+			SourceAudioChannels:  8,
 			TranscodeHWAccel:     "none",
 			ToneMapMode:          tonemap.ModeSoftware,
 			TranscodeNodeURL:     "http://new-node",
@@ -828,6 +830,7 @@ func TestSessionReplacementAppliesAndRollsBackAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	if replaced.MediaFileID != 84 || replaced.PlayMethod != playback.PlayTranscode || replaced.AudioTrackIndex != 2 ||
+		replaced.SourceAudioChannels != 8 ||
 		replaced.TranscodeNodeURL != "http://new-node" || replaced.TranscodeHWAccel != "none" || replaced.ToneMapMode != "software" || replaced.Position != position || !replaced.IsPaused {
 		t.Fatalf("replacement session = %#v", replaced)
 	}
@@ -839,6 +842,7 @@ func TestSessionReplacementAppliesAndRollsBackAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	if restored.MediaFileID != 42 || restored.PlayMethod != playback.PlayDirect || restored.AudioTrackIndex != 0 ||
+		restored.SourceAudioChannels != 6 ||
 		restored.TranscodeNodeURL != "http://old-node" || restored.TranscodeTransportID != "old-transport" ||
 		restored.TranscodeHWAccel != "qsv" || restored.ToneMapMode != "hardware" ||
 		restored.Position != 0 || restored.IsPaused {
@@ -901,22 +905,25 @@ func TestUpdateStreamState(t *testing.T) {
 	}
 
 	err = mgr.UpdateStreamState(session.ID, playback.SessionStreamState{
-		PlayMethod:           playback.PlayTranscode,
-		BasePlayMethod:       playback.PlayRemux,
-		AudioTrackIndex:      2,
-		TranscodeAudio:       true,
-		ClientIP:             "10.0.0.10",
-		StreamBitrateKbps:    4200,
-		TargetResolution:     "1080p",
-		TargetVideoCodec:     "h264",
-		TargetAudioCodec:     "aac",
-		TargetBitrateKbps:    4000,
-		TranscodeNodeURL:     "http://node-1",
-		TranscodeTransportID: "transport-1",
-		TranscodeRouteSet:    true,
-		SubtitleTrackIndex:   3,
-		SubtitleBurnIn:       true,
-		SegmentDuration:      4,
+		PlayMethod:             playback.PlayTranscode,
+		BasePlayMethod:         playback.PlayRemux,
+		AudioTrackIndex:        2,
+		TranscodeAudio:         true,
+		ClientIP:               "10.0.0.10",
+		StreamBitrateKbps:      4200,
+		TargetResolution:       "1080p",
+		TargetVideoCodec:       "h264",
+		TargetAudioCodec:       "aac",
+		SourceAudioChannels:    6,
+		TargetAudioChannels:    2,
+		TargetAudioBitrateKbps: 192,
+		TargetBitrateKbps:      4000,
+		TranscodeNodeURL:       "http://node-1",
+		TranscodeTransportID:   "transport-1",
+		TranscodeRouteSet:      true,
+		SubtitleTrackIndex:     3,
+		SubtitleBurnIn:         true,
+		SegmentDuration:        4,
 	})
 	if err != nil {
 		t.Fatalf("UpdateStreamState: %v", err)
@@ -956,6 +963,9 @@ func TestUpdateStreamState(t *testing.T) {
 	if got.TargetAudioCodec != "aac" {
 		t.Errorf("TargetAudioCodec = %q, want %q", got.TargetAudioCodec, "aac")
 	}
+	if got.SourceAudioChannels != 6 || got.TargetAudioChannels != 2 {
+		t.Errorf("audio channels = source %d / target %d, want 6 / 2", got.SourceAudioChannels, got.TargetAudioChannels)
+	}
 	if got.TargetBitrateKbps != 4000 {
 		t.Errorf("TargetBitrateKbps = %d, want 4000", got.TargetBitrateKbps)
 	}
@@ -968,6 +978,18 @@ func TestUpdateStreamState(t *testing.T) {
 	if got.SegmentDuration != 4 {
 		t.Errorf("SegmentDuration = %d, want 4", got.SegmentDuration)
 	}
+	if err := mgr.UpdateStreamState(session.ID, playback.SessionStreamState{AudioTrackIndex: 1}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = mgr.GetSession(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.TranscodeAudio || got.TargetAudioCodec != "aac" || got.SourceAudioChannels != 6 ||
+		got.TargetAudioChannels != 2 || got.TargetAudioBitrateKbps != 192 {
+		t.Fatalf("audio recipe after partial update = transcode %t codec %q source %d target %d bitrate %d, want preserved AAC 6-to-2 at 192 kbps",
+			got.TranscodeAudio, got.TargetAudioCodec, got.SourceAudioChannels, got.TargetAudioChannels, got.TargetAudioBitrateKbps)
+	}
 	if err := mgr.UpdateStreamState(session.ID, playback.SessionStreamState{TranscodeRouteSet: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -977,6 +999,11 @@ func TestUpdateStreamState(t *testing.T) {
 	}
 	if got.TranscodeNodeURL != "" || got.TranscodeTransportID != "" {
 		t.Fatalf("cleared transcode route = %q/%q", got.TranscodeNodeURL, got.TranscodeTransportID)
+	}
+	if got.TranscodeAudio || got.TargetAudioCodec != "" || got.SourceAudioChannels != 0 ||
+		got.TargetAudioChannels != 0 || got.TargetAudioBitrateKbps != 0 {
+		t.Fatalf("audio recipe after full route replacement = transcode %t codec %q source %d target %d bitrate %d, want cleared",
+			got.TranscodeAudio, got.TargetAudioCodec, got.SourceAudioChannels, got.TargetAudioChannels, got.TargetAudioBitrateKbps)
 	}
 }
 

@@ -148,8 +148,8 @@ export default function OverlaySettings() {
       <div className="mb-6 space-y-2">
         <h2 className="text-xl font-semibold tracking-tight">Card Overlays</h2>
         <p className="text-muted-foreground text-sm leading-relaxed">
-          Configure poster badge defaults used by the web app. Users can customize poster badges for
-          their profile.
+          Configure the default overlay badges and style preset shown on poster cards. Users can
+          override these in their personal settings.
         </p>
       </div>
 
@@ -166,7 +166,7 @@ export default function OverlaySettings() {
 
         <FieldGroup label="Default Configuration">
           <p className="text-muted-foreground mb-4 text-xs">
-            Poster defaults apply to users who have not customized their overlay settings.
+            These defaults apply to users who have not customized their overlay settings.
           </p>
           <div className="flex flex-col gap-6 lg:flex-row">
             <div className="flex-1">

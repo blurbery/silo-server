@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { detectHLSSupport, type WebCapabilityProbe } from "../client-context-v3";
+import { isFirefoxUserAgent } from "../utils/browser";
 
 /** Maps our codec names to the MIME declarations browsers expose for them. */
 const VIDEO_CODEC_MAP: Record<string, string> = {
@@ -265,10 +266,19 @@ export function probeWebCapabilities(): WebCapabilityProbe {
   const codecsVideo: string[] = [];
   const hlsCodecsVideo: string[] = [];
   const codecsAudio: string[] = [];
+  const progressiveCodecsAudio: string[] = [];
   const containers: string[] = [];
+  const isFirefox =
+    typeof navigator !== "undefined" && isFirefoxUserAgent(navigator.userAgent ?? "");
 
   // Test containers.
   for (const [name, mimeTypes] of Object.entries(CONTAINER_MAP)) {
+    // Firefox 145+ reports native Matroska support, but its demuxer still
+    // requires the complete resource before starting common audio+video MKVs
+    // (Mozilla bug 2000420). Advertising that container turns direct play into
+    // a full-file download. Keep the codec claims so the planner can select a
+    // codec-copy remux instead.
+    if (name === "mkv" && isFirefox) continue;
     if (mimeTypes.some(testMediaType)) {
       containers.push(name);
     }
@@ -287,6 +297,13 @@ export function probeWebCapabilities(): WebCapabilityProbe {
   for (const [name, mimeTypes] of Object.entries(AUDIO_CODEC_MAP)) {
     if (mimeTypes.some(testMediaType)) {
       codecsAudio.push(name);
+    }
+    if (
+      mimeTypes
+        .filter((mime) => mime.startsWith("audio/mp4") || mime.startsWith("video/mp4"))
+        .some(testMediaType)
+    ) {
+      progressiveCodecsAudio.push(name);
     }
   }
 
@@ -366,6 +383,7 @@ export function probeWebCapabilities(): WebCapabilityProbe {
     progressiveCodecsVideo,
     hlsCodecsVideo,
     codecsAudio,
+    progressiveCodecsAudio,
     maxResolution,
     hdr,
     hdrDetails,
@@ -380,7 +398,7 @@ export interface WebCapabilityDetection {
   settled: boolean;
 }
 
-interface ExactWebCapabilityProbe {
+export interface ExactWebCapabilityProbe {
   hdr10: boolean;
   hlg: boolean;
   hlsHDR10: boolean;
@@ -445,7 +463,7 @@ function readExactCapabilityCache(): ExactWebCapabilityProbe | null {
 function probeExactWebCapabilities(): Promise<ExactWebCapabilityProbe> {
   const cached = readExactCapabilityCache();
   if (cached) return Promise.resolve(cached);
-  if (capabilityCacheEnabled && exactCapabilityPromise) return exactCapabilityPromise;
+  if (exactCapabilityPromise) return exactCapabilityPromise;
 
   const generation = exactCapabilityGeneration;
   const pending = Promise.all([
@@ -465,7 +483,7 @@ function probeExactWebCapabilities(): Promise<ExactWebCapabilityProbe> {
     }
     return result;
   });
-  if (capabilityCacheEnabled) exactCapabilityPromise = pending;
+  exactCapabilityPromise = pending;
   return pending;
 }
 
@@ -479,6 +497,18 @@ function invalidateExactCapabilityCache(): void {
   } catch {
     // A disabled session cache does not affect the live probe.
   }
+}
+
+/**
+ * Starts the bounded exact decoder probes once so opening playback can reuse
+ * the same in-memory result.
+ */
+export function prewarmCodecDetection(): Promise<ExactWebCapabilityProbe> {
+  return probeExactWebCapabilities();
+}
+
+export function resetCodecDetectionForTests(): void {
+  invalidateExactCapabilityCache();
 }
 
 function applyExactWebCapabilities(

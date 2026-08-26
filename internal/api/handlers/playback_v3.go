@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
 	apimw "github.com/Silo-Server/silo-server/internal/api/middleware"
@@ -30,6 +31,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/nodepool"
 	"github.com/Silo-Server/silo-server/internal/playback"
 	"github.com/Silo-Server/silo-server/internal/settingsresolve"
+	"github.com/Silo-Server/silo-server/internal/streamtoken"
 	"github.com/Silo-Server/silo-server/internal/subtitles"
 	"github.com/Silo-Server/silo-server/internal/tonemap"
 	"github.com/Silo-Server/silo-server/internal/transcodenode"
@@ -63,7 +65,14 @@ const (
 	// The node-recipe handoff is restart insurance written while the client is
 	// blocked on the start response, so a stalled store must lose the insurance
 	// rather than the start. Matches the jellycompat handoff's budget.
-	nodeRecipeWriteTimeoutV3 = 2 * time.Second
+	nodeRecipeWriteTimeoutV3            = 2 * time.Second
+	playbackStartSideEffectsTimeoutV3   = 15 * time.Second
+	playbackStartSideEffectsWorkersV3   = 4
+	playbackStartSideEffectsQueueSizeV3 = 256
+	playbackCapabilityWarmupWorkersV3   = 4
+	requestIDLogKeyV3                   = "request_id"
+	playbackLogValueV3                  = "playback"
+	playbackRemoteOutcomeFailedV3       = "failed"
 )
 
 var errSubtitleStoreUnavailableV3 = errors.New("subtitle store unavailable")
@@ -93,6 +102,51 @@ type preparedTimelineV3 struct {
 	streamOriginSeconds    float64
 	startSegmentNumber     int
 	copySeekAnchorResolved bool
+}
+
+type playbackStartTimingsV3 struct {
+	started time.Time
+	last    time.Time
+	attrs   []any
+}
+
+func newPlaybackStartTimingsV3() *playbackStartTimingsV3 {
+	now := time.Now()
+	return &playbackStartTimingsV3{started: now, last: now}
+}
+
+func (t *playbackStartTimingsV3) mark(stage string) {
+	now := time.Now()
+	t.attrs = append(t.attrs, stage+"_ms", now.Sub(t.last).Milliseconds())
+	t.last = now
+}
+
+func (t *playbackStartTimingsV3) log(ctx context.Context, attemptID string) {
+	attrs := []any{
+		logComponentKey, playbackLogValueV3,
+		requestIDLogKeyV3, chimw.GetReqID(ctx),
+		"playback_attempt_id", attemptID,
+		"total_ms", time.Since(t.started).Milliseconds(),
+	}
+	attrs = append(attrs, t.attrs...)
+	slog.InfoContext(ctx, "protocol v3 start timing", attrs...)
+}
+
+type playbackStartSideEffectsV3 struct {
+	session         playback.Session
+	file            models.MediaFile
+	userID          int
+	profileID       string
+	audioTrackIndex int
+	state           *playbackStartSideEffectsStateV3
+}
+
+type playbackStartSideEffectsStateV3 struct {
+	ctx           context.Context
+	cancel        context.CancelFunc
+	done          chan struct{}
+	started       bool
+	stopRequested bool
 }
 
 // mediaAuthModeV3 is the attempt's negotiated media transport mode: how a
@@ -310,6 +364,14 @@ func (h *PlaybackHandler) lookupRemoteCapabilitiesV3(ctx context.Context, nodeUR
 			return v3NodeCapabilityCache{}, entry.err
 		}
 	}
+	if ok && entry.err == nil && honorCachedFailure {
+		// A successful inventory is safe for planning after its freshness window:
+		// transport-time validation still refreshes before relying on it, while
+		// planning can use the stale snapshot and refresh behind the request. This
+		// keeps sparse traffic from paying a multi-second node probe every minute.
+		h.refreshRemoteCapabilitiesV3(nodeURL)
+		return entry, nil
+	}
 
 	requestCtx, cancel := context.WithTimeout(ctx, h.remoteToneMapProbeTimeoutV3(nodeURL))
 	defer cancel()
@@ -341,6 +403,86 @@ func (h *PlaybackHandler) lookupRemoteCapabilitiesV3(ctx context.Context, nodeUR
 	h.v3NodeCapabilities[nodeURL] = entry
 	h.v3NodeCapabilitiesMu.Unlock()
 	return entry, nil
+}
+
+func (h *PlaybackHandler) refreshRemoteCapabilitiesV3(nodeURL string) {
+	if h == nil || nodeURL == "" {
+		return
+	}
+	if _, loaded := h.v3NodeCapabilityRefresh.LoadOrStore(nodeURL, struct{}{}); loaded {
+		return
+	}
+	go func() {
+		defer h.v3NodeCapabilityRefresh.Delete(nodeURL)
+		ctx, cancel := context.WithTimeout(context.Background(), h.remoteToneMapProbeTimeoutV3(nodeURL))
+		defer cancel()
+		if _, err := h.lookupRemoteCapabilitiesV3(ctx, nodeURL, false); err != nil {
+			slog.Debug("protocol v3 background node capability refresh failed", "component", "api", "node", logredact.SanitizeURL(nodeURL), "error", err)
+		}
+	}()
+}
+
+// StartCapabilityWarmupV3 moves local and pooled-node capability discovery off
+// the first viewer's start request. It is best effort: failed probes remain
+// retryable through the ordinary lookup path and never prevent API startup.
+func (h *PlaybackHandler) StartCapabilityWarmupV3(ctx context.Context) {
+	if h == nil || ctx == nil {
+		return
+	}
+	go h.warmPlaybackCapabilitiesV3(ctx)
+}
+
+func (h *PlaybackHandler) warmPlaybackCapabilitiesV3(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, remoteNodeProbeFallbackTimeout)
+	defer cancel()
+	_ = h.transformationRegistryV3(ctx)
+
+	settings := h.plannerSettingsV3(ctx)
+	policy := tonemap.NewPolicy(settings.HardwareToneMapEnabled, settings.SoftwareToneMapEnabled)
+	if policy != tonemap.PolicyNone {
+		if _, err := h.localToneMapCapabilitiesV3(ctx); err != nil {
+			slog.DebugContext(ctx, "protocol v3 local capability warmup failed", "component", "api", "error", err)
+		}
+	}
+	// Keep ordinary SDR playback warm independently of the tone-map probe: its
+	// smoke graph has different filters and may already be satisfied by cache.
+	cfg := h.playbackConfig()
+	if err := playback.WarmHardwareEncoder(ctx, cfg.FFmpegPath, cfg.HWAccel, cfg.HWDevice); err != nil {
+		slog.DebugContext(ctx, "protocol v3 hardware encoder warmup failed", "component", "api", "error", err)
+	}
+	enumerator, ok := h.NodePlanner.(transcodeNodeEnumeratorV3)
+	if !ok {
+		return
+	}
+	nodeURLs := enumerator.TranscodeNodeURLs()
+	workerCount := min(playbackCapabilityWarmupWorkersV3, len(nodeURLs))
+	if workerCount == 0 {
+		return
+	}
+	jobs := make(chan string)
+	var group sync.WaitGroup
+	group.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer group.Done()
+			for nodeURL := range jobs {
+				if _, err := h.lookupRemoteCapabilitiesV3(ctx, nodeURL, false); err != nil {
+					slog.DebugContext(ctx, "protocol v3 node capability warmup failed", logComponentKey, "api", "node", logredact.SanitizeURL(nodeURL), "error", err)
+				}
+			}
+		}()
+	}
+	for _, nodeURL := range nodeURLs {
+		select {
+		case jobs <- nodeURL:
+		case <-ctx.Done():
+			close(jobs)
+			group.Wait()
+			return
+		}
+	}
+	close(jobs)
+	group.Wait()
 }
 
 // remoteToneMapCapabilitiesV3 returns a defensive copy of one node's validated
@@ -884,7 +1026,9 @@ func (h *PlaybackHandler) HandlePlaybackCapabilityV3(w http.ResponseWriter, r *h
 
 // handleStartPlaybackV3 validates, plans, and starts a protocol-v3 request.
 func (h *PlaybackHandler) handleStartPlaybackV3(w http.ResponseWriter, r *http.Request, body []byte) {
+	timings := newPlaybackStartTimingsV3()
 	var req playback.StartRequestV3
+	defer func() { timings.log(r.Context(), req.PlaybackAttemptID) }()
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "Invalid protocol v3 request body")
 		return
@@ -894,6 +1038,7 @@ func (h *PlaybackHandler) handleStartPlaybackV3(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	timings.mark("decode_validate")
 	profileID := apimw.GetProfileID(r.Context())
 	if profileID == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "X-Profile-Id header is required")
@@ -934,12 +1079,14 @@ func (h *PlaybackHandler) handleStartPlaybackV3(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to check playback attempt idempotency")
 		return
 	}
+	timings.mark("idempotency")
 	requestedFile, err := h.loadAuthorizedFile(r, req.FileID)
 	if err != nil {
 		writeV3FileError(w, err)
 		return
 	}
 	requestedFile = h.ensurePlaybackProbe(r.Context(), requestedFile)
+	timings.mark("file_load_probe")
 	audioIndex, err := resolveV3AudioIndex(requestedFile, req.AudioTrackID, req.AudioTrackIndex)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -952,12 +1099,15 @@ func (h *PlaybackHandler) handleStartPlaybackV3(w http.ResponseWriter, r *http.R
 			return
 		}
 	}
+	timings.mark("audio_preference")
 	effectiveFile := requestedFile
 	settings, settingsErr := h.plannerSettingsV3Result(r.Context())
+	timings.mark("planner_settings")
 	if err := preflightPlaybackFile(r.Context(), effectiveFile, h.MissingMarker, h.EventsHub); err != nil {
 		writePlaybackFilePreflightError(w, err)
 		return
 	}
+	timings.mark("file_preflight")
 	if req.StartPosition == nil {
 		req.StartPosition, err = h.resumePositionV3(r.Context(), userID, profileID, effectiveFile)
 		if err != nil {
@@ -965,12 +1115,14 @@ func (h *PlaybackHandler) handleStartPlaybackV3(w http.ResponseWriter, r *http.R
 			return
 		}
 	}
+	timings.mark("resume")
 	result, toneMapCapabilityErr := h.planPlaybackWithCapabilitiesV3(r.Context(), playback.PlannerInputV3{
 		Request: req, RequestedFile: requestedFile, EffectiveFile: effectiveFile,
 		AudioTrackIndex: audioIndex, Settings: settings,
 		Registry: h.transformationRegistryV3(r.Context()), DVRPUStrippable: h.lazyDVRPUStrippableV3(r.Context(), effectiveFile), Now: time.Now(),
 		AdditionalSubtitles: h.downloadedSubtitleInventoryV3(r.Context(), effectiveFile),
 	})
+	timings.mark("planning")
 	if terminalAllowsAlternateFileV3(result.Terminal) && shouldTryAlternateFileV3(req.QualityPreference) {
 		if alternate, alternateErr := h.findAlternateFile(r.Context(), requestedFile); alternateErr == nil && alternate != nil {
 			effectiveFile = h.ensurePlaybackProbe(r.Context(), alternate)
@@ -1000,7 +1152,8 @@ func (h *PlaybackHandler) handleStartPlaybackV3(w http.ResponseWriter, r *http.R
 	clientInfo := playbackClientInfoForStartV3(r, req.ClientPlaybackContext)
 	if result.Terminal != nil {
 		slog.InfoContext(r.Context(), "playback plan decided", append([]any{
-			logComponentKey, "playback",
+			logComponentKey, playbackLogValueV3,
+			requestIDLogKeyV3, chimw.GetReqID(r.Context()),
 			"outcome", "terminal",
 			"reason", result.Terminal.Reason,
 			"file_id", effectiveFile.ID,
@@ -1033,11 +1186,13 @@ func (h *PlaybackHandler) handleStartPlaybackV3(w http.ResponseWriter, r *http.R
 		return
 	}
 	result = escalated
+	timings.mark("remux_escalation")
 	// One line per plan decision so route selection is reconstructible from
 	// server logs alone (finding a mis-planned route previously required
 	// correlating client logcat, ffmpeg commands, and session rows).
 	slog.InfoContext(r.Context(), "playback plan decided", append([]any{
-		logComponentKey, "playback",
+		logComponentKey, playbackLogValueV3,
+		requestIDLogKeyV3, chimw.GetReqID(r.Context()),
 		"outcome", "plan",
 		"decision_reason", result.Plan.DecisionReason,
 		"delivery", result.Plan.Delivery,
@@ -1053,13 +1208,14 @@ func (h *PlaybackHandler) handleStartPlaybackV3(w http.ResponseWriter, r *http.R
 	}, clientInfo.LogAttrs()...)...)
 	result.Plan.DegradationWarnings = append(result.Plan.DegradationWarnings, warnings...)
 	response, statusErr := h.startPlannedPlaybackV3(r, userID, profileID, req, requestDigests, requestedFile, effectiveFile, audioIndex, result, clientInfo)
+	timings.mark("session_transport_commit")
 	if statusErr != nil {
 		if statusErr.reason == "playback_attempt_reused" {
 			writeError(w, http.StatusConflict, "playback_attempt_reused", statusErr.message)
 			return
 		}
 		failureAttrs := []any{
-			logComponentKey, "playback",
+			logComponentKey, playbackLogValueV3,
 			"reason", statusErr.reason,
 			"retryable", statusErr.retryable,
 			"playback_attempt_id", req.PlaybackAttemptID,
@@ -1085,6 +1241,7 @@ func (h *PlaybackHandler) handleStartPlaybackV3(w http.ResponseWriter, r *http.R
 		writeJSON(w, http.StatusCreated, persistedResponse)
 		return
 	}
+	timings.mark("response_ready")
 	writeJSON(w, http.StatusCreated, response)
 }
 
@@ -1276,40 +1433,170 @@ func (h *PlaybackHandler) startPlannedPlaybackV3(r *http.Request, userID int, pr
 	// Start-side effects belong after both the attempt and transport commits:
 	// retries that lose the idempotency race must not emit duplicate provider
 	// scrobbles or analysis work for the short-lived session they roll back.
-	if !session.DisableProgressPersistence && h.WatchScrobbler != nil && effectiveFile != nil {
-		targetID := playbackProgressTarget(effectiveFile)
-		if targetID != "" {
-			event := h.scrobbleEventForSession(r.Context(), session, targetID, float64(effectiveFile.Duration), session.Position)
-			if err := h.WatchScrobbler.ScrobbleStart(r.Context(), event); err != nil {
-				slog.WarnContext(r.Context(), "failed to queue watch provider start scrobble", "component", "api", "session", session.ID, "error", err)
-			}
-		}
-	}
-	if h.ChapterThumbnailQueuer != nil && effectiveFile != nil {
-		slog.InfoContext(r.Context(),
-			"queueing chapter thumbnails", "component", "api",
-			"source", "playback_start",
-			"content_id", effectiveFile.ContentID,
-			"file_id", effectiveFile.ID,
-			"target_seconds", session.Position,
-		)
-		h.ChapterThumbnailQueuer.QueuePriorityFileAtPosition(r.Context(), effectiveFile.ID, session.Position)
-	}
-	h.maybeQueueLazyPlaybackMarkers(r.Context(), session, effectiveFile)
 	h.raceCopySafetyV3(effectiveFile.ID, result.Plan)
-	h.persistSeriesSelectionsV3(r.Context(), userID, profileID, effectiveFile, plannedAudioTrackIndexV3(result, audioIndex))
-	h.syncSessionsNow(r.Context(), "v3_start")
+	h.enqueuePlaybackStartSideEffectsV3(r.Context(), session, effectiveFile, userID, profileID, plannedAudioTrackIndexV3(result, audioIndex))
 	h.enqueueRouteEventV3(playback.RouteEventRecordV3{RouteEventV3: playback.RouteEventV3{ProtocolVersion: playback.ProtocolV3, PlaybackAttemptID: req.PlaybackAttemptID, SessionID: session.ID, PlanID: result.Plan.PlanID, Event: playback.RouteEventPlanSelectedV3, AppliedQuirkIDs: appliedQuirkIDsV3(result.Plan), QuirkRegistryRevision: appliedQuirkRevisionV3(result.Plan), OutputContextID: req.ClientPlaybackContext.Output.OutputContextID}, UserID: userID, ProfileID: profileID, ClientName: clientInfo.Name, ClientVersion: clientInfo.Version, ClientBuild: clientInfo.Build, ClientChannel: clientInfo.Channel, ClientModel: req.ClientPlaybackContext.Device.Model})
 	return response, nil
 }
 
-// persistSeriesSelectionsV3 records the version and audio-track choices this
-// plan settled on, so the next episode of the same series opens with them
-// already applied. The catalog reads both preferences back
-// (internal/catalog/detail.go), and v3 is now the only writer: the legacy start
-// and audio-PATCH endpoints that used to record them are gone.
-func (h *PlaybackHandler) persistSeriesSelectionsV3(ctx context.Context, userID int, profileID string, file *models.MediaFile, audioTrackIndex int) {
-	h.persistSeriesPlaybackPreference(ctx, userID, profileID, file)
+func (h *PlaybackHandler) enqueuePlaybackStartSideEffectsV3(ctx context.Context, session *playback.Session, file *models.MediaFile, userID int, profileID string, audioTrackIndex int) {
+	if h == nil || session == nil || file == nil {
+		return
+	}
+	h.v3StartEffectsOnce.Do(func() {
+		h.v3StartEffectsQueue = make(chan playbackStartSideEffectsV3, playbackStartSideEffectsQueueSizeV3)
+		h.v3StartEffectsPending = make(map[string]*playbackStartSideEffectsStateV3)
+		for range playbackStartSideEffectsWorkersV3 {
+			go func() {
+				for task := range h.v3StartEffectsQueue {
+					h.runPlaybackStartSideEffectsV3(task)
+				}
+			}()
+		}
+	})
+
+	taskCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), playbackStartSideEffectsTimeoutV3)
+	state := &playbackStartSideEffectsStateV3{
+		ctx:    taskCtx,
+		cancel: cancel,
+		done:   make(chan struct{}),
+	}
+	task := playbackStartSideEffectsV3{
+		session:         *session,
+		file:            *file,
+		userID:          userID,
+		profileID:       profileID,
+		audioTrackIndex: audioTrackIndex,
+		state:           state,
+	}
+	h.v3StartEffectsMu.Lock()
+	h.v3StartEffectsPending[session.ID] = state
+	h.v3StartEffectsMu.Unlock()
+	select {
+	case h.v3StartEffectsQueue <- task:
+	default:
+		// Preserve side-effect durability and ordering under overload. The queue
+		// bounds background work; a saturated server pays the old synchronous
+		// cost instead of silently dropping a provider event or preference write.
+		h.runPlaybackStartSideEffectsV3(task)
+	}
+}
+
+func (h *PlaybackHandler) runPlaybackStartSideEffectsV3(task playbackStartSideEffectsV3) {
+	state := task.state
+	if state == nil {
+		return
+	}
+	h.v3StartEffectsMu.Lock()
+	state.started = true
+	stopRequested := state.stopRequested
+	h.v3StartEffectsMu.Unlock()
+	defer func() {
+		state.cancel()
+		close(state.done)
+		h.v3StartEffectsMu.Lock()
+		if h.v3StartEffectsPending[task.session.ID] == state {
+			delete(h.v3StartEffectsPending, task.session.ID)
+		}
+		h.v3StartEffectsMu.Unlock()
+	}()
+	if stopRequested || state.ctx.Err() != nil {
+		return
+	}
+	ctx := state.ctx
+
+	if !task.session.DisableProgressPersistence && h.WatchScrobbler != nil {
+		targetID := playbackProgressTarget(&task.file)
+		if targetID != "" {
+			event := h.scrobbleEventForSession(ctx, &task.session, targetID, float64(task.file.Duration), task.session.Position)
+			if err := h.WatchScrobbler.ScrobbleStart(ctx, event); err != nil {
+				slog.WarnContext(ctx, "failed to queue watch provider start scrobble", "component", "api", "session", task.session.ID, "error", err)
+			}
+		}
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	if h.ChapterThumbnailQueuer != nil {
+		slog.InfoContext(ctx,
+			"queueing chapter thumbnails", "component", "api",
+			"source", "playback_start",
+			"content_id", task.file.ContentID,
+			"file_id", task.file.ID,
+			"target_seconds", task.session.Position,
+		)
+		h.ChapterThumbnailQueuer.QueuePriorityFileAtPosition(ctx, task.file.ID, task.session.Position)
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	h.maybeQueueLazyPlaybackMarkers(ctx, &task.session, &task.file)
+	if ctx.Err() != nil {
+		return
+	}
+	h.persistSeriesPlaybackPreference(ctx, task.userID, task.profileID, &task.file)
+	h.persistCurrentAudioPreferenceV3(ctx, task.session.ID, task.userID, task.profileID, &task.file, task.audioTrackIndex)
+	h.syncSessionsNow(ctx, "v3_start")
+}
+
+func (h *PlaybackHandler) waitForPlaybackStartSideEffectsV3(ctx context.Context, sessionID string) {
+	if h == nil || sessionID == "" {
+		return
+	}
+	h.v3StartEffectsMu.Lock()
+	state := h.v3StartEffectsPending[sessionID]
+	h.v3StartEffectsMu.Unlock()
+	if state == nil {
+		return
+	}
+	waitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), playbackStartSideEffectsTimeoutV3)
+	defer cancel()
+	select {
+	case <-state.done:
+	case <-waitCtx.Done():
+		slog.WarnContext(ctx, "timed out waiting for playback start side effects", logComponentKey, "api", "session", sessionID)
+	}
+}
+
+func (h *PlaybackHandler) cancelPlaybackStartSideEffectsV3(ctx context.Context, sessionID string) {
+	if h == nil || sessionID == "" {
+		return
+	}
+	h.v3StartEffectsMu.Lock()
+	state := h.v3StartEffectsPending[sessionID]
+	if state == nil {
+		h.v3StartEffectsMu.Unlock()
+		return
+	}
+	state.stopRequested = true
+	state.cancel()
+	started := state.started
+	done := state.done
+	h.v3StartEffectsMu.Unlock()
+	// A queued task observes stopRequested before issuing any side effect. A
+	// running task is allowed to unwind so provider start cannot cross the stop.
+	if !started {
+		return
+	}
+	waitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), playbackStartSideEffectsTimeoutV3)
+	defer cancel()
+	select {
+	case <-done:
+	case <-waitCtx.Done():
+		slog.WarnContext(ctx, "timed out canceling playback start side effects", logComponentKey, "api", "session", sessionID)
+	}
+}
+
+// persistCurrentAudioPreferenceV3 serializes start and replan preference writes
+// and rejects a delayed start value after the live session has already adopted
+// a newer track. The lock makes the final write match replacement commit order.
+func (h *PlaybackHandler) persistCurrentAudioPreferenceV3(ctx context.Context, sessionID string, userID int, profileID string, file *models.MediaFile, audioTrackIndex int) {
+	h.v3AudioPreferenceMu.Lock()
+	defer h.v3AudioPreferenceMu.Unlock()
+	current, err := h.sessionMgr.GetSession(sessionID)
+	if err != nil || current.AudioTrackIndex != audioTrackIndex {
+		return
+	}
 	h.persistAudioPreference(ctx, userID, profileID, file, audioTrackIndex)
 }
 
@@ -1514,7 +1801,7 @@ func (h *PlaybackHandler) prepareTransportTimelineV3(ctx context.Context, sessio
 		return preparedTimelineV3{seekSeconds: requested, streamOriginSeconds: origin, startSegmentNumber: startSegment, copySeekAnchorResolved: true}, nil
 	case playback.DeliveryTranscodeHLSV3:
 		sourceMetadata := sourceExecutionMetadataV3(file, result)
-		seekSeconds, startSegment := configureHLSTimelineV3(result.Plan, result.TargetVideoCodec, 2, sourceMetadata.DurationSeconds)
+		seekSeconds, startSegment := configureHLSTimelineV3(result.Plan, result.TargetVideoCodec, playback.DefaultSegmentDuration, sourceMetadata.DurationSeconds)
 		return preparedTimelineV3{seekSeconds: seekSeconds, streamOriginSeconds: result.Plan.Timeline.StreamOriginSeconds, startSegmentNumber: startSegment}, nil
 	default:
 		return preparedTimelineV3{}, nil
@@ -1548,6 +1835,7 @@ func (h *PlaybackHandler) prepareIdentityTransportV3(r *http.Request, session *p
 	routeSession.AudioTrackIndex = plannedAudioTrackIndexV3(result, session.AudioTrackIndex)
 	routeSession.TranscodeAudio = result.TranscodeAudio
 	routeSession.TargetAudioCodec = result.TargetAudioCodec
+	routeSession.SourceAudioChannels = result.SourceAudioChannels
 	routeSession.TargetAudioChannels = result.TargetAudioChannels
 	routeSession.TargetAudioBitrateKbps = result.TargetAudioBitrateKbps
 	routeSession.RemuxDVMode = remuxDVModeForPlanV3(result.Plan)
@@ -1976,7 +2264,7 @@ func (h *PlaybackHandler) escalateRefusedProgressiveRemuxV3(ctx context.Context,
 			reason = escalated.Terminal.Reason
 		}
 		slog.WarnContext(ctx, "protocol v3 header-authenticated remux has no executable delivery",
-			"component", "playback",
+			logComponentKey, playbackLogValueV3,
 			"delivery", result.Plan.Delivery,
 			"replanned_terminal_reason", reason,
 		)
@@ -1986,7 +2274,7 @@ func (h *PlaybackHandler) escalateRefusedProgressiveRemuxV3(ctx context.Context,
 		}
 	}
 	slog.InfoContext(ctx, "protocol v3 escalated refused progressive remux",
-		"component", "playback",
+		logComponentKey, playbackLogValueV3,
 		"delivery", escalated.Plan.Delivery,
 		"decision_reason", escalated.Plan.DecisionReason,
 	)
@@ -2042,6 +2330,9 @@ func (h *PlaybackHandler) identityStreamURLV3(s *playback.Session, file *models.
 	}
 	base := strings.TrimRight(proxyNode.URL, "/")
 	if s.PlayMethod == playback.PlayRemux {
+		if claims.PlayMethod == streamtoken.PlayMethodAudioDownmixRemux {
+			return base + "/stream/remux/audio-v2/" + token, true
+		}
 		return base + "/stream/remux/" + token, true
 	}
 	return base + "/stream/direct/" + token, true
@@ -2219,11 +2510,33 @@ type localTransportStartupFailureV3 struct {
 // safe to serve. A session that fails readiness is closed before the failure is
 // returned so every caller gets the same startup cleanup behavior.
 func (h *PlaybackHandler) startReadyLocalPlaybackTransportV3(ctx context.Context, opts playback.TranscodeOpts) (*playback.TranscodeSession, *localTransportStartupFailureV3) {
+	startedAt := time.Now()
 	ts, err := h.startLocalPlaybackTransport(ctx, opts)
+	spawnFinishedAt := time.Now()
 	if err != nil {
+		slog.InfoContext(ctx, "playback transport startup timing",
+			logComponentKey, playbackLogValueV3,
+			requestIDLogKeyV3, chimw.GetReqID(ctx),
+			"transport", "local",
+			"session", opts.SessionID,
+			"spawn_ms", spawnFinishedAt.Sub(startedAt).Milliseconds(),
+			"manifest_wait_ms", int64(0),
+			"total_ms", time.Since(startedAt).Milliseconds(),
+			"outcome", "spawn_failed",
+		)
 		return nil, &localTransportStartupFailureV3{cause: err, failedToStart: true}
 	}
 	if _, err := ts.WaitForManifest(playback.ManifestStartupTimeout); err != nil {
+		slog.InfoContext(ctx, "playback transport startup timing",
+			logComponentKey, playbackLogValueV3,
+			requestIDLogKeyV3, chimw.GetReqID(ctx),
+			"transport", "local",
+			"session", opts.SessionID,
+			"spawn_ms", spawnFinishedAt.Sub(startedAt).Milliseconds(),
+			"manifest_wait_ms", time.Since(spawnFinishedAt).Milliseconds(),
+			"total_ms", time.Since(startedAt).Milliseconds(),
+			"outcome", "readiness_failed",
+		)
 		failure := &localTransportStartupFailureV3{
 			cause:        err,
 			wasRunning:   ts.IsRunning(),
@@ -2232,6 +2545,16 @@ func (h *PlaybackHandler) startReadyLocalPlaybackTransportV3(ctx context.Context
 		_ = ts.Close()
 		return nil, failure
 	}
+	slog.InfoContext(ctx, "playback transport startup timing",
+		logComponentKey, playbackLogValueV3,
+		requestIDLogKeyV3, chimw.GetReqID(ctx),
+		"transport", "local",
+		"session", opts.SessionID,
+		"spawn_ms", spawnFinishedAt.Sub(startedAt).Milliseconds(),
+		"manifest_wait_ms", time.Since(spawnFinishedAt).Milliseconds(),
+		"total_ms", time.Since(startedAt).Milliseconds(),
+		"outcome", "ready",
+	)
 	return ts, nil
 }
 
@@ -2250,7 +2573,7 @@ func (h *PlaybackHandler) prepareLocalTransportV3(r *http.Request, session *play
 	sourceMetadata := sourceExecutionMetadataV3(file, result)
 	sourceProfile, sourceBitDepth := sourceVideoTranscodeFactsV3(file, result)
 	unlock := h.tm.LockSessionLifecycle(session.ID)
-	opts := playback.TranscodeOpts{InputPath: file.FilePath, OutputDir: outputDir, OutputSubdir: outputSubdir, SessionID: session.ID, SourceVideoCodec: sourceMetadata.VideoCodec, SourceVideoProfile: sourceProfile, SourceVideoBitDepth: sourceBitDepth, SoftwareVideoDecode: sourceMetadata.SoftwareVideoDecode, ToneMapPolicy: result.ToneMapPolicy, ToneMapMode: result.ToneMapMode, ToneMapSourceKind: result.ToneMapSourceKind, ToneMapRecipeVersion: result.ToneMapRecipeVersion, ToneMapPreflightRequired: result.ToneMapPreflightRequired, ToneMapSourceRevision: result.ToneMapSourceRevision, VideoBitstreamFilter: videoBitstreamFilterForPlanV3(result.Plan), DropInitialLeadingPictures: result.DropInitialLeadingPictures, VideoSampleEntry: videoSampleEntryForPlanV3(result.Plan), RemuxDVMode: remuxDVModeForPlanV3(result.Plan), SeekSeconds: timeline.seekSeconds, StreamOriginSeconds: timeline.streamOriginSeconds, CopySeekAnchorResolved: timeline.copySeekAnchorResolved, StartSegmentNumber: timeline.startSegmentNumber, TargetResolution: result.TargetResolution, TargetCodecVideo: videoCodec, TargetCodecAudio: result.TargetAudioCodec, TargetAudioChannels: result.TargetAudioChannels, TargetAudioBitrateKbps: result.TargetAudioBitrateKbps, TargetBitrateKbps: result.TargetBitrateKbps, SegmentDuration: 2, FFmpegPath: cfg.FFmpegPath, HWAccel: cfg.HWAccel, HWDevice: cfg.HWDevice, AudioTrackIndex: plannedAudioTrackIndexV3(result, session.AudioTrackIndex), SubtitleTrackIndex: result.SubtitleTransportTrackIndex, SubtitleBurnIn: result.SubtitleBurnIn, SubtitleCodec: result.SubtitleCodec, TotalDuration: sourceMetadata.DurationSeconds, FastStart: true, NodeType: playbackNodeIntegratedV3, ExecutionMode: playbackNodeIntegratedV3, FFmpegLogSink: h.FFmpegLogSink}
+	opts := playback.TranscodeOpts{InputPath: file.FilePath, OutputDir: outputDir, OutputSubdir: outputSubdir, SessionID: session.ID, SourceVideoCodec: sourceMetadata.VideoCodec, SourceVideoProfile: sourceProfile, SourceVideoBitDepth: sourceBitDepth, SourceAudioChannels: result.SourceAudioChannels, SoftwareVideoDecode: sourceMetadata.SoftwareVideoDecode, ToneMapPolicy: result.ToneMapPolicy, ToneMapMode: result.ToneMapMode, ToneMapSourceKind: result.ToneMapSourceKind, ToneMapRecipeVersion: result.ToneMapRecipeVersion, ToneMapPreflightRequired: result.ToneMapPreflightRequired, ToneMapSourceRevision: result.ToneMapSourceRevision, VideoBitstreamFilter: videoBitstreamFilterForPlanV3(result.Plan), DropInitialLeadingPictures: result.DropInitialLeadingPictures, VideoSampleEntry: videoSampleEntryForPlanV3(result.Plan), RemuxDVMode: remuxDVModeForPlanV3(result.Plan), SeekSeconds: timeline.seekSeconds, StreamOriginSeconds: timeline.streamOriginSeconds, CopySeekAnchorResolved: timeline.copySeekAnchorResolved, StartSegmentNumber: timeline.startSegmentNumber, TargetResolution: result.TargetResolution, TargetCodecVideo: videoCodec, TargetCodecAudio: result.TargetAudioCodec, TargetAudioChannels: result.TargetAudioChannels, TargetAudioBitrateKbps: result.TargetAudioBitrateKbps, TargetBitrateKbps: result.TargetBitrateKbps, SegmentDuration: playback.DefaultSegmentDuration, FFmpegPath: cfg.FFmpegPath, HWAccel: cfg.HWAccel, HWDevice: cfg.HWDevice, AudioTrackIndex: plannedAudioTrackIndexV3(result, session.AudioTrackIndex), SubtitleTrackIndex: result.SubtitleTransportTrackIndex, SubtitleBurnIn: result.SubtitleBurnIn, SubtitleCodec: result.SubtitleCodec, TotalDuration: sourceMetadata.DurationSeconds, FastStart: true, NodeType: playbackNodeIntegratedV3, ExecutionMode: playbackNodeIntegratedV3, FFmpegLogSink: h.FFmpegLogSink}
 	opts.ToneMapDVConfigPresent = sourceMetadata.ToneMapDVConfigPresent
 	opts.ToneMapDVBLCompatIDPresent = sourceMetadata.ToneMapDVBLCompatIDPresent
 	opts.ToneMapDVBLPresent = sourceMetadata.ToneMapDVBLPresent
@@ -2273,7 +2596,7 @@ func (h *PlaybackHandler) prepareLocalTransportV3(r *http.Request, session *play
 	if startupFailure != nil && startupFailure.failedToStart {
 		if softwareOpts, eligible := h.softwareToneMapRetryOptsV3(r.Context(), opts, result.FrozenSourceMetadata != nil); eligible {
 			slog.WarnContext(r.Context(), "hardware tone-map failed to start; retrying once in software",
-				"component", "playback", "playback_session_id", session.ID, "error", startupFailure.cause)
+				logComponentKey, playbackLogValueV3, "playback_session_id", session.ID, "error", startupFailure.cause)
 			opts = softwareOpts
 			usedToneMapFallback = true
 			ts, startupFailure = h.startReadyLocalPlaybackTransportV3(r.Context(), opts)
@@ -2292,7 +2615,7 @@ func (h *PlaybackHandler) prepareLocalTransportV3(r *http.Request, session *play
 
 		if fallbackOpts, eligible := h.softwareToneMapRetryOptsV3(r.Context(), opts, result.FrozenSourceMetadata != nil); eligible {
 			slog.WarnContext(r.Context(), "hardware tone-map failed during startup; retrying once in software",
-				"component", "playback",
+				logComponentKey, playbackLogValueV3,
 				"playback_session_id", session.ID,
 				"failed_device", startupFailure.failedDevice,
 				"error", startupFailure.cause)
@@ -2317,7 +2640,7 @@ func (h *PlaybackHandler) prepareLocalTransportV3(r *http.Request, session *play
 			retryOpts := opts
 			retryOpts.AvoidHWDevice = startupFailure.failedDevice
 			slog.WarnContext(r.Context(), "local transcode crashed during startup; retrying once",
-				"component", "playback",
+				logComponentKey, playbackLogValueV3,
 				"playback_session_id", session.ID,
 				"failed_device", startupFailure.failedDevice,
 				"configured_devices", retryOpts.HWDevice,
@@ -2436,12 +2759,36 @@ func (h *PlaybackHandler) prepareRemoteTransportV3(r *http.Request, session *pla
 			hwAccel = playback.HWAccelNone
 		}
 	}
-	req := transcodenode.TranscodeStartRequest{SessionID: transportID, InputPath: file.FilePath, SourceVideoCodec: sourceMetadata.VideoCodec, SourceVideoProfile: sourceProfile, SourceVideoBitDepth: sourceBitDepth, SoftwareVideoDecode: sourceMetadata.SoftwareVideoDecode, ToneMapPolicy: result.ToneMapPolicy, ToneMapMode: result.ToneMapMode, ToneMapSourceKind: result.ToneMapSourceKind, ToneMapRecipeVersion: result.ToneMapRecipeVersion, ToneMapPreflightRequired: result.ToneMapPreflightRequired, ToneMapSourceRevision: result.ToneMapSourceRevision, VideoBitstreamFilter: videoBitstreamFilterForPlanV3(result.Plan), DropInitialLeadingPictures: result.DropInitialLeadingPictures, VideoSampleEntry: videoSampleEntryForPlanV3(result.Plan), RemuxDVMode: string(remuxDVModeForPlanV3(result.Plan)), SeekSeconds: timeline.seekSeconds, StreamOriginSeconds: timeline.streamOriginSeconds, CopySeekAnchorResolved: timeline.copySeekAnchorResolved, StartSegmentNumber: timeline.startSegmentNumber, TargetResolution: result.TargetResolution, TargetCodecVideo: videoCodec, TargetCodecAudio: result.TargetAudioCodec, TargetAudioChannels: result.TargetAudioChannels, TargetAudioBitrateKbps: result.TargetAudioBitrateKbps, TargetBitrateKbps: result.TargetBitrateKbps, SegmentDuration: 2, HWAccel: hwAccel, AudioTrackIndex: plannedAudioTrackIndexV3(result, session.AudioTrackIndex), SubtitleTrackIndex: result.SubtitleTransportTrackIndex, SubtitleBurnIn: result.SubtitleBurnIn, SubtitleCodec: result.SubtitleCodec, TotalDuration: sourceMetadata.DurationSeconds, RequireReady: true}
+	req := transcodenode.TranscodeStartRequest{SessionID: transportID, InputPath: file.FilePath, SourceVideoCodec: sourceMetadata.VideoCodec, SourceVideoProfile: sourceProfile, SourceVideoBitDepth: sourceBitDepth, SourceAudioChannels: result.SourceAudioChannels, SoftwareVideoDecode: sourceMetadata.SoftwareVideoDecode, ToneMapPolicy: result.ToneMapPolicy, ToneMapMode: result.ToneMapMode, ToneMapSourceKind: result.ToneMapSourceKind, ToneMapRecipeVersion: result.ToneMapRecipeVersion, ToneMapPreflightRequired: result.ToneMapPreflightRequired, ToneMapSourceRevision: result.ToneMapSourceRevision, VideoBitstreamFilter: videoBitstreamFilterForPlanV3(result.Plan), DropInitialLeadingPictures: result.DropInitialLeadingPictures, VideoSampleEntry: videoSampleEntryForPlanV3(result.Plan), RemuxDVMode: string(remuxDVModeForPlanV3(result.Plan)), SeekSeconds: timeline.seekSeconds, StreamOriginSeconds: timeline.streamOriginSeconds, CopySeekAnchorResolved: timeline.copySeekAnchorResolved, StartSegmentNumber: timeline.startSegmentNumber, TargetResolution: result.TargetResolution, TargetCodecVideo: videoCodec, TargetCodecAudio: result.TargetAudioCodec, TargetAudioChannels: result.TargetAudioChannels, TargetAudioBitrateKbps: result.TargetAudioBitrateKbps, TargetBitrateKbps: result.TargetBitrateKbps, SegmentDuration: playback.DefaultSegmentDuration, HWAccel: hwAccel, AudioTrackIndex: plannedAudioTrackIndexV3(result, session.AudioTrackIndex), SubtitleTrackIndex: result.SubtitleTransportTrackIndex, SubtitleBurnIn: result.SubtitleBurnIn, SubtitleCodec: result.SubtitleCodec, TotalDuration: sourceMetadata.DurationSeconds, RequireReady: true}
+	if playback.IsAudioToAACStereoDownmixV3(req.SourceAudioChannels, req.TargetCodecAudio, req.TargetAudioChannels) {
+		// Remote attestation uses the explicit effective layout even though zero
+		// means stereo to the local AAC argument builder.
+		req.TargetAudioChannels = 2
+		req.AudioRecipeVersion = playback.TransformationAudioToAACRecipeVersionV3
+	} else {
+		// SourceAudioChannels is a v2 recipe field at the node boundary. Omit it
+		// for ordinary encodes so they cannot be mistaken for partial v2 work.
+		req.SourceAudioChannels = 0
+	}
 	req.ToneMapDVConfigPresent = sourceMetadata.ToneMapDVConfigPresent
 	req.ToneMapDVBLCompatIDPresent = sourceMetadata.ToneMapDVBLCompatIDPresent
 	req.ToneMapDVBLPresent = sourceMetadata.ToneMapDVBLPresent
 	req.ToneMapDVRPUPresent = sourceMetadata.ToneMapDVRPUPresent
+	remoteStartAt := time.Now()
 	nodeResp, status, err := h.startRemotePlaybackTransport(r.Context(), node.URL, req)
+	remoteOutcome := "ready"
+	if err != nil || status != http.StatusAccepted {
+		remoteOutcome = playbackRemoteOutcomeFailedV3
+	}
+	slog.InfoContext(r.Context(), "playback transport startup timing",
+		logComponentKey, playbackLogValueV3,
+		requestIDLogKeyV3, chimw.GetReqID(r.Context()),
+		"transport", "remote",
+		"session", session.ID,
+		"total_ms", time.Since(remoteStartAt).Milliseconds(),
+		"status", status,
+		"outcome", remoteOutcome,
+	)
 	if err != nil {
 		if req.ToneMapMode != "" && (errors.Is(err, tonemap.ErrSourceRevisionChanged) ||
 			errors.Is(err, tonemap.ErrSourcePreflightRejected) ||
@@ -2459,6 +2806,10 @@ func (h *PlaybackHandler) prepareRemoteTransportV3(r *http.Request, session *pla
 	if status != http.StatusAccepted {
 		h.tm.StopRemoteTranscode(transportID, node.URL)
 		return preparedTransportV3{}, &transportErrorV3{reason: transcodeStartFailedReasonV3, message: "The selected transcode node rejected the playback transport.", retryable: true}
+	}
+	if err := transcodenode.ValidateAudioRecipeAttestation(req, nodeResp); err != nil {
+		h.tm.StopRemoteTranscode(transportID, node.URL)
+		return preparedTransportV3{}, &transportErrorV3{reason: transcodeStartFailedReasonV3, message: "The selected transcode node did not confirm the audio recipe.", retryable: true, cause: err}
 	}
 	if req.ToneMapMode != "" && nodeResp.ToneMapMode != req.ToneMapMode {
 		h.tm.StopRemoteTranscode(transportID, node.URL)
@@ -2554,7 +2905,7 @@ func (h *PlaybackHandler) prepareRemoteTransportV3(r *http.Request, session *pla
 // not part of the node's request/response contract, so the caller supplies it.
 func remoteTranscodeRecipeCardV3(session *playback.Session, file *models.MediaFile, nodeURL, transportID string, req transcodenode.TranscodeStartRequest, nodeResp transcodenode.TranscodeStartResponse, toneMapFilter string) playback.RecipeCard {
 	hw := firstNonEmptyHandlerV3(strings.TrimSpace(nodeResp.HWAccel), strings.TrimSpace(req.HWAccel))
-	card := playback.NewRecipeCard(session.UserID, session.ProfileID, file.ID, nodeURL, playback.TranscodeOpts{InputPath: req.InputPath, SessionID: session.ID, TranscodeTransportID: transportID, SourceVideoCodec: req.SourceVideoCodec, SourceVideoProfile: req.SourceVideoProfile, SourceVideoBitDepth: req.SourceVideoBitDepth, SoftwareVideoDecode: req.SoftwareVideoDecode, ToneMapPolicy: req.ToneMapPolicy, ToneMapMode: req.ToneMapMode, ToneMapSourceKind: req.ToneMapSourceKind, ToneMapFilter: toneMapFilter, ToneMapRecipeVersion: req.ToneMapRecipeVersion, ToneMapPreflightRequired: req.ToneMapPreflightRequired, ToneMapSourceRevision: req.ToneMapSourceRevision, VideoBitstreamFilter: req.VideoBitstreamFilter, DropInitialLeadingPictures: req.DropInitialLeadingPictures, VideoSampleEntry: req.VideoSampleEntry, RemuxDVMode: playback.RemuxDVMode(req.RemuxDVMode), SeekSeconds: req.SeekSeconds, StreamOriginSeconds: req.StreamOriginSeconds, CopySeekAnchorResolved: req.CopySeekAnchorResolved, StartSegmentNumber: req.StartSegmentNumber, TargetResolution: req.TargetResolution, TargetCodecVideo: req.TargetCodecVideo, TargetCodecAudio: req.TargetCodecAudio, TargetAudioChannels: req.TargetAudioChannels, TargetAudioBitrateKbps: req.TargetAudioBitrateKbps, TargetBitrateKbps: req.TargetBitrateKbps, SegmentDuration: req.SegmentDuration, HWAccel: hw, AudioTrackIndex: req.AudioTrackIndex, SubtitleTrackIndex: req.SubtitleTrackIndex, SubtitleBurnIn: req.SubtitleBurnIn, SubtitleCodec: req.SubtitleCodec, TotalDuration: req.TotalDuration})
+	card := playback.NewRecipeCard(session.UserID, session.ProfileID, file.ID, nodeURL, playback.TranscodeOpts{InputPath: req.InputPath, SessionID: session.ID, TranscodeTransportID: transportID, SourceVideoCodec: req.SourceVideoCodec, SourceVideoProfile: req.SourceVideoProfile, SourceVideoBitDepth: req.SourceVideoBitDepth, SourceAudioChannels: req.SourceAudioChannels, SoftwareVideoDecode: req.SoftwareVideoDecode, ToneMapPolicy: req.ToneMapPolicy, ToneMapMode: req.ToneMapMode, ToneMapSourceKind: req.ToneMapSourceKind, ToneMapFilter: toneMapFilter, ToneMapRecipeVersion: req.ToneMapRecipeVersion, ToneMapPreflightRequired: req.ToneMapPreflightRequired, ToneMapSourceRevision: req.ToneMapSourceRevision, VideoBitstreamFilter: req.VideoBitstreamFilter, DropInitialLeadingPictures: req.DropInitialLeadingPictures, VideoSampleEntry: req.VideoSampleEntry, RemuxDVMode: playback.RemuxDVMode(req.RemuxDVMode), SeekSeconds: req.SeekSeconds, StreamOriginSeconds: req.StreamOriginSeconds, CopySeekAnchorResolved: req.CopySeekAnchorResolved, StartSegmentNumber: req.StartSegmentNumber, TargetResolution: req.TargetResolution, TargetCodecVideo: req.TargetCodecVideo, TargetCodecAudio: req.TargetCodecAudio, TargetAudioChannels: req.TargetAudioChannels, TargetAudioBitrateKbps: req.TargetAudioBitrateKbps, TargetBitrateKbps: req.TargetBitrateKbps, SegmentDuration: req.SegmentDuration, HWAccel: hw, AudioTrackIndex: req.AudioTrackIndex, SubtitleTrackIndex: req.SubtitleTrackIndex, SubtitleBurnIn: req.SubtitleBurnIn, SubtitleCodec: req.SubtitleCodec, TotalDuration: req.TotalDuration})
 	card.ToneMapDVConfigPresent = req.ToneMapDVConfigPresent
 	card.ToneMapDVBLCompatIDPresent = req.ToneMapDVBLCompatIDPresent
 	card.ToneMapDVBLPresent = req.ToneMapDVBLPresent
@@ -2589,7 +2940,7 @@ func (h *PlaybackHandler) grantManifestURLV3(ctx context.Context, card playback.
 // sourceExecutionMetadataV3 freezes the source facts used by a remote executor.
 func sourceExecutionMetadataV3(file *models.MediaFile, result playback.PlannerResultV3) playback.SourceExecutionMetadataV3 {
 	if result.FrozenSourceMetadata != nil {
-		return *result.FrozenSourceMetadata
+		return scopeToneMapSourceMetadataV3(*result.FrozenSourceMetadata, result.ToneMapMode)
 	}
 	if file == nil {
 		return playback.SourceExecutionMetadataV3{}
@@ -2599,7 +2950,7 @@ func sourceExecutionMetadataV3(file *models.MediaFile, result playback.PlannerRe
 	if len(file.VideoTracks) > 0 {
 		track = file.VideoTracks[0]
 	}
-	return playback.SourceExecutionMetadataV3{
+	metadata := playback.SourceExecutionMetadataV3{
 		VideoCodec:                 videoCodec,
 		VideoProfile:               profile,
 		VideoBitDepth:              bitDepth,
@@ -2613,6 +2964,24 @@ func sourceExecutionMetadataV3(file *models.MediaFile, result playback.PlannerRe
 		ToneMapDVBLPresent:         track.DVBLPresent,
 		ToneMapDVRPUPresent:        track.DVRPUPresent,
 	}
+	return scopeToneMapSourceMetadataV3(metadata, result.ToneMapMode)
+}
+
+// Dolby Vision provenance is part of a frozen tone-map recipe, not a general
+// source description. Leaving it attached to a video-copy remux makes the
+// execution boundary correctly reject the orphaned fields as a partial recipe.
+func scopeToneMapSourceMetadataV3(metadata playback.SourceExecutionMetadataV3, mode tonemap.Mode) playback.SourceExecutionMetadataV3 {
+	if mode != "" {
+		return metadata
+	}
+	metadata.ToneMapSourceKind = ""
+	metadata.ToneMapPreflightRequired = false
+	metadata.ToneMapSourceRevision = tonemap.SourceRevision{}
+	metadata.ToneMapDVConfigPresent = false
+	metadata.ToneMapDVBLCompatIDPresent = false
+	metadata.ToneMapDVBLPresent = false
+	metadata.ToneMapDVRPUPresent = false
+	return metadata
 }
 
 func sourceVideoTranscodeFactsV3(file *models.MediaFile, result playback.PlannerResultV3) (string, int) {
@@ -2646,6 +3015,7 @@ func (h *PlaybackHandler) v3SessionStreamState(ctx context.Context, session *pla
 		StreamBitrateKbps:          result.TargetBitrateKbps,
 		TargetVideoCodec:           result.TargetVideoCodec,
 		TargetAudioCodec:           result.TargetAudioCodec,
+		SourceAudioChannels:        result.SourceAudioChannels,
 		TargetAudioChannels:        result.TargetAudioChannels,
 		TargetAudioBitrateKbps:     result.TargetAudioBitrateKbps,
 		TargetResolution:           result.TargetResolution,
@@ -2653,7 +3023,7 @@ func (h *PlaybackHandler) v3SessionStreamState(ctx context.Context, session *pla
 		SubtitleBurnIn:             result.SubtitleBurnIn,
 	}
 	if result.Plan != nil && (result.Plan.Delivery == playback.DeliveryTranscodeHLSV3 || result.Plan.Delivery == playback.DeliveryRemuxHLSV3) {
-		state.SegmentDuration = 2
+		state.SegmentDuration = playback.DefaultSegmentDuration
 	}
 	if state.StreamBitrateKbps <= 0 {
 		state.StreamBitrateKbps = result.TargetAudioBitrateKbps
@@ -3409,7 +3779,7 @@ func (h *PlaybackHandler) executeReplanV3(r *http.Request, record *playback.Atte
 		result.Plan.ExpiresAt = record.CurrentPlan.ExpiresAt
 		transport = reusedHLSTransportV3(session, record.CurrentPlan.Stream.URL)
 		slog.InfoContext(r.Context(), "protocol v3 replan reused active HLS A/V transport",
-			"component", "playback",
+			logComponentKey, playbackLogValueV3,
 			"playback_session_id", session.ID,
 			"previous_plan_id", record.CurrentPlanID,
 			"plan_id", result.Plan.PlanID,
@@ -3496,7 +3866,7 @@ func (h *PlaybackHandler) executeReplanV3(r *http.Request, record *playback.Atte
 			// A deliberate track switch is the same signal the legacy audio
 			// PATCH recorded; a failure recovery is not, so its forced audio
 			// route must not be written back as a user preference.
-			h.persistAudioPreference(r.Context(), session.UserID, session.ProfileID, effectiveFile, plannedAudioTrackIndexV3(result, session.AudioTrackIndex))
+			h.persistCurrentAudioPreferenceV3(r.Context(), session.ID, session.UserID, session.ProfileID, effectiveFile, plannedAudioTrackIndexV3(result, session.AudioTrackIndex))
 		}
 		h.syncSessionsNow(r.Context(), "v3_replan")
 		event := playback.RouteEventPlanSelectedV3
@@ -3915,6 +4285,7 @@ func sameExecutableAVRecipeV3(left, right playback.ExecutableRecipeV3) bool {
 		left.DropInitialLeadingPictures == right.DropInitialLeadingPictures &&
 		left.TargetVideoCodec == right.TargetVideoCodec &&
 		left.TargetAudioCodec == right.TargetAudioCodec &&
+		left.SourceAudioChannels == right.SourceAudioChannels &&
 		left.TargetAudioChannels == right.TargetAudioChannels &&
 		left.TargetAudioBitrateKbps == right.TargetAudioBitrateKbps &&
 		left.TargetResolution == right.TargetResolution &&
@@ -4316,21 +4687,34 @@ func (h *PlaybackHandler) plannerSettingsV3(ctx context.Context) playback.Planne
 func (h *PlaybackHandler) plannerSettingsV3Result(ctx context.Context) (playback.PlannerSettingsV3, error) {
 	settings := playback.PlannerSettingsV3{TranscodeEnabled: h.playbackConfig().TranscodeEnabled}
 	if h.SettingsRepo != nil {
-		value, err := h.SettingsRepo.Get(ctx, config.Allow4KTranscodeSettingKey)
-		if err != nil {
-			return settings, fmt.Errorf("load 4K transcode setting: %w", err)
+		var values [3]string
+		var errs [3]error
+		keys := [...]string{
+			config.Allow4KTranscodeSettingKey,
+			config.PlaybackTranscodeHardwareToneMapSettingKey,
+			config.PlaybackTranscodeSoftwareToneMapSettingKey,
 		}
-		settings.Allow4KTranscode = strings.EqualFold(value, "true")
-		value, err = h.SettingsRepo.Get(ctx, config.PlaybackTranscodeHardwareToneMapSettingKey)
-		if err != nil {
-			return settings, fmt.Errorf("load hardware tone-map setting: %w", err)
+		var group sync.WaitGroup
+		group.Add(len(keys))
+		for index, key := range keys {
+			go func() {
+				defer group.Done()
+				values[index], errs[index] = h.SettingsRepo.Get(ctx, key)
+			}()
 		}
-		settings.HardwareToneMapEnabled = strings.EqualFold(value, "true")
-		value, err = h.SettingsRepo.Get(ctx, config.PlaybackTranscodeSoftwareToneMapSettingKey)
-		if err != nil {
-			return settings, fmt.Errorf("load software tone-map setting: %w", err)
+		group.Wait()
+		if errs[0] != nil {
+			return settings, fmt.Errorf("load 4K transcode setting: %w", errs[0])
 		}
-		settings.SoftwareToneMapEnabled = strings.EqualFold(value, "true")
+		if errs[1] != nil {
+			return settings, fmt.Errorf("load hardware tone-map setting: %w", errs[1])
+		}
+		if errs[2] != nil {
+			return settings, fmt.Errorf("load software tone-map setting: %w", errs[2])
+		}
+		settings.Allow4KTranscode = strings.EqualFold(values[0], "true")
+		settings.HardwareToneMapEnabled = strings.EqualFold(values[1], "true")
+		settings.SoftwareToneMapEnabled = strings.EqualFold(values[2], "true")
 	}
 	return settings, nil
 }

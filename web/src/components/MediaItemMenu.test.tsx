@@ -803,6 +803,37 @@ describe("MediaItemMenu trigger visibility", () => {
     });
   });
 
+  it("preserves an optimistic toggle when the parent rebuilds an equivalent user state", async () => {
+    let resolveToggle: (() => void) | undefined;
+    mocks.toggleWatched.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveToggle = resolve;
+      }),
+    );
+    const renderMenu = () => (
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="episode-1"
+          mediaType="episode"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          variant="wide"
+          showCollectionActions={false}
+          showWatchedShortcut
+        />
+      </MemoryRouter>
+    );
+    const { rerender } = render(renderMenu());
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark Watched" }));
+    expect(screen.getByRole("button", { name: "Mark Unwatched" })).toBeTruthy();
+
+    rerender(renderMenu());
+    expect(screen.getByRole("button", { name: "Mark Unwatched" })).toBeTruthy();
+
+    resolveToggle?.();
+    await waitFor(() => expect(mocks.toggleWatched).toHaveBeenCalledWith(true));
+  });
+
   it("does not toggle when a captured pointer is released outside the button", () => {
     render(
       <MemoryRouter>

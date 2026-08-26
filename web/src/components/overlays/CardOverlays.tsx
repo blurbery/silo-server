@@ -8,6 +8,7 @@ import type {
   OverlayIconId,
   OverlayPosition,
   OverlayPreset,
+  OverlayShadow,
 } from "@/lib/overlays";
 
 // Corner stacks render at most this many badges; anything further down the
@@ -32,6 +33,13 @@ const POSTER_VARS = {
   borderLeftWidth: "--card-overlay-border-left-width",
   iconSize: "--card-overlay-icon-size",
   iconGap: "--card-overlay-icon-gap",
+  textShadowX: "--card-overlay-text-shadow-x",
+  textShadowY: "--card-overlay-text-shadow-y",
+  textShadowBlur: "--card-overlay-text-shadow-blur",
+  boxShadowX: "--card-overlay-box-shadow-x",
+  boxShadowY: "--card-overlay-box-shadow-y",
+  boxShadowBlur: "--card-overlay-box-shadow-blur",
+  boxShadowSpread: "--card-overlay-box-shadow-spread",
 } as const;
 
 type ScalingMode = "container" | "legacy" | "fixed";
@@ -52,6 +60,22 @@ function supportsContainerQueryUnits(): boolean {
 
 function setLegacyLength(element: HTMLElement, variable: string, pixels: number, scale: number) {
   element.style.setProperty(variable, `${Number((pixels * scale).toFixed(4))}px`);
+}
+
+function shadowValue(
+  shadow: OverlayShadow,
+  mode: ScalingMode,
+  variables: { x: string; y: string; blur: string; spread?: string },
+): string {
+  const lengths = [
+    overlayLength(shadow.x, mode, variables.x),
+    overlayLength(shadow.y, mode, variables.y),
+    overlayLength(shadow.blur, mode, variables.blur),
+  ];
+  if (variables.spread) {
+    lengths.push(overlayLength(shadow.spread ?? 0, mode, variables.spread));
+  }
+  return [...lengths, shadow.color].join(" ");
 }
 
 function applyLegacyPosterScale(
@@ -79,6 +103,17 @@ function applyLegacyPosterScale(
   }
   if (preset.borderLeftWidth !== undefined) {
     setLegacyLength(element, POSTER_VARS.borderLeftWidth, preset.borderLeftWidth, scale);
+  }
+  if (preset.textShadow) {
+    setLegacyLength(element, POSTER_VARS.textShadowX, preset.textShadow.x, scale);
+    setLegacyLength(element, POSTER_VARS.textShadowY, preset.textShadow.y, scale);
+    setLegacyLength(element, POSTER_VARS.textShadowBlur, preset.textShadow.blur, scale);
+  }
+  if (preset.boxShadow) {
+    setLegacyLength(element, POSTER_VARS.boxShadowX, preset.boxShadow.x, scale);
+    setLegacyLength(element, POSTER_VARS.boxShadowY, preset.boxShadow.y, scale);
+    setLegacyLength(element, POSTER_VARS.boxShadowBlur, preset.boxShadow.blur, scale);
+    setLegacyLength(element, POSTER_VARS.boxShadowSpread, preset.boxShadow.spread ?? 0, scale);
   }
 }
 
@@ -163,6 +198,21 @@ function BadgeStack({
         }
         if (preset.borderLeftWidth !== undefined && badge.accentColor !== undefined) {
           geometry.borderLeftWidth = length(preset.borderLeftWidth, POSTER_VARS.borderLeftWidth);
+        }
+        if (preset.textShadow) {
+          geometry.textShadow = shadowValue(preset.textShadow, scalingMode, {
+            x: POSTER_VARS.textShadowX,
+            y: POSTER_VARS.textShadowY,
+            blur: POSTER_VARS.textShadowBlur,
+          });
+        }
+        if (preset.boxShadow) {
+          geometry.boxShadow = shadowValue(preset.boxShadow, scalingMode, {
+            x: POSTER_VARS.boxShadowX,
+            y: POSTER_VARS.boxShadowY,
+            blur: POSTER_VARS.boxShadowBlur,
+            spread: POSTER_VARS.boxShadowSpread,
+          });
         }
 
         return (
@@ -277,21 +327,21 @@ export default function CardOverlays({ data, prefs, variant = "poster" }: CardOv
           className="pointer-events-none absolute inset-x-2 bottom-2 z-10 flex items-end justify-between gap-2"
           style={{ right: edgeInset, bottom: edgeInset, left: edgeInset, gap: edgeGap }}
         >
-          {/* Wide cards keep the bottom edge clear for the progress bar and
-              controls. Poster actions layer over badges only while visible. */}
+          {/* Bottom badges reserve corner clearance because card actions stay
+              visible on touch and other devices without a fine hover pointer. */}
           <BadgeStack
             badges={bottomLeft}
             align="start"
             preset={preset}
             scalingMode={scalingMode}
-            extraClass={wide ? "mb-4" : ""}
+            extraClass={wide ? "mb-12" : "mb-10"}
           />
           <BadgeStack
             badges={bottomRight}
             align="end"
             preset={preset}
             scalingMode={scalingMode}
-            extraClass={wide ? "mb-12" : ""}
+            extraClass={wide ? "mb-12" : "mb-10"}
           />
         </div>
       )}

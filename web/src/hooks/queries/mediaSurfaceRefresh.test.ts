@@ -141,6 +141,20 @@ describe("invalidateMediaSurfaceQueries", () => {
     expect(queryClient.getQueryState(internationalLayoutKey)?.isInvalidated).toBe(true);
   });
 
+  it("does not invalidate collection queries for a different library scope", async () => {
+    const queryClient = new QueryClient();
+    const moviesKey = libraryCollectionKeys.list(1);
+    const internationalKey = libraryCollectionKeys.items(3, "favorites");
+
+    queryClient.setQueryData(moviesKey, { collections: [] });
+    queryClient.setQueryData(internationalKey, { items: [] });
+
+    await invalidateMediaSurfaceQueries(queryClient, { libraryId: 3 });
+
+    expect(queryClient.getQueryState(moviesKey)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(internationalKey)?.isInvalidated).toBe(true);
+  });
+
   it("sets all cached detail keys for the mutated item", () => {
     const queryClient = new QueryClient();
 

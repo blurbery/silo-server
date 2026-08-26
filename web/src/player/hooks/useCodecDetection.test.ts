@@ -3,15 +3,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   detectHDRFromMatchMedia,
   detectMaxResolutionFromScreen,
+  prewarmCodecDetection,
   probeHDR10PlaybackSupport,
   probeHLSHDR10PlaybackSupport,
   probeHLGPlaybackSupport,
   probeWebCapabilities,
+  resetCodecDetectionForTests,
   useCodecDetection,
   useCodecDetectionState,
 } from "./useCodecDetection";
 
 afterEach(() => {
+  resetCodecDetectionForTests();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -347,6 +350,32 @@ describe("probeWebCapabilities", () => {
     unmount();
   });
 
+  it("reuses a capability probe warmed before playback mounts", async () => {
+    const decodingInfo = vi.fn().mockResolvedValue({
+      supported: true,
+      smooth: true,
+      powerEfficient: true,
+      keySystemAccess: null,
+    });
+    vi.stubGlobal("navigator", { mediaCapabilities: { decodingInfo } });
+    vi.stubGlobal("MediaSource", { isTypeSupported: () => true });
+    vi.stubGlobal("matchMedia", () => ({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+
+    await prewarmCodecDetection();
+    const callsAfterPrewarm = decodingInfo.mock.calls.length;
+    const { result, unmount } = renderHook(() => useCodecDetectionState());
+    await waitFor(() => expect(result.current.settled).toBe(true));
+
+    expect(callsAfterPrewarm).toBeGreaterThan(0);
+    expect(decodingInfo).toHaveBeenCalledTimes(callsAfterPrewarm);
+    expect(result.current.probe.hdrDetails.hdr10).toBe(true);
+    unmount();
+  });
+
   it("advertises browser-playable MP3, FLAC, and OGG audio", () => {
     vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockImplementation((mime) =>
       ["audio/mp4", "audio/mpeg", "audio/flac", "audio/ogg"].some((supported) =>
@@ -361,6 +390,8 @@ describe("probeWebCapabilities", () => {
     expect(capabilities.codecsAudio).toEqual(
       expect.arrayContaining(["mp3", "flac", "opus", "vorbis"]),
     );
+    expect(capabilities.progressiveCodecsAudio).toEqual(expect.arrayContaining(["flac", "opus"]));
+    expect(capabilities.progressiveCodecsAudio).not.toContain("vorbis");
     expect(capabilities.containers).toEqual(expect.arrayContaining(["mp4", "mp3", "flac", "ogg"]));
   });
 
@@ -376,5 +407,42 @@ describe("probeWebCapabilities", () => {
     expect(capabilities.containers).toContain("webm");
     expect(canPlayType).toHaveBeenCalledWith('video/webm; codecs="vp09.00.10.08"');
     expect(canPlayType).not.toHaveBeenCalledWith('video/webm; codecs="avc1.640028"');
+  });
+
+  it("does not advertise native MKV playback on Firefox", () => {
+    vi.stubGlobal("navigator", {
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0",
+    });
+    const supportedTypes = new Set([
+      'video/x-matroska; codecs="avc1.640028"',
+      'video/mp4; codecs="avc1.640028"',
+      'audio/mp4; codecs="mp4a.40.2"',
+      'audio/webm; codecs="vorbis"',
+    ]);
+    vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockImplementation((mime) =>
+      supportedTypes.has(mime) ? "probably" : "",
+    );
+
+    const capabilities = probeWebCapabilities();
+
+    expect(capabilities.containers).not.toContain("mkv");
+    expect(capabilities.codecsVideo).toContain("h264");
+    expect(capabilities.codecsAudio).toContain("aac");
+    expect(capabilities.codecsAudio).toContain("vorbis");
+    expect(capabilities.progressiveCodecsAudio).toContain("aac");
+    expect(capabilities.progressiveCodecsAudio).not.toContain("vorbis");
+  });
+
+  it("keeps advertising native MKV playback on other capable browsers", () => {
+    vi.stubGlobal("navigator", {
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/140.0 Safari/537.36",
+    });
+    vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockImplementation((mime) =>
+      mime === 'video/x-matroska; codecs="avc1.640028"' ? "probably" : "",
+    );
+
+    expect(probeWebCapabilities().containers).toContain("mkv");
   });
 });

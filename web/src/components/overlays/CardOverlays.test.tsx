@@ -187,8 +187,19 @@ describe("CardOverlays", () => {
     expect(badge?.style.borderWidth).toBe(
       preset.borderWidth === undefined ? "" : posterLength(preset.borderWidth),
     );
+    // CSSStyleDeclaration exposes an all-sides borderWidth through its side longhands.
     expect(badge?.style.borderLeftWidth).toBe(
       preset.borderWidth === undefined ? "" : posterLength(preset.borderWidth),
+    );
+    expect(badge?.style.textShadow).toBe(
+      preset.textShadow === undefined
+        ? ""
+        : `${posterLength(preset.textShadow.x)} ${posterLength(preset.textShadow.y)} ${posterLength(preset.textShadow.blur)} ${preset.textShadow.color}`,
+    );
+    expect(badge?.style.boxShadow).toBe(
+      preset.boxShadow === undefined
+        ? ""
+        : `${posterLength(preset.boxShadow.x)} ${posterLength(preset.boxShadow.y)} ${posterLength(preset.boxShadow.blur)} ${posterLength(preset.boxShadow.spread ?? 0)} ${preset.boxShadow.color}`,
     );
   });
 
@@ -274,21 +285,77 @@ describe("CardOverlays", () => {
     expect(disconnect).toHaveBeenCalledOnce();
   });
 
-  it("keeps poster badges in their selected bottom corners beneath the action layer", () => {
+  it("scales preset shadows from the measured poster width in legacy browsers", () => {
+    const disconnect = vi.fn();
+    vi.stubGlobal("CSS", { supports: () => false });
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private callback: ResizeObserverCallback) {}
+        observe(target: Element) {
+          this.callback(
+            [{ target, contentRect: { width: 92.5 } } as unknown as ResizeObserverEntry],
+            this as unknown as ResizeObserver,
+          );
+        }
+        disconnect = disconnect;
+      },
+    );
+
+    const { container, unmount } = render(
+      <CardOverlays data={SAMPLE_MOVIE_DATA} prefs={prefsWithOnly("resolution", "minimal")} />,
+    );
+    const layer = container.querySelector<HTMLElement>('[data-card-overlays="poster"]');
+
+    expect(layer?.style.getPropertyValue("--card-overlay-text-shadow-x")).toBe("0px");
+    expect(layer?.style.getPropertyValue("--card-overlay-text-shadow-y")).toBe("0.5px");
+    expect(layer?.style.getPropertyValue("--card-overlay-text-shadow-blur")).toBe("1px");
+
+    unmount();
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
+
+  it("keeps preset shadows at baseline size on wide cards", () => {
+    const minimal = render(
+      <CardOverlays
+        data={SAMPLE_MOVIE_DATA}
+        prefs={prefsWithOnly("resolution", "minimal")}
+        variant="wide"
+      />,
+    ).container.querySelector<HTMLElement>("span.inline-flex");
+    expect(minimal?.style.textShadow).toBe("0px 1px 2px rgba(0,0,0,0.85)");
+
+    const vibrant = render(
+      <CardOverlays
+        data={SAMPLE_MOVIE_DATA}
+        prefs={prefsWithOnly("resolution", "vibrant")}
+        variant="wide"
+      />,
+    ).container.querySelector<HTMLElement>("span.inline-flex");
+    expect(vibrant?.style.boxShadow).toBe("0px 1px 2px 0px rgb(0 0 0 / 0.25)");
+  });
+
+  it("lifts bottom-corner badges above persistent card actions", () => {
     const prefs = prefsWithOnly("content_rating");
     prefs.items.content_rating = { ...prefs.items.content_rating, position: "bottom-left" };
     const left = render(<CardOverlays data={SAMPLE_MOVIE_DATA} prefs={prefs} />).container;
-    expect(left.querySelector("div.bottom-2 > div.items-start")?.className).not.toContain("mb-");
+    expect(left.querySelector("div.bottom-2 > div.items-start.mb-10")).toBeTruthy();
     expect(left.querySelector("div.bottom-2")?.className).toContain("z-10");
 
     prefs.items.content_rating = { ...prefs.items.content_rating, position: "bottom-right" };
     const poster = render(<CardOverlays data={SAMPLE_MOVIE_DATA} prefs={prefs} />).container;
-    expect(poster.querySelector("div.bottom-2 > div.items-end")?.className).not.toContain("mb-");
+    expect(poster.querySelector("div.bottom-2 > div.items-end.mb-10")).toBeTruthy();
 
     const wide = render(
       <CardOverlays data={SAMPLE_MOVIE_DATA} prefs={prefs} variant="wide" />,
     ).container;
     expect(wide.querySelector("div.bottom-2 > div.items-end.mb-12")).toBeTruthy();
+
+    prefs.items.content_rating = { ...prefs.items.content_rating, position: "bottom-left" };
+    const wideLeft = render(
+      <CardOverlays data={SAMPLE_MOVIE_DATA} prefs={prefs} variant="wide" />,
+    ).container;
+    expect(wideLeft.querySelector("div.bottom-2 > div.items-start.mb-12")).toBeTruthy();
   });
 
   it("renders nothing when no enabled overlay has data", () => {

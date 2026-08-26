@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -124,6 +125,12 @@ type compatCapabilitySessionPlanner interface {
 // discovery before a Jellyfin-compatible session is placed.
 type compatTranscodeNodeEnumerator interface {
 	TranscodeNodeURLs() []string
+}
+
+// compatProxyNodeEnumerator lists enabled proxy nodes so a proxy-executed
+// remux can be restricted to binaries advertising its frozen recipe version.
+type compatProxyNodeEnumerator interface {
+	ProxyNodeURLs() []string
 }
 
 type compatSessionReservationReleaser interface {
@@ -241,8 +248,12 @@ type PlaybackHandler struct {
 	// driven to refresh a stale token, so the node reconstructs from this
 	// server-authoritative store instead (see internal/noderecipe). Optional
 	// (nil disables it — integrated/no-node deployments need no handoff).
-	RecipeNodeStore    recipeNodePutter
-	compatToneMapProbe func(context.Context, string, string, string) (tonemap.Capabilities, error)
+	RecipeNodeStore          recipeNodePutter
+	compatToneMapProbe       func(context.Context, string, string, string) (tonemap.Capabilities, error)
+	compatAudioRegistryMu    sync.Mutex
+	compatAudioRegistry      *playback.TransformationRegistryV3
+	compatAudioRegistryPath  string
+	compatAudioRegistryProbe func(context.Context, string, tonemap.Capabilities) (*playback.TransformationRegistryV3, error)
 	// compatLocalTranscodeReady is a test seam invoked after manifest readiness
 	// and before lifecycle-locked publication. Production leaves it nil.
 	compatLocalTranscodeReady func(*playback.TranscodeSession)
@@ -465,6 +476,95 @@ func (h *PlaybackHandler) remoteToneMapCapabilityInfo(ctx context.Context, nodeU
 	return info, nil
 }
 
+// compatAudioBoostNodeURLs returns only nodes that advertise the exact
+// audio-to-AAC recipe which understands SourceAudioChannels. Older nodes can
+// still transcode ordinary audio, but sending them a surround-to-stereo recipe
+// would silently lose the level correction because they ignore the new field.
+func (h *PlaybackHandler) compatAudioBoostNodeURLs(ctx context.Context, timeout time.Duration) (map[string]struct{}, error) {
+	enumerator, ok := h.NodePlanner.(compatTranscodeNodeEnumerator)
+	if !ok {
+		return map[string]struct{}{}, nil
+	}
+	return h.compatAudioBoostNodeURLsFor(ctx, enumerator.TranscodeNodeURLs(), timeout)
+}
+
+func (h *PlaybackHandler) compatAudioBoostProxyNodeURLs(ctx context.Context, timeout time.Duration) (map[string]struct{}, error) {
+	enumerator, ok := h.NodePlanner.(compatProxyNodeEnumerator)
+	if !ok {
+		return map[string]struct{}{}, nil
+	}
+	return h.compatAudioBoostNodeURLsFor(ctx, enumerator.ProxyNodeURLs(), timeout)
+}
+
+func (h *PlaybackHandler) compatAudioBoostNodeURLsFor(ctx context.Context, nodeURLs []string, timeout time.Duration) (map[string]struct{}, error) {
+	result := make(map[string]struct{})
+	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	type capabilityResult struct {
+		info playback.HWAccelInfo
+		err  error
+	}
+	results := make([]capabilityResult, len(nodeURLs))
+	var wg sync.WaitGroup
+	for i, nodeURL := range nodeURLs {
+		wg.Add(1)
+		go func(i int, nodeURL string) {
+			defer wg.Done()
+			results[i].info, results[i].err = h.remoteToneMapCapabilityInfo(fetchCtx, nodeURL)
+		}(i, nodeURL)
+	}
+	wg.Wait()
+
+	var probeErr error
+	for i, capability := range results {
+		if capability.err != nil {
+			probeErr = errors.Join(probeErr, capability.err)
+			continue
+		}
+		if compatSupportsAudioBoost(capability.info.Transformations) {
+			result[strings.TrimRight(nodeURLs[i], "/")] = struct{}{}
+		}
+	}
+	return result, probeErr
+}
+
+// planCompatProxySession keeps surround-to-stereo remux execution on proxies
+// that advertise audio_to_aac v2. A missing inventory or selector deliberately
+// returns no proxy so HandleVideoStream uses its integrated fallback.
+func (h *PlaybackHandler) planCompatProxySession(ctx context.Context, sessionID string, bitrateKbps int, requiresAudioBoost bool) nodepool.Plan {
+	if h.NodePlanner == nil {
+		return nodepool.Plan{}
+	}
+	if !requiresAudioBoost {
+		return h.NodePlanner.PlanSession(sessionID, "", false, bitrateKbps)
+	}
+	selector, selectable := h.NodePlanner.(compatCapabilitySessionPlanner)
+	_, enumerable := h.NodePlanner.(compatProxyNodeEnumerator)
+	if !selectable || !enumerable {
+		return nodepool.Plan{}
+	}
+	capable, _ := h.compatAudioBoostProxyNodeURLs(ctx, h.toneMapCapabilityTimeout())
+	return selector.PlanSessionWith(sessionID, "", false, bitrateKbps, func(node *nodepool.Node) bool {
+		if node == nil {
+			return false
+		}
+		_, supported := capable[strings.TrimRight(node.URL, "/")]
+		return supported
+	})
+}
+
+func compatSupportsAudioBoost(transformations []playback.TransformationV3) bool {
+	for _, transformation := range transformations {
+		if strings.EqualFold(strings.TrimSpace(transformation.Name), playback.TransformationAudioToAACV3) &&
+			strings.EqualFold(strings.TrimSpace(transformation.Executor), playback.ExecutorServerV3) &&
+			strings.TrimSpace(transformation.RecipeVersion) == playback.TransformationAudioToAACRecipeVersionV3 {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *PlaybackHandler) toneMapCapabilityTimeout() time.Duration {
 	return compatRemoteNodeProbeFallbackTimeout
 }
@@ -586,13 +686,43 @@ func compatVersionRequiresToneMap(version catalog.FileVersion) bool {
 
 // planCompatTranscodeSession restricts an HDR video transcode to nodes that
 // support the preferred policy mode and resolved source kind.
-func (h *PlaybackHandler) planCompatTranscodeSession(ctx context.Context, session *playback.Session, file *models.MediaFile, bitrateKbps int, videoTranscode bool) (nodepool.Plan, error) {
+func (h *PlaybackHandler) planCompatTranscodeSession(ctx context.Context, session *playback.Session, file *models.MediaFile, bitrateKbps int, videoTranscode bool, sourceAudioChannels int) (nodepool.Plan, error) {
 	if h.NodePlanner == nil || session == nil {
 		return nodepool.Plan{}, nil
 	}
 	metadata := tonemap.MetadataForFile(file)
-	if !videoTranscode || metadata.DynamicRange == "" || metadata.DynamicRange == playback.DynamicRangeSDRV3 {
+	requiresToneMap := videoTranscode && metadata.DynamicRange != "" && metadata.DynamicRange != playback.DynamicRangeSDRV3
+	requiresAudioBoost := sourceAudioChannels > 2
+	if !requiresToneMap && !requiresAudioBoost {
 		return h.NodePlanner.PlanSession(session.ID, session.TranscodeNodeURL, true, bitrateKbps), nil
+	}
+	selector, selectable := h.NodePlanner.(compatCapabilitySessionPlanner)
+	_, enumerable := h.NodePlanner.(compatTranscodeNodeEnumerator)
+	if !selectable || !enumerable {
+		if requiresAudioBoost {
+			// A planner that cannot expose and filter its candidates cannot prove a
+			// mixed-version node understands the byte-affecting recipe. Leave the
+			// work local instead of silently producing the legacy low-level mix.
+			return nodepool.Plan{}, nil
+		}
+		return h.NodePlanner.PlanSession(session.ID, session.TranscodeNodeURL, true, bitrateKbps), nil
+	}
+	audioBoostNodes := map[string]struct{}{}
+	if requiresAudioBoost {
+		audioBoostNodes, _ = h.compatAudioBoostNodeURLs(ctx, h.toneMapCapabilityTimeout())
+	}
+	audioEligible := func(node *nodepool.Node) bool {
+		if node == nil {
+			return false
+		}
+		if !requiresAudioBoost {
+			return true
+		}
+		_, ok := audioBoostNodes[strings.TrimRight(node.URL, "/")]
+		return ok
+	}
+	if !requiresToneMap {
+		return selector.PlanSessionWith(session.ID, session.TranscodeNodeURL, true, bitrateKbps, audioEligible), nil
 	}
 	policy, err := h.toneMapPolicyResult(ctx)
 	if err != nil {
@@ -601,11 +731,6 @@ func (h *PlaybackHandler) planCompatTranscodeSession(ctx context.Context, sessio
 	kind := tonemap.ResolveSource(metadata).Kind
 	if kind == "" || policy == tonemap.PolicyNone {
 		return nodepool.Plan{}, errHDRTranscodeUnsupported
-	}
-	selector, selectable := h.NodePlanner.(compatCapabilitySessionPlanner)
-	_, enumerable := h.NodePlanner.(compatTranscodeNodeEnumerator)
-	if !selectable || !enumerable {
-		return h.NodePlanner.PlanSession(session.ID, session.TranscodeNodeURL, true, bitrateKbps), nil
 	}
 	available, nodeCapabilities, capabilityErr := h.compatToneMapCapabilityInventory(ctx, h.toneMapCapabilityTimeout())
 	preferredMode := available.PreferredMode(policy, kind)
@@ -621,7 +746,7 @@ func (h *PlaybackHandler) planCompatTranscodeSession(ctx context.Context, sessio
 	}
 	for _, mode := range modes {
 		plan := selector.PlanSessionWith(session.ID, session.TranscodeNodeURL, true, bitrateKbps, func(node *nodepool.Node) bool {
-			return node != nil && nodeCapabilities[strings.TrimRight(node.URL, "/")].Supports(mode, kind)
+			return audioEligible(node) && nodeCapabilities[strings.TrimRight(node.URL, "/")].Supports(mode, kind)
 		})
 		if plan.TranscodeNode != nil {
 			return plan, nil
@@ -639,6 +764,7 @@ func (h *PlaybackHandler) planCompatSoftwareToneMapSession(
 	session *playback.Session,
 	file *models.MediaFile,
 	bitrateKbps int,
+	sourceAudioChannels int,
 	excluded map[string]struct{},
 ) (nodepool.Plan, error) {
 	if h.NodePlanner == nil || session == nil {
@@ -657,6 +783,10 @@ func (h *PlaybackHandler) planCompatSoftwareToneMapSession(
 	if !selectable || !enumerable {
 		return nodepool.Plan{}, nil
 	}
+	audioBoostNodes := map[string]struct{}{}
+	if sourceAudioChannels > 2 {
+		audioBoostNodes, _ = h.compatAudioBoostNodeURLs(ctx, h.toneMapCapabilityTimeout())
+	}
 	available, nodeCapabilities, capabilityErr := h.compatToneMapCapabilityInventory(ctx, h.toneMapCapabilityTimeout())
 	if !available.Supports(tonemap.ModeSoftware, kind) && capabilityErr != nil {
 		return nodepool.Plan{}, fmt.Errorf("%w: %w", errToneMapCapabilityUnavailable, capabilityErr)
@@ -668,6 +798,11 @@ func (h *PlaybackHandler) planCompatSoftwareToneMapSession(
 		nodeURL := strings.TrimRight(node.URL, "/")
 		if _, failed := excluded[nodeURL]; failed {
 			return false
+		}
+		if sourceAudioChannels > 2 {
+			if _, supported := audioBoostNodes[nodeURL]; !supported {
+				return false
+			}
 		}
 		return nodeCapabilities[nodeURL].Supports(tonemap.ModeSoftware, kind)
 	}), nil
@@ -805,17 +940,39 @@ func (h *PlaybackHandler) buildProxyRedirectURL(
 		audioTrackIndex = resolvedAudioTrackIndex
 	}
 
-	claims := streamtoken.Claims{
-		SessionID:       upstreamSessionID,
-		MediaPath:       file.FilePath,
-		PlayMethod:      method,
-		TranscodeAudio:  source.TranscodeAudio,
-		AudioTrackIndex: audioTrackIndex,
-		AudioOnly:       file.IsAudioOnly(),
-		TranscodeNode:   transcodeNodeURL,
-		DVProfile:       file.PrimaryDVProfile(),
+	sourceAudioChannels := 0
+	if method == string(playback.PlayTranscode) || (method == string(playback.PlayRemux) && source.TranscodeAudio) {
+		sourceAudioChannels = compatSourceAudioChannels(source)
 	}
-	if method == string(playback.PlayTranscode) && !source.TranscodeAudio && compatVersionRequiresToneMap(source.Version) {
+	claims := streamtoken.Claims{
+		SessionID:           upstreamSessionID,
+		MediaPath:           file.FilePath,
+		PlayMethod:          method,
+		TranscodeAudio:      source.TranscodeAudio,
+		TargetCodecAudio:    compatTargetAudioCodec,
+		AudioTrackIndex:     audioTrackIndex,
+		SourceAudioChannels: sourceAudioChannels,
+		AudioOnly:           file.IsAudioOnly(),
+		TranscodeNode:       transcodeNodeURL,
+		DVProfile:           file.PrimaryDVProfile(),
+	}
+	if playback.IsAudioToAACStereoDownmixV3(claims.SourceAudioChannels, claims.TargetCodecAudio, claims.TargetAudioChannels) {
+		// Compatibility AAC output is stereo by default. Freeze that effective
+		// value so the proxy's versioned route can validate the whole downmix
+		// shape before starting FFmpeg.
+		claims.TargetAudioChannels = 2
+		switch method {
+		case string(playback.PlayTranscode):
+			claims.PlayMethod = streamtoken.PlayMethodAudioDownmixTranscode
+		case string(playback.PlayRemux):
+			claims.PlayMethod = streamtoken.PlayMethodAudioDownmixRemux
+		}
+	} else {
+		// SourceAudioChannels is meaningful only inside the versioned recipe.
+		// Keep ordinary tokens safe for mixed-generation proxy fleets.
+		claims.SourceAudioChannels = 0
+	}
+	if claims.SourceAudioChannels == 0 && method == string(playback.PlayTranscode) && !source.TranscodeAudio && compatVersionRequiresToneMap(source.Version) {
 		// Older binaries do not understand the frozen tone-map claims. Give them
 		// a method they reject rather than let a proxy serve HDR bytes the plan
 		// promised as tone-mapped SDR.
@@ -838,7 +995,11 @@ func (h *PlaybackHandler) buildProxyRedirectURL(
 	case string(playback.PlayDirect):
 		return proxyNode.URL + "/stream/direct/" + token, nil
 	case string(playback.PlayRemux):
-		redirectURL := proxyNode.URL + "/stream/remux/" + token
+		remuxPath := "/stream/remux/"
+		if claims.PlayMethod == streamtoken.PlayMethodAudioDownmixRemux {
+			remuxPath = "/stream/remux/audio-v2/"
+		}
+		redirectURL := proxyNode.URL + remuxPath + token
 		if seekSeconds > 0 {
 			redirectURL += "?seek=" + strconv.FormatFloat(seekSeconds, 'f', -1, 64)
 		}
@@ -909,11 +1070,27 @@ func (h *PlaybackHandler) startRemoteTranscodeWithToneMapMode(
 		}
 	}
 	if h.playbackStore != nil {
-		if current, ok := h.playbackStore.Get(playSessionID); ok && current.TranscodeStarted && current.Recipe != nil && current.Recipe.TranscodeNodeURL != "" {
+		expectedSourceAudioChannels := compatSourceAudioChannels(source)
+		expectedAudioTrackIndex := compatAudioTrackIndexOrDefault(source)
+		if current, ok := h.playbackStore.Get(playSessionID); ok && current.TranscodeStarted && current.Recipe != nil && current.Recipe.TranscodeNodeURL != "" &&
+			current.Recipe.MediaFileID == source.FileID &&
+			current.Recipe.SourceAudioChannels == expectedSourceAudioChannels &&
+			current.Recipe.AudioTrackIndex == expectedAudioTrackIndex {
 			if upstream, sessionErr := h.sessionMgr.GetSession(upstreamSessionID); sessionErr == nil && upstream != nil &&
 				strings.TrimRight(upstream.TranscodeNodeURL, "/") == strings.TrimRight(current.Recipe.TranscodeNodeURL, "/") {
 				return &remoteStartAdoptedRemoteError{nodeURL: current.Recipe.TranscodeNodeURL}
 			}
+		}
+	}
+	if compatSourceAudioChannels(source) > 0 {
+		capabilityCtx, cancelCapabilityFetch := context.WithTimeout(ctx, h.toneMapCapabilityTimeout())
+		info, capabilityErr := h.remoteToneMapCapabilityInfo(capabilityCtx, transcodeNodeURL)
+		cancelCapabilityFetch()
+		if capabilityErr != nil {
+			return fmt.Errorf("load transcode node audio recipe capabilities: %w", capabilityErr)
+		}
+		if !compatSupportsAudioBoost(info.Transformations) {
+			return fmt.Errorf("transcode node does not support %s recipe %s", playback.TransformationAudioToAACV3, playback.TransformationAudioToAACRecipeVersionV3)
 		}
 	}
 	if h.sessionMgr != nil {
@@ -1002,8 +1179,16 @@ func (h *PlaybackHandler) startRemoteTranscodeWithToneMapMode(
 		SegmentDuration:     segmentDuration,
 		HWAccel:             h.HWAccel,
 		AudioTrackIndex:     compatAudioTrackIndexOrDefault(source),
+		SourceAudioChannels: compatSourceAudioChannels(source),
 		TotalDuration:       float64(source.Version.Duration),
 		RequireReady:        toneMapRecipe.mode != "",
+	}
+	if playback.IsAudioToAACStereoDownmixV3(reqBody.SourceAudioChannels, reqBody.TargetCodecAudio, reqBody.TargetAudioChannels) {
+		reqBody.AudioRecipeVersion = playback.TransformationAudioToAACRecipeVersionV3
+		reqBody.TargetAudioChannels = 2
+		reqBody.RequireReady = true
+	} else {
+		reqBody.SourceAudioChannels = 0
 	}
 	if toneMapRecipe.mode != "" {
 		reqBody.ToneMapPolicy = toneMapRecipe.policy
@@ -1139,6 +1324,10 @@ func (h *PlaybackHandler) startRemoteTranscodeWithToneMapMode(
 		}
 		return startErr
 	}
+	if err := transcodenode.ValidateAudioRecipeAttestation(reqBody, nodeResponse); err != nil {
+		h.tm.StopRemoteTranscode(upstreamSessionID, transcodeNodeURL)
+		return err
+	}
 	if reqBody.ToneMapMode != "" && nodeResponse.ToneMapMode != reqBody.ToneMapMode {
 		h.tm.StopRemoteTranscode(upstreamSessionID, transcodeNodeURL)
 		err := errors.New("remote transcode node did not confirm tone-map mode")
@@ -1197,6 +1386,8 @@ func (h *PlaybackHandler) startRemoteTranscodeWithToneMapMode(
 		VideoSampleEntry:    reqBody.VideoSampleEntry,
 		SegmentDuration:     reqBody.SegmentDuration,
 		AudioTrackIndex:     reqBody.AudioTrackIndex,
+		SourceAudioChannels: reqBody.SourceAudioChannels,
+		TargetAudioChannels: reqBody.TargetAudioChannels,
 		TotalDuration:       reqBody.TotalDuration,
 	}
 	toneMapRecipe.apply(&opts)
@@ -1206,16 +1397,16 @@ func (h *PlaybackHandler) startRemoteTranscodeWithToneMapMode(
 		opts.TargetCodecVideo = "copy"
 	}
 
-	// Same mirror as the local path: the node runs the encode, but the
-	// upstream session here is what session sync and admin views read.
-	reportedOpts := opts
-	h.recordTranscodeStreamDetails(ctx, upstreamSessionID, reportedOpts)
-
 	if err := h.persistTranscodeRecipe(ctx, playSessionID, upstreamSessionID, opts); err != nil {
 		// Roll back the already-started node ffmpeg so it isn't leaked.
 		h.tm.StopRemoteTranscode(upstreamSessionID, transcodeNodeURL)
 		return err
 	}
+
+	// Publish admin/session execution facts only after the durable recipe
+	// commits. A failed recipe write must not leave the upstream mirror claiming
+	// the rejected audio tuple after the selection transaction rolls back.
+	h.recordTranscodeStreamDetails(ctx, upstreamSessionID, opts)
 
 	return nil
 }
@@ -1270,9 +1461,13 @@ func (h *PlaybackHandler) persistTranscodeRecipe(
 	}
 
 	var previousRecipe *playback.RecipeCard
-	if previous, ok := h.playbackStore.Get(playSessionID); ok && previous != nil && previous.Recipe != nil {
-		copy := *previous.Recipe
-		previousRecipe = &copy
+	previousTranscodeStarted := false
+	if previous, ok := h.playbackStore.Get(playSessionID); ok && previous != nil {
+		previousTranscodeStarted = previous.TranscodeStarted
+		if previous.Recipe != nil {
+			copy := *previous.Recipe
+			previousRecipe = &copy
+		}
 	}
 	nodeRecipeCommitted := recipe != nil && recipe.TranscodeNodeURL != "" && h.RecipeNodeStore != nil
 	if nodeRecipeCommitted {
@@ -1317,9 +1512,19 @@ func (h *PlaybackHandler) persistTranscodeRecipe(
 				}
 			}
 		}
+		// Durable stores can surface a DB failure after updating their live
+		// cache. Compensate only the exact candidate this call published so a
+		// concurrent newer recipe remains authoritative.
+		compatRestoreErr := h.playbackStore.Update(playSessionID, func(current *PlaybackSession) error {
+			if current.TranscodeStarted && reflect.DeepEqual(current.Recipe, recipe) {
+				current.TranscodeStarted = previousTranscodeStarted
+				current.Recipe = previousRecipe
+			}
+			return nil
+		})
 		updateErr = fmt.Errorf("update playback session: %w", updateErr)
-		if restoreErr != nil {
-			return errors.Join(updateErr, restoreErr)
+		if restoreErr != nil || compatRestoreErr != nil {
+			return errors.Join(updateErr, restoreErr, compatRestoreErr)
 		}
 		return updateErr
 	}
@@ -1641,6 +1846,7 @@ func (h *PlaybackHandler) buildPlaybackSource(
 
 func (h *PlaybackHandler) mediaSourceDTO(routeItemID, playSessionID, compatToken string, source PlaybackMediaSource) mediaSourceDTO {
 	selectedAudioStreamIndex := effectiveCompatAudioStreamIndex(source)
+	hlsAudioV2 := compatHLSRequiresAudioV2(source)
 	dto := mediaSourceDTO{
 		Protocol:                            "File",
 		ID:                                  source.ID,
@@ -1676,9 +1882,12 @@ func (h *PlaybackHandler) mediaSourceDTO(routeItemID, playSessionID, compatToken
 		MediaStreams:                        buildMediaStreamsWithSelection(routeItemID, source.ID, source.Version, selectedAudioStreamIndex, source.SelectedSubtitleStreamIndex, compatToken, playSessionID),
 	}
 	if source.SupportsDirectPlay || source.SupportsDirectStream {
+		// This URL is explicitly static=true, so HandleVideoStream always serves
+		// the source file directly. It never executes the versioned audio recipe.
+		basePath := compatVideoPath(routeItemID, false)
 		dto.DirectStreamURL = fmt.Sprintf(
-			"/Videos/%s/stream?static=true&mediaSourceId=%s&api_key=%s&PlaySessionId=%s",
-			routeItemID,
+			"%s/stream?static=true&mediaSourceId=%s&api_key=%s&PlaySessionId=%s",
+			basePath,
 			url.QueryEscape(source.ID),
 			url.QueryEscape(compatToken),
 			url.QueryEscape(playSessionID),
@@ -1686,7 +1895,7 @@ func (h *PlaybackHandler) mediaSourceDTO(routeItemID, playSessionID, compatToken
 	}
 	dto.TranscodingSubProtocol = "hls"
 	if source.SupportsTranscoding {
-		dto.TranscodingURL = fmt.Sprintf("/Videos/%s/master.m3u8?PlaySessionId=%s&MediaSourceId=%s", routeItemID, playSessionID, source.ID)
+		dto.TranscodingURL = fmt.Sprintf("%s/master.m3u8?PlaySessionId=%s&MediaSourceId=%s", compatVideoPath(routeItemID, hlsAudioV2), playSessionID, source.ID)
 		if source.TranscodeAudio {
 			dto.TranscodingContainer = "mp4"
 		} else {
@@ -1988,6 +2197,18 @@ func compatAudioTrackIndexOrDefault(source PlaybackMediaSource) int {
 		return audioTrackIndex
 	}
 	return 0
+}
+
+func compatSourceAudioChannels(source PlaybackMediaSource) int {
+	audioTrackIndex := compatAudioTrackIndexOrDefault(source)
+	if audioTrackIndex < 0 || audioTrackIndex >= len(source.Version.AudioTracks) {
+		return 0
+	}
+	channels := source.Version.AudioTracks[audioTrackIndex].Channels
+	if channels <= 2 {
+		return 0
+	}
+	return channels
 }
 
 func isValidCompatAudioStreamIndex(version catalog.FileVersion, streamIndex int) bool {
@@ -2438,6 +2659,14 @@ func downloadedSubtitlePath(version catalog.FileVersion, sub subtitles.Downloade
 	name = strings.ReplaceAll(name, "\\", "-")
 	filename := name + "." + subtitleRouteFormat(string(sub.Format))
 	return filepath.ToSlash(filepath.Join("/silo/subtitles", filename))
+}
+
+func compatVideoPath(routeItemID string, audioV2 bool) string {
+	base := "/Videos/" + routeItemID
+	if audioV2 {
+		base += "/" + compatAudioV2PathSegment
+	}
+	return base
 }
 
 func subtitleDeliveryURL(routeItemID, mediaSourceID string, streamIndex int, format, compatToken, playSessionID string) string {

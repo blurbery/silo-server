@@ -117,6 +117,72 @@ func TestCompatToneMapCapabilityInventoryHonorsSharedDeadline(t *testing.T) {
 	}
 }
 
+func TestPlanCompatTranscodeSessionRequiresAudioToAACV2ForSurroundDownmix(t *testing.T) {
+	capabilityNode := func(recipeVersion string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(playback.HWAccelInfo{Transformations: []playback.TransformationV3{{
+				Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: recipeVersion,
+			}}})
+		}))
+	}
+	legacy := capabilityNode("1")
+	defer legacy.Close()
+	current := capabilityNode(playback.TransformationAudioToAACRecipeVersionV3)
+	defer current.Close()
+
+	pool := nodepool.NewTranscodePool()
+	pool.SetNodes([]*nodepool.Node{
+		{ID: 1, URL: legacy.URL, Enabled: true, Healthy: true},
+		{ID: 2, URL: current.URL, Enabled: true, Healthy: true, ActiveJobs: 1},
+	})
+	handler := &PlaybackHandler{
+		JWTSecret:   "secret",
+		NodePlanner: nodepool.NewPlanner(nodepool.NewProxyPool(), pool),
+	}
+	plan, err := handler.planCompatTranscodeSession(
+		context.Background(), &playback.Session{ID: "compat-audio-v2"},
+		&models.MediaFile{ID: 42, Bitrate: 8_000}, 8_000, false, 6,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.TranscodeNode == nil || plan.TranscodeNode.URL != current.URL {
+		t.Fatalf("selected node = %#v, want audio_to_aac v2 node %s", plan.TranscodeNode, current.URL)
+	}
+}
+
+func TestPlanCompatProxySessionRequiresAudioToAACV2ForSurroundDownmix(t *testing.T) {
+	capabilityProxy := func(recipeVersion string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(playback.HWAccelInfo{Transformations: []playback.TransformationV3{{
+				Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: recipeVersion,
+			}}})
+		}))
+	}
+	legacy := capabilityProxy("1")
+	defer legacy.Close()
+	current := capabilityProxy(playback.TransformationAudioToAACRecipeVersionV3)
+	defer current.Close()
+
+	proxies := nodepool.NewProxyPool()
+	proxies.SetNodes([]*nodepool.Node{
+		{ID: 1, URL: legacy.URL, Enabled: true, Healthy: true},
+		{ID: 2, URL: current.URL, Enabled: true, Healthy: true},
+	})
+	handler := &PlaybackHandler{
+		JWTSecret:   "secret",
+		NodePlanner: nodepool.NewPlanner(proxies, nodepool.NewTranscodePool()),
+	}
+	plan := handler.planCompatProxySession(context.Background(), "compat-remux-v2", 8_000, true)
+	if plan.ProxyNode == nil || plan.ProxyNode.URL != current.URL {
+		t.Fatalf("selected proxy = %#v, want audio_to_aac v2 proxy %s", plan.ProxyNode, current.URL)
+	}
+	proxies.SetNodes([]*nodepool.Node{{ID: 1, URL: legacy.URL, Enabled: true, Healthy: true}})
+	if legacyOnly := handler.planCompatProxySession(context.Background(), "compat-remux-local", 8_000, true); legacyOnly.ProxyNode != nil {
+		t.Fatalf("legacy-only proxy plan = %#v, want integrated fallback", legacyOnly.ProxyNode)
+	}
+}
+
 func TestPlanCompatTranscodeSessionFallsBackToSoftwareCapacity(t *testing.T) {
 	newToneMapNode := func(capability tonemap.Capability) *httptest.Server {
 		t.Helper()
@@ -158,7 +224,7 @@ func TestPlanCompatTranscodeSessionFallsBackToSoftwareCapacity(t *testing.T) {
 	}
 	plan, err := handler.planCompatTranscodeSession(
 		context.Background(), &playback.Session{ID: "compat-capacity"}, file,
-		file.Bitrate, true,
+		file.Bitrate, true, 0,
 	)
 	if err != nil || plan.TranscodeNode == nil || plan.TranscodeNode.URL != software.URL {
 		t.Fatalf("plan = %+v error = %v, want software node fallback", plan, err)

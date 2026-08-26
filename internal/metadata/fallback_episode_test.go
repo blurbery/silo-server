@@ -180,10 +180,21 @@ func (r *fakeEpisodeRepo) applyUpsertLocked(ep *models.Episode) {
 	}
 }
 
-func (r *fakeEpisodeRepo) BulkUpsert(_ context.Context, _ string, episodes []*models.Episode) error {
+func (r *fakeEpisodeRepo) BulkUpsert(_ context.Context, seriesID string, episodes []*models.Episode) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.bulkUpserts++
+	for i, ep := range episodes {
+		if ep == nil {
+			return fmt.Errorf("episode %d is nil", i)
+		}
+		if ep.SeriesID != seriesID {
+			return fmt.Errorf("episode %d belongs to series %q, want %q", i, ep.SeriesID, seriesID)
+		}
+		if !catalog.FitsPostgresInteger(ep.SeasonNumber) || !catalog.FitsPostgresInteger(ep.EpisodeNumber) || !catalog.FitsPostgresInteger(ep.Runtime) {
+			return fmt.Errorf("episode %d has a value outside the PostgreSQL integer range", i)
+		}
+	}
 	if r.bulkUpsertErr != nil {
 		return r.bulkUpsertErr
 	}

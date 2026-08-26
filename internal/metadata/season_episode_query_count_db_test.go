@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -14,6 +15,58 @@ import (
 	"github.com/Silo-Server/silo-server/internal/catalog"
 	"github.com/Silo-Server/silo-server/internal/models"
 )
+
+func TestBulkUpsertWithFallback(t *testing.T) {
+	t.Run("bulk success", func(t *testing.T) {
+		items := []int{1, 2, 3}
+		bulkCalls := 0
+		singleCalls := 0
+		got := bulkUpsertWithFallback(items,
+			func(gotItems []int) error {
+				bulkCalls++
+				if fmt.Sprint(gotItems) != fmt.Sprint(items) {
+					t.Fatalf("bulk items = %v, want %v", gotItems, items)
+				}
+				return nil
+			},
+			func(error) { t.Fatal("unexpected bulk error callback") },
+			func(int) error {
+				singleCalls++
+				return nil
+			},
+			func(int, error) { t.Fatal("unexpected row error callback") },
+		)
+		if fmt.Sprint(got) != fmt.Sprint(items) || bulkCalls != 1 || singleCalls != 0 {
+			t.Fatalf("got items %v, bulk calls %d, single calls %d", got, bulkCalls, singleCalls)
+		}
+	})
+
+	t.Run("fallback partial success preserves order", func(t *testing.T) {
+		bulkErr := errors.New("bulk failed")
+		rowErr := errors.New("row failed")
+		var gotBulkErr error
+		var failedRows []int
+		got := bulkUpsertWithFallback([]int{3, 1, 2},
+			func([]int) error { return bulkErr },
+			func(err error) { gotBulkErr = err },
+			func(item int) error {
+				if item == 1 {
+					return rowErr
+				}
+				return nil
+			},
+			func(item int, err error) {
+				if !errors.Is(err, rowErr) {
+					t.Fatalf("row error = %v, want %v", err, rowErr)
+				}
+				failedRows = append(failedRows, item)
+			},
+		)
+		if !errors.Is(gotBulkErr, bulkErr) || fmt.Sprint(got) != "[3 2]" || fmt.Sprint(failedRows) != "[1]" {
+			t.Fatalf("bulk error %v, successes %v, failed rows %v", gotBulkErr, got, failedRows)
+		}
+	})
+}
 
 type seasonEpisodeQueryTracer struct {
 	mu      sync.Mutex
@@ -46,6 +99,11 @@ func (t *seasonEpisodeQueryTracer) count() int {
 	return len(t.queries)
 }
 
+// TestPersistSeasonsAndEpisodes_QueryCountIsBounded pins intentional statement
+// budgets: persisting 1 episode and 100 episodes both cost 9 statements for a
+// canonical write or 13 for a localized write, preventing accidental per-row
+// statements and N+1 regressions. A deliberate, reviewed statement-count change
+// must update both constants together with this comment.
 func TestPersistSeasonsAndEpisodes_QueryCountIsBounded(t *testing.T) {
 	dsn := os.Getenv("SILO_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -322,7 +380,7 @@ func TestPersistSeasonsAndEpisodes_NonCanonicalRefreshPreservesBaseAndLocalizati
 			Overview:      "Nouveau resume episode fournisseur",
 		}},
 		MergeReplaceUnlocked,
-		true,
+		false,
 	)
 
 	storedSeason, err := seasonRepo.GetBySeriesAndNumber(ctx, seriesID, 1)

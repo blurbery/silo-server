@@ -22,7 +22,7 @@ func TestProbeTransformationRegistryWithToneMapV3ResultPreservesDeadline(t *test
 
 func TestProbeTransformationRegistryWithToneMapV3ResultRejectsFailedInventoryCommand(t *testing.T) {
 	ffmpeg := filepath.Join(t.TempDir(), "ffmpeg")
-	script := "#!/bin/sh\ncase \"$2\" in\n-bsfs) echo dovi_rpu; exit 1 ;;\n-encoders) echo ' V....D libx264 H.264'; echo ' A....D aac AAC' ;;\nesac\n"
+	script := "#!/bin/sh\ncase \"$2\" in\n-bsfs) echo dovi_rpu; exit 1 ;;\n-encoders) echo ' V....D libx264 H.264'; echo ' A....D aac AAC' ;;\n-filters) echo ' ... aresample A->A'; echo ' T.C alimiter A->A' ;;\nesac\n"
 	if err := os.WriteFile(ffmpeg, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestH264EncoderAvailabilityAcceptsAnyPipelineEncoder(t *testing.T) {
 
 func TestProbeTransformationRegistryV3AdvertisesVideoToH264RecipeVersion2(t *testing.T) {
 	ffmpeg := filepath.Join(t.TempDir(), "ffmpeg")
-	script := "#!/bin/sh\ncase \"$2\" in\n-bsfs) echo dovi_rpu; echo filter_units ;;\n-encoders) echo ' V....D libx264 H.264'; echo ' A....D aac AAC' ;;\nesac\n"
+	script := "#!/bin/sh\ncase \"$2\" in\n-bsfs) echo dovi_rpu; echo filter_units ;;\n-encoders) echo ' V....D libx264 H.264'; echo ' A....D aac AAC' ;;\n-filters) echo ' ... aresample A->A'; echo ' T.C alimiter A->A' ;;\nesac\n"
 	if err := os.WriteFile(ffmpeg, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -118,4 +118,37 @@ func TestProbeTransformationRegistryV3RequiresBothDV7BaseLayerFilters(t *testing
 			}
 		})
 	}
+}
+
+func TestProbeTransformationRegistryV3RequiresVersion2AudioFilterGraph(t *testing.T) {
+	ffmpeg := filepath.Join(t.TempDir(), "ffmpeg")
+	// Model an older FFmpeg that lists both filters but rejects one of the v2
+	// graph options (notably out_chlayout or alimiter latency compensation).
+	script := "#!/bin/sh\ncase \"$2\" in\n-bsfs) : ;;\n-encoders) echo ' A....D aac AAC' ;;\n-filters) echo ' ... aresample A->A'; echo ' T.C alimiter A->A' ;;\nesac\ncase \" $* \" in\n*\" -f lavfi \"*) exit 1 ;;\nesac\n"
+	if err := os.WriteFile(ffmpeg, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	registry, err := ProbeTransformationRegistryWithToneMapV3Result(context.Background(), ffmpeg, nil)
+	if err != nil {
+		t.Fatalf("unsupported graph should be a cacheable capability result: %v", err)
+	}
+	if registry.Available(TransformationAudioToAACV3) {
+		t.Fatal("audio_to_aac advertised when the exact version 2 graph was rejected")
+	}
+
+	script = "#!/bin/sh\ncase \"$2\" in\n-bsfs) : ;;\n-encoders) echo ' A....D aac AAC' ;;\n-filters) echo ' ... aresample A->A'; echo ' T.C alimiter A->A' ;;\nesac\n"
+	if err := os.WriteFile(ffmpeg, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registry = ProbeTransformationRegistryV3(context.Background(), ffmpeg)
+	for _, transformation := range registry.Advertised() {
+		if transformation.Name == TransformationAudioToAACV3 {
+			if transformation.RecipeVersion != TransformationAudioToAACRecipeVersionV3 {
+				t.Fatalf("audio_to_aac recipe version = %q, want %q", transformation.RecipeVersion, TransformationAudioToAACRecipeVersionV3)
+			}
+			return
+		}
+	}
+	t.Fatal("audio_to_aac was not advertised with the complete version 2 toolchain")
 }

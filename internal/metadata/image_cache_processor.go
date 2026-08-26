@@ -79,6 +79,17 @@ type imageCacheDiscoveryPage struct {
 	Complete   bool
 }
 
+// imageCacheLadderBackfiller is optional so lightweight stores that only serve
+// the normal queue do not have to implement the one-shot ladder sweep. A store
+// that does not implement it simply has no ladder backfill.
+type imageCacheLadderBackfiller interface {
+	EnqueueLadderBackfill(ctx context.Context, limit int) (int, error)
+	// HasLadderBackfillRemaining is the completion signal and is deliberately
+	// independent of the enqueue: it asks whether any artwork still lacks the
+	// new rung, not whether anything is enqueueable right now.
+	HasLadderBackfillRemaining(ctx context.Context) (bool, error)
+}
+
 type targetImageCacheJobStore interface {
 	retryTargetNow(ctx context.Context, targetContentID string) error
 	claimDueForTarget(ctx context.Context, workerID, targetContentID string, limit int) ([]*models.MetadataImageCacheJob, error)
@@ -483,6 +494,105 @@ func (p *ImageCacheProcessor) DrainUntilIdle(ctx context.Context, workerID strin
 // cache processing must use DrainUntilIdle.
 func (p *ImageCacheProcessor) RunUntilIdle(ctx context.Context, workerID string, claimLimit int, concurrency int, maxRuntime time.Duration, reportProgress ImageCacheRunProgressReporter) (ImageCacheRunStats, error) {
 	return p.runUntilIdle(ctx, workerID, claimLimit, concurrency, maxRuntime, true, reportProgress)
+}
+
+// imageCacheLadderBackfillBatchSize bounds one enqueue step of the ladder
+// backfill. It is smaller than the discovery sweep because each of these jobs
+// re-downloads artwork that is already cached: the queue should stay short
+// enough that ordinary scan-driven work is not stuck behind a whole library.
+const imageCacheLadderBackfillBatchSize = 200
+
+// RunLadderBackfill regenerates already-cached artwork against the current
+// variant ladder, in bounded batches, draining each batch before enqueuing the
+// next. It reports whether the pass ran to completion; only a complete pass may
+// be recorded against artworkkey.LadderVersion.
+//
+// "Complete" means no artwork is missing the new rung any more — a question
+// about storage, asked of the artwork revision manifest, not about this run's
+// job bookkeeping. That distinction is what makes the sweep safe on a cluster.
+// Running out of enqueueable work only means nothing is actionable here and now:
+// another node may hold the rest in flight, a node may have died mid-batch, a
+// node still on an older revision may have "succeeded" a job while writing only
+// the old rungs, and a job that exhausted its retries is parked out of view. In
+// every one of those cases the artwork still lacks the rung, so the sweep must
+// not call itself done — and next time round, those rows simply match again.
+//
+// Interrupting it is safe and re-running it is cheap: the cacher skips uploading
+// variants whose objects already match, so a repeated pass costs the source
+// download and nothing else. An incomplete pass simply resumes on the next
+// scheduled run.
+func (p *ImageCacheProcessor) RunLadderBackfill(
+	ctx context.Context,
+	workerID string,
+	claimLimit int,
+	concurrency int,
+	maxRuntime time.Duration,
+	reportProgress ImageCacheRunProgressReporter,
+) (ImageCacheRunStats, bool, error) {
+	var total ImageCacheRunStats
+	if p == nil || p.jobs == nil || p.cacher == nil {
+		return total, false, nil
+	}
+	backfiller, ok := p.jobs.(imageCacheLadderBackfiller)
+	if !ok {
+		return total, false, nil
+	}
+	// Caching being off is not completion: recording the version would skip the
+	// backfill permanently for a deployment that turns caching back on.
+	if !p.enabled.Load() {
+		return total, false, nil
+	}
+
+	limited := maxRuntime > 0
+	deadline := time.Time{}
+	if limited {
+		deadline = time.Now().Add(maxRuntime)
+	}
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, false, err
+		}
+		if !p.enabled.Load() {
+			return total, false, nil
+		}
+		remaining := time.Duration(0)
+		if limited {
+			remaining = time.Until(deadline)
+			if remaining <= 0 {
+				total.RuntimeLimited = true
+				return total, false, nil
+			}
+		}
+
+		enqueued, err := backfiller.EnqueueLadderBackfill(ctx, imageCacheLadderBackfillBatchSize)
+		if err != nil {
+			return total, false, err
+		}
+		total.EnqueuedExisting += enqueued
+		reportImageCacheRunProgress(reportProgress, total)
+		if enqueued == 0 {
+			// Nothing left to queue here. Whether that means "finished" is a
+			// question about the artwork, not about this run.
+			remainingWork, err := backfiller.HasLadderBackfillRemaining(ctx)
+			if err != nil {
+				return total, false, err
+			}
+			return total, !remainingWork, nil
+		}
+
+		stats, err := p.DrainUntilIdle(ctx, workerID, claimLimit, concurrency, remaining, reportProgress)
+		total.add(stats)
+		total.Batches += stats.Batches
+		reportImageCacheRunProgress(reportProgress, total)
+		if err != nil {
+			return total, false, err
+		}
+		if stats.RuntimeLimited {
+			total.RuntimeLimited = true
+			return total, false, nil
+		}
+	}
 }
 
 func (p *ImageCacheProcessor) runUntilIdle(ctx context.Context, workerID string, claimLimit int, concurrency int, maxRuntime time.Duration, discover bool, reportProgress ImageCacheRunProgressReporter) (ImageCacheRunStats, error) {

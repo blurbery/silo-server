@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/tonemap"
 	"github.com/Silo-Server/silo-server/internal/transcodenode"
 	"github.com/Silo-Server/silo-server/internal/userstore"
+	"github.com/Silo-Server/silo-server/internal/watchsync"
 )
 
 type mutablePlaybackSettingsV3 struct {
@@ -135,6 +137,108 @@ func TestAttachStreamCapabilityToSubtitleURLsV3SupportsEveryTopology(t *testing.
 			}
 		})
 	}
+}
+
+type gatedPlaybackSettingsV3 struct {
+	started chan string
+	release chan struct{}
+}
+
+func (s *gatedPlaybackSettingsV3) Get(_ context.Context, key string) (string, error) {
+	s.started <- key
+	<-s.release
+	return "true", nil
+}
+
+type blockingPlaybackSessionSyncerV3 struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingPlaybackSessionSyncerV3) SyncNow(context.Context) error {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	<-s.release
+	return nil
+}
+
+type orderedBlockingPlaybackScrobblerV3 struct {
+	mu           sync.Mutex
+	startEntered chan struct{}
+	releaseStart chan struct{}
+	events       []string
+}
+
+type saturatingPlaybackScrobblerV3 struct {
+	entered chan string
+	release chan struct{}
+	mu      sync.Mutex
+	starts  []string
+}
+
+func (s *saturatingPlaybackScrobblerV3) ScrobbleStart(ctx context.Context, event watchsync.ScrobbleEvent) error {
+	select {
+	case s.entered <- event.PlaybackSessionID:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	s.mu.Lock()
+	s.starts = append(s.starts, event.PlaybackSessionID)
+	s.mu.Unlock()
+	return nil
+}
+
+func (*saturatingPlaybackScrobblerV3) ScrobblePause(context.Context, watchsync.ScrobbleEvent) error {
+	return nil
+}
+
+func (*saturatingPlaybackScrobblerV3) ScrobbleStop(context.Context, watchsync.ScrobbleEvent) error {
+	return nil
+}
+
+func (s *saturatingPlaybackScrobblerV3) recordedStarts() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.starts...)
+}
+
+func (s *orderedBlockingPlaybackScrobblerV3) ScrobbleStart(context.Context, watchsync.ScrobbleEvent) error {
+	select {
+	case s.startEntered <- struct{}{}:
+	default:
+	}
+	<-s.releaseStart
+	s.mu.Lock()
+	s.events = append(s.events, "start")
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *orderedBlockingPlaybackScrobblerV3) ScrobblePause(context.Context, watchsync.ScrobbleEvent) error {
+	s.mu.Lock()
+	s.events = append(s.events, "pause")
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *orderedBlockingPlaybackScrobblerV3) ScrobbleStop(context.Context, watchsync.ScrobbleEvent) error {
+	s.mu.Lock()
+	s.events = append(s.events, "stop")
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *orderedBlockingPlaybackScrobblerV3) recordedEvents() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.events...)
 }
 
 type failingAudioPreferenceStoreV3 struct {
@@ -419,6 +523,42 @@ func TestPlannerSettingsV3ResultPreservesAllow4KStoreFailure(t *testing.T) {
 	}
 }
 
+func TestPlannerSettingsV3ResultReadsPolicyKeysConcurrently(t *testing.T) {
+	store := &gatedPlaybackSettingsV3{
+		started: make(chan string, 3),
+		release: make(chan struct{}),
+	}
+	handler := &PlaybackHandler{SettingsRepo: store}
+	result := make(chan error, 1)
+	go func() {
+		_, err := handler.plannerSettingsV3Result(context.Background())
+		result <- err
+	}()
+
+	started := make(map[string]bool, 3)
+	for len(started) < 3 {
+		select {
+		case key := <-store.started:
+			started[key] = true
+		case <-time.After(time.Second):
+			t.Fatalf("settings reads started concurrently = %v, want all three keys", started)
+		}
+	}
+	close(store.release)
+	if err := <-result; err != nil {
+		t.Fatalf("plannerSettingsV3Result() error = %v", err)
+	}
+	for _, key := range []string{
+		config.Allow4KTranscodeSettingKey,
+		config.PlaybackTranscodeHardwareToneMapSettingKey,
+		config.PlaybackTranscodeSoftwareToneMapSettingKey,
+	} {
+		if !started[key] {
+			t.Fatalf("settings read missing key %q", key)
+		}
+	}
+}
+
 // A build that predates the neutral contract cannot interpret a plan, so the
 // start endpoint refuses it outright instead of allocating a session it would
 // have no way to drive.
@@ -493,6 +633,7 @@ func TestHandleStartPlaybackV3CommitsStartSideEffectsOnce(t *testing.T) {
 	if first.SessionID != second.SessionID {
 		t.Fatalf("idempotent replay session = %q, want %q", second.SessionID, first.SessionID)
 	}
+	handler.waitForPlaybackStartSideEffectsV3(context.Background(), first.SessionID)
 	if len(scrobbler.starts) != 1 {
 		t.Fatalf("start scrobbles = %d, want 1", len(scrobbler.starts))
 	}
@@ -507,6 +648,119 @@ func TestHandleStartPlaybackV3CommitsStartSideEffectsOnce(t *testing.T) {
 	}
 	if analyzer.callCount() != 1 {
 		t.Fatalf("lazy marker calls = %d, want 1", analyzer.callCount())
+	}
+}
+
+func TestHandleStartPlaybackV3DoesNotWaitForSessionSync(t *testing.T) {
+	file := v3HandlerFixtureFile(t)
+	syncer := &blockingPlaybackSessionSyncerV3{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0), testPlaybackFileResolver{file: file})
+	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{}}
+	handler.ItemAccess = allowAllPlaybackItemAccess{}
+	handler.SessionSyncer = syncer
+	body := marshalV3StartRequest(t, v3HandlerStartRequest())
+	responseReady := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		rr := httptest.NewRecorder()
+		handler.HandleStartPlayback(rr, httptest.NewRequest(http.MethodPost, "/api/v1/playback/start", strings.NewReader(body)).WithContext(newAuthorizedPlaybackContext()))
+		responseReady <- rr
+	}()
+
+	select {
+	case <-syncer.started:
+	case <-time.After(time.Second):
+		t.Fatal("session sync did not start")
+	}
+	select {
+	case rr := <-responseReady:
+		if rr.Code != http.StatusCreated {
+			t.Fatalf("start status=%d body=%s", rr.Code, rr.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("playback start waited for the blocked session sync")
+	}
+	close(syncer.release)
+}
+
+func TestPlaybackStartSideEffectsPreserveImmediateStopScrobbleOrder(t *testing.T) {
+	file := v3HandlerFixtureFile(t)
+	scrobbler := &orderedBlockingPlaybackScrobblerV3{
+		startEntered: make(chan struct{}, 1),
+		releaseStart: make(chan struct{}),
+	}
+	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0), testPlaybackFileResolver{file: file})
+	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{}}
+	handler.ItemAccess = allowAllPlaybackItemAccess{}
+	handler.WatchScrobbler = scrobbler
+	body := marshalV3StartRequest(t, v3HandlerStartRequest())
+	rr := httptest.NewRecorder()
+	handler.HandleStartPlayback(rr, httptest.NewRequest(http.MethodPost, "/api/v1/playback/start", strings.NewReader(body)).WithContext(newAuthorizedPlaybackContext()))
+	var response playback.DecisionResponseV3
+	if rr.Code != http.StatusCreated || json.Unmarshal(rr.Body.Bytes(), &response) != nil {
+		t.Fatalf("start status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	select {
+	case <-scrobbler.startEntered:
+	case <-time.After(time.Second):
+		t.Fatal("start scrobble did not begin")
+	}
+	session, err := handler.sessionMgr.GetSession(response.SessionID)
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	stopped := make(chan struct{})
+	go func() {
+		handler.finalizeSessionStop(context.Background(), session, false, "", true)
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("stop completed before the start side effects were released")
+	default:
+	}
+	close(scrobbler.releaseStart)
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("stop did not complete after start side effects")
+	}
+	if got := scrobbler.recordedEvents(); !reflect.DeepEqual(got, []string{"start", "stop"}) {
+		t.Fatalf("scrobble events = %v, want [start stop]", got)
+	}
+}
+
+func TestQueuedPlaybackStartSideEffectsAreDroppedOnStop(t *testing.T) {
+	scrobbler := &saturatingPlaybackScrobblerV3{
+		entered: make(chan string, playbackStartSideEffectsWorkersV3+1),
+		release: make(chan struct{}),
+	}
+	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0))
+	handler.WatchScrobbler = scrobbler
+	file := &models.MediaFile{ID: 1, ContentID: "movie-1", Duration: 600}
+
+	for i := range playbackStartSideEffectsWorkersV3 {
+		sessionID := fmt.Sprintf("running-%d", i)
+		handler.enqueuePlaybackStartSideEffectsV3(context.Background(), &playback.Session{ID: sessionID}, file, 1, "profile-1", 0)
+	}
+	for range playbackStartSideEffectsWorkersV3 {
+		select {
+		case <-scrobbler.entered:
+		case <-time.After(time.Second):
+			t.Fatal("start side-effect workers did not saturate")
+		}
+	}
+
+	queuedSessionID := "queued-stop"
+	handler.enqueuePlaybackStartSideEffectsV3(context.Background(), &playback.Session{ID: queuedSessionID}, file, 1, "profile-1", 0)
+	handler.cancelPlaybackStartSideEffectsV3(context.Background(), queuedSessionID)
+	close(scrobbler.release)
+	handler.waitForPlaybackStartSideEffectsV3(context.Background(), queuedSessionID)
+
+	if starts := scrobbler.recordedStarts(); slices.Contains(starts, queuedSessionID) {
+		t.Fatalf("queued stopped session emitted a start scrobble: %v", starts)
 	}
 }
 
@@ -1655,7 +1909,7 @@ func TestHandleReplanPlaybackV3SeekReanchorPreservesFallbackRecipe(t *testing.T)
 	stubCopySeekAnchorV3(handler)
 	handler.PlaybackConfig = playbackTestConfig(writePlaybackTestFFmpeg(t), t.TempDir())
 	presetLocalRegistryV3(handler, playback.NewTransformationRegistryV3([]playback.TransformationSpecV3{
-		{Name: "audio_to_aac", RecipeVersion: "1", Available: true},
+		{Name: "audio_to_aac", RecipeVersion: "2", Available: true},
 		{Name: "video_to_h264", RecipeVersion: "2", Available: true},
 		{Name: "server_dv7_to_hdr10", RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3, Available: true},
 	}))
@@ -2305,7 +2559,7 @@ func TestFrozenSeekReanchorResultV3PreservesRouteMatrix(t *testing.T) {
 		}},
 		{name: "audio converting remux", mutate: func(plan *playback.PlanV3, result *playback.PlannerResultV3) {
 			plan.Delivery = playback.DeliveryRemuxProgressiveV3
-			plan.Transformations = []playback.TransformationV3{{Name: "audio_to_aac", Executor: "server", RecipeVersion: "1"}}
+			plan.Transformations = []playback.TransformationV3{{Name: "audio_to_aac", Executor: "server", RecipeVersion: "2"}}
 			result.PlayMethod = playback.PlayRemux
 			result.TranscodeAudio = true
 			result.TargetAudioCodec = "aac"
@@ -2754,7 +3008,7 @@ func TestPrepareTransportV3RejectsNodeMissingRequiredTransformation(t *testing.T
 		Delivery: playback.DeliveryTranscodeHLSV3,
 		Transformations: []playback.TransformationV3{
 			{Name: "video_to_h264", Executor: "server", RecipeVersion: "2"},
-			{Name: "audio_to_aac", Executor: "server", RecipeVersion: "1"},
+			{Name: "audio_to_aac", Executor: "server", RecipeVersion: "2"},
 		},
 	}
 	request := httptest.NewRequest(http.MethodPost, "/", nil)
@@ -2775,7 +3029,7 @@ func TestPrepareTransportV3RequiresRemoteManifestReadiness(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/hw-capabilities":
 			writeJSON(w, http.StatusOK, playback.HWAccelInfo{Transformations: []playback.TransformationV3{
 				{Name: "video_to_h264", Executor: "server", RecipeVersion: "2"},
-				{Name: "audio_to_aac", Executor: "server", RecipeVersion: "1"},
+				{Name: "audio_to_aac", Executor: "server", RecipeVersion: "2"},
 			}})
 		case r.Method == http.MethodPost && r.URL.Path == "/transcode/start":
 			if err := json.NewDecoder(r.Body).Decode(&startRequest); err != nil {
@@ -2798,7 +3052,7 @@ func TestPrepareTransportV3RequiresRemoteManifestReadiness(t *testing.T) {
 		Delivery: playback.DeliveryTranscodeHLSV3,
 		Transformations: []playback.TransformationV3{
 			{Name: "video_to_h264", Executor: "server", RecipeVersion: "2"},
-			{Name: "audio_to_aac", Executor: "server", RecipeVersion: "1"},
+			{Name: "audio_to_aac", Executor: "server", RecipeVersion: "2"},
 		},
 	}
 	request := httptest.NewRequest(http.MethodPost, "/", nil)
@@ -2830,7 +3084,7 @@ func TestPrepareTransportV3KeepsHeaderAuthenticatedRemoteHLSBehindAPI(t *testing
 				case r.Method == http.MethodGet && r.URL.Path == "/hw-capabilities":
 					writeJSON(w, http.StatusOK, playback.HWAccelInfo{Transformations: []playback.TransformationV3{
 						{Name: playback.TransformationVideoToH264V3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationVideoToH264RecipeVersionV3},
-						{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"},
+						{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3},
 					}})
 				case r.Method == http.MethodPost && r.URL.Path == "/transcode/start":
 					writeJSON(w, http.StatusAccepted, transcodenode.TranscodeStartResponse{Status: "started"})
@@ -2853,7 +3107,7 @@ func TestPrepareTransportV3KeepsHeaderAuthenticatedRemoteHLSBehindAPI(t *testing
 				Delivery: playback.DeliveryTranscodeHLSV3,
 				Transformations: []playback.TransformationV3{
 					{Name: playback.TransformationVideoToH264V3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationVideoToH264RecipeVersionV3},
-					{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"},
+					{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3},
 				},
 			}
 			request := httptest.NewRequest(http.MethodPost, "/", nil)
@@ -3055,6 +3309,120 @@ func TestSourceExecutionMetadataV3FreezesH264High10SoftwareDecode(t *testing.T) 
 	}
 }
 
+func TestSourceExecutionMetadataV3ScopesDolbyVisionProvenanceToToneMapRecipe(t *testing.T) {
+	file := v3HandlerFixtureFile(t)
+	file.VideoTracks[0].DVConfigPresent = true
+	file.VideoTracks[0].DVBLCompatIDPresent = true
+	file.VideoTracks[0].DVBLPresent = true
+	file.VideoTracks[0].DVRPUPresent = true
+
+	metadata := sourceExecutionMetadataV3(file, playback.PlannerResultV3{})
+	if metadata.ToneMapDVConfigPresent || metadata.ToneMapDVBLCompatIDPresent || metadata.ToneMapDVBLPresent || metadata.ToneMapDVRPUPresent {
+		t.Fatalf("non-tone-map source metadata retained Dolby Vision provenance: %#v", metadata)
+	}
+
+	toneMapResult := playback.PlannerResultV3{
+		ToneMapMode:              tonemap.ModeHardware,
+		ToneMapSourceKind:        tonemap.SourcePQ,
+		ToneMapPreflightRequired: true,
+		ToneMapSourceRevision:    tonemap.RevisionForFile(file),
+	}
+	metadata = sourceExecutionMetadataV3(file, toneMapResult)
+	if !metadata.ToneMapDVConfigPresent || !metadata.ToneMapDVBLCompatIDPresent || !metadata.ToneMapDVBLPresent || !metadata.ToneMapDVRPUPresent {
+		t.Fatalf("tone-map source metadata lost Dolby Vision provenance: %#v", metadata)
+	}
+
+	frozen := metadata
+	result := playback.PlannerResultV3{FrozenSourceMetadata: &frozen}
+	metadata = sourceExecutionMetadataV3(file, result)
+	if metadata.ToneMapSourceKind != "" || metadata.ToneMapPreflightRequired || !metadata.ToneMapSourceRevision.IsZero() ||
+		metadata.ToneMapDVConfigPresent || metadata.ToneMapDVBLCompatIDPresent || metadata.ToneMapDVBLPresent || metadata.ToneMapDVRPUPresent {
+		t.Fatalf("non-tone-map frozen metadata retained a partial recipe: %#v", metadata)
+	}
+}
+
+func TestPrepareLocalTransportV3AllowsDolbyVisionVideoCopyAudioAdaptation(t *testing.T) {
+	manager := playback.NewSessionManager(0, 0)
+	handler := NewPlaybackHandler(manager)
+	ffmpegPath := writePlaybackTestFFmpeg(t)
+	transcodeDir := t.TempDir()
+	handler.PlaybackConfig = func() config.PlaybackConfig {
+		return config.PlaybackConfig{FFmpegPath: ffmpegPath, TranscodeDir: transcodeDir, TranscodeEnabled: true, HWAccel: playback.HWAccelNone}
+	}
+	file := v3HandlerFixtureFile(t)
+	file.CodecVideo = "hevc"
+	file.CodecAudio = "eac3"
+	file.Resolution = "2160p"
+	file.VideoTracks[0].Codec = "hevc"
+	file.VideoTracks[0].DVProfile = 8
+	file.VideoTracks[0].DVBLCompatID = 1
+	file.VideoTracks[0].DVConfigPresent = true
+	file.VideoTracks[0].DVBLCompatIDPresent = true
+	file.VideoTracks[0].DVBLPresent = true
+	file.VideoTracks[0].DVRPUPresent = true
+	result := playback.PlannerResultV3{
+		Plan:       &playback.PlanV3{PlanID: "plan:dv-copy-audio-adaptation", Delivery: playback.DeliveryRemuxHLSV3},
+		PlayMethod: playback.PlayRemux, TargetVideoCodec: "copy", TargetAudioCodec: "aac", TargetResolution: "2160p",
+		SubtitleTrackIndex: -1, SubtitleTransportTrackIndex: -1,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/", nil)
+	transport, transportErr := handler.prepareLocalTransportV3(request,
+		&playback.Session{ID: "session-dv-copy-audio-adaptation", UserID: 7, ProfileID: "profile-1"},
+		file, result, preparedTimelineV3{}, mediaAuthModeV3{})
+	if transportErr != nil {
+		t.Fatalf("prepare Dolby Vision remux transport: %v (cause: %v)", transportErr, transportErr.cause)
+	}
+	transport.rollback()
+}
+
+func TestPrepareRemoteTransportV3OmitsToneMapProvenanceForDolbyVisionRemux(t *testing.T) {
+	var startRequest transcodenode.TranscodeStartRequest
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/transcode/start":
+			if err := json.NewDecoder(r.Body).Decode(&startRequest); err != nil {
+				t.Errorf("decode remote start: %v", err)
+			}
+			if startRequest.ToneMapMode == "" && (startRequest.ToneMapDVConfigPresent || startRequest.ToneMapDVBLCompatIDPresent || startRequest.ToneMapDVBLPresent || startRequest.ToneMapDVRPUPresent) {
+				http.Error(w, "incomplete tone-map recipe", http.StatusUnprocessableEntity)
+				return
+			}
+			writeJSON(w, http.StatusAccepted, transcodenode.TranscodeStartResponse{SessionID: startRequest.SessionID, Status: "started"})
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer remote.Close()
+
+	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0))
+	handler.JWTSecret = "test-secret"
+	file := v3HandlerFixtureFile(t)
+	file.CodecVideo = "hevc"
+	file.VideoTracks[0].Codec = "hevc"
+	file.VideoTracks[0].DVConfigPresent = true
+	file.VideoTracks[0].DVBLCompatIDPresent = true
+	file.VideoTracks[0].DVBLPresent = true
+	file.VideoTracks[0].DVRPUPresent = true
+	result := playback.PlannerResultV3{
+		Plan:       &playback.PlanV3{PlanID: "plan:remote-dv-remux", Delivery: playback.DeliveryRemuxHLSV3},
+		PlayMethod: playback.PlayRemux, TargetVideoCodec: "copy", TargetAudioCodec: "aac", TargetResolution: "2160p",
+		SubtitleTrackIndex: -1, SubtitleTransportTrackIndex: -1,
+	}
+	transport, transportErr := handler.prepareRemoteTransportV3(
+		httptest.NewRequest(http.MethodPost, "/", nil),
+		&playback.Session{ID: "session-remote-dv-remux", UserID: 7, ProfileID: "profile-1"},
+		file, result, nodepool.Plan{TranscodeNode: &nodepool.Node{URL: remote.URL}}, preparedTimelineV3{}, mediaAuthModeV3{})
+	if transportErr != nil {
+		t.Fatalf("prepare remote Dolby Vision remux transport: %v (cause: %v)", transportErr, transportErr.cause)
+	}
+	defer transport.rollback()
+	if startRequest.TargetCodecVideo != "copy" || startRequest.ToneMapMode != "" || startRequest.ToneMapDVConfigPresent || startRequest.ToneMapDVBLCompatIDPresent || startRequest.ToneMapDVBLPresent || startRequest.ToneMapDVRPUPresent {
+		t.Fatalf("remote remux request carried a partial tone-map recipe: %#v", startRequest)
+	}
+}
+
 func TestSourceVideoTranscodeFactsV3UsesFrozenProfileAndBitDepth(t *testing.T) {
 	var recipe playback.ExecutableRecipeV3
 	if err := json.Unmarshal([]byte(`{"version":2,"plan_id":"plan:frozen-source-facts","play_method":"transcode","source_video_profile":"Main 10","source_video_bit_depth":10}`), &recipe); err != nil {
@@ -3233,6 +3601,32 @@ func TestConfigureHLSTimelineV3MatchesTransportSeekSemantics(t *testing.T) {
 		unknownDurationPlan.Timeline.SeekWindowEndSeconds != nil ||
 		unknownDurationPlan.Timeline.SeekRestoration != "source_position" {
 		t.Fatalf("unknown-duration timeline=%#v seek=%v segment=%d", unknownDurationPlan.Timeline, unknownDurationSeek, unknownDurationSegment)
+	}
+}
+
+func TestBitmapFastStartKeepsDefaultTimelineAndSessionSegments(t *testing.T) {
+	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0))
+	plan := &playback.PlanV3{
+		Delivery: playback.DeliveryTranscodeHLSV3,
+		Timeline: playback.TimelineV3{SourceStartSeconds: 658},
+	}
+	result := playback.PlannerResultV3{
+		Plan:                 plan,
+		TargetVideoCodec:     "h264",
+		SubtitleBurnIn:       true,
+		SubtitleCodec:        "hdmv_pgs_subtitle",
+		FrozenSourceMetadata: &playback.SourceExecutionMetadataV3{DurationSeconds: 1_000_000},
+	}
+	timeline, timelineErr := handler.prepareTransportTimelineV3(context.Background(), &playback.Session{ID: "bitmap-fast-start"}, nil, result)
+	if timelineErr != nil {
+		t.Fatalf("prepare timeline: %v", timelineErr)
+	}
+	if timeline.seekSeconds != 658 || timeline.startSegmentNumber != 329 {
+		t.Fatalf("timeline = %#v, want default segment alignment", timeline)
+	}
+	state := handler.v3SessionStreamState(context.Background(), &playback.Session{}, nil, result, preparedTransportV3{}, mediaAuthModeV3{})
+	if state.SegmentDuration != playback.DefaultSegmentDuration {
+		t.Fatalf("session segment duration = %d, want %d", state.SegmentDuration, playback.DefaultSegmentDuration)
 	}
 }
 
@@ -3549,7 +3943,7 @@ func TestHandleReplanPlaybackV3BitmapSubtitleFallsBackFromHDRToSDRVersion(t *tes
 	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{"transcode_enabled": "true", "allow_4k_transcode": "true"}}
 	handler.PlaybackConfig = playbackTestConfig(writePlaybackTestFFmpeg(t), t.TempDir())
 	presetLocalRegistryV3(handler, playback.NewTransformationRegistryV3([]playback.TransformationSpecV3{
-		{Name: playback.TransformationAudioToAACV3, RecipeVersion: "1", Available: true},
+		{Name: playback.TransformationAudioToAACV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3, Available: true},
 		{Name: playback.TransformationVideoToH264V3, RecipeVersion: "2", Available: true},
 	}))
 	handler.ItemAccess = allowAllPlaybackItemAccess{}
@@ -4072,7 +4466,7 @@ func TestHandleReplanPlaybackV3FailureRecoveryPreservesOmittedQuality(t *testing
 	handler.ItemAccess = allowAllPlaybackItemAccess{}
 	handler.PlaybackConfig = playbackTestConfig(writePlaybackTestFFmpeg(t), t.TempDir())
 	handler.v3Registry = playback.NewTransformationRegistryV3([]playback.TransformationSpecV3{
-		{Name: playback.TransformationAudioToAACV3, RecipeVersion: "1", Available: true},
+		{Name: playback.TransformationAudioToAACV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3, Available: true},
 		{Name: playback.TransformationVideoToH264V3, RecipeVersion: "2", Available: true},
 	})
 
@@ -4450,7 +4844,7 @@ func TestPrepareTransportV3RoutesProgressiveRemuxThroughProxyNodeWithSeekAndDV(t
 	file := v3HandlerFixtureFile(t)
 	file.VideoTracks[0].DVProfile = 7
 
-	plan := identityProxyPlanV3(playback.DeliveryRemuxProgressiveV3, playback.TransformationV3{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"})
+	plan := identityProxyPlanV3(playback.DeliveryRemuxProgressiveV3, playback.TransformationV3{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3})
 	plan.Timeline = playback.TimelineV3{SourceStartSeconds: 39.5}
 
 	transport, transportErr := handler.prepareTransportV3(
@@ -4480,6 +4874,54 @@ func TestPrepareTransportV3RoutesProgressiveRemuxThroughProxyNodeWithSeekAndDV(t
 	}
 	if !claims.TranscodeAudio {
 		t.Fatal("token must tell the proxy to convert audio")
+	}
+}
+
+func TestIdentityStreamURLV3VersionsOnlyBoostedRemuxRoutes(t *testing.T) {
+	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0))
+	handler.JWTSecret = "test-secret"
+	file := v3HandlerFixtureFile(t)
+	proxy := &nodepool.Node{URL: "http://proxy-1/"}
+
+	boosted := &playback.Session{
+		ID: "boosted", UserID: 7, ProfileID: "profile-1", MediaFileID: file.ID,
+		PlayMethod: playback.PlayRemux, TranscodeAudio: true,
+		TargetAudioCodec: "aac", SourceAudioChannels: 6, TargetAudioChannels: 2,
+	}
+	boostedURL, servedByProxy := handler.identityStreamURLV3(boosted, file, proxy)
+	boostedPrefix := "http://proxy-1/stream/remux/audio-v2/"
+	if !servedByProxy || !strings.HasPrefix(boostedURL, boostedPrefix) {
+		t.Fatalf("boosted remux URL = %q (proxy %v), want the audio-v2 route", boostedURL, servedByProxy)
+	}
+	claims, err := streamtoken.Verify(strings.TrimPrefix(boostedURL, boostedPrefix), handler.JWTSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.PlayMethod != streamtoken.PlayMethodAudioDownmixRemux || claims.SourceAudioChannels != 6 {
+		t.Fatalf("boosted claims = %#v", claims)
+	}
+
+	ordinaryCases := []struct {
+		name   string
+		mutate func(*playback.Session)
+	}{
+		{name: "unknown source", mutate: func(s *playback.Session) { s.SourceAudioChannels = 0 }},
+		{name: "stereo source", mutate: func(s *playback.Session) { s.SourceAudioChannels = 2 }},
+		{name: "copy-only remux", mutate: func(s *playback.Session) { s.TranscodeAudio = false }},
+		{name: "surround output", mutate: func(s *playback.Session) { s.TargetAudioChannels = 6 }},
+		{name: "non AAC output", mutate: func(s *playback.Session) { s.TargetAudioCodec = "eac3" }},
+	}
+	for _, test := range ordinaryCases {
+		t.Run(test.name, func(t *testing.T) {
+			ordinary := *boosted
+			ordinary.ID = "ordinary"
+			test.mutate(&ordinary)
+			ordinaryURL, ordinaryByProxy := handler.identityStreamURLV3(&ordinary, file, proxy)
+			legacyPrefix := "http://proxy-1/stream/remux/"
+			if !ordinaryByProxy || !strings.HasPrefix(ordinaryURL, legacyPrefix) || strings.HasPrefix(ordinaryURL, boostedPrefix) {
+				t.Fatalf("ordinary remux URL = %q (proxy %v), want the legacy route", ordinaryURL, ordinaryByProxy)
+			}
+		})
 	}
 }
 
@@ -4559,7 +5001,7 @@ func TestPrepareTransportV3RefusesLocalRemuxWhenFallbackDisabled(t *testing.T) {
 		&playback.Session{ID: "session-remux-refused", UserID: 7, ProfileID: "profile-1"},
 		v3HandlerFixtureFile(t),
 		playback.PlannerResultV3{
-			Plan:           identityProxyPlanV3(playback.DeliveryRemuxProgressiveV3, playback.TransformationV3{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"}),
+			Plan:           identityProxyPlanV3(playback.DeliveryRemuxProgressiveV3, playback.TransformationV3{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3}),
 			PlayMethod:     playback.PlayRemux,
 			TranscodeAudio: true,
 		}, mediaAuthModeV3{})
@@ -4618,7 +5060,7 @@ func capableProxyStubV3(t *testing.T) *httptest.Server {
 			return
 		}
 		writeJSON(w, http.StatusOK, playback.HWAccelInfo{Transformations: []playback.TransformationV3{
-			{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"},
+			{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3},
 			{Name: playback.TransformationServerDV7HDR10V3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3},
 		}})
 	}))
@@ -4626,12 +5068,13 @@ func capableProxyStubV3(t *testing.T) *httptest.Server {
 	return server
 }
 
-func TestPrepareTransportV3KeepsRemuxLocalWhenProxyLacksTheRecipe(t *testing.T) {
-	// A proxy on an older ffmpeg build advertises no aac encoder. Sending the
-	// remux there would 500 at stream time, so selection must reject it.
+func TestPrepareTransportV3KeepsBoostedDownmixLocalWhenProxyHasOldRecipe(t *testing.T) {
+	// A rolling-upgrade proxy can support AAC while still advertising the old
+	// recipe that does not apply the stereo-downmix loudness filter. Selection
+	// must reject it so mixed-version deployments never silently lose the boost.
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, playback.HWAccelInfo{Transformations: []playback.TransformationV3{
-			{Name: playback.TransformationVideoToH264V3, Executor: playback.ExecutorServerV3, RecipeVersion: "2"},
+			{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"},
 		}})
 	}))
 	defer proxy.Close()
@@ -4647,9 +5090,11 @@ func TestPrepareTransportV3KeepsRemuxLocalWhenProxyLacksTheRecipe(t *testing.T) 
 		&playback.Session{ID: "session-incapable-proxy", UserID: 7, ProfileID: "profile-1"},
 		v3HandlerFixtureFile(t),
 		playback.PlannerResultV3{
-			Plan:           identityProxyPlanV3(playback.DeliveryRemuxProgressiveV3, playback.TransformationV3{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"}),
-			PlayMethod:     playback.PlayRemux,
-			TranscodeAudio: true,
+			Plan:                identityProxyPlanV3(playback.DeliveryRemuxProgressiveV3, playback.TransformationV3{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3}),
+			PlayMethod:          playback.PlayRemux,
+			TranscodeAudio:      true,
+			SourceAudioChannels: 6,
+			TargetAudioChannels: 2,
 		}, mediaAuthModeV3{})
 	if transportErr != nil {
 		t.Fatalf("prepare identity transport: %v", transportErr)
@@ -4657,7 +5102,7 @@ func TestPrepareTransportV3KeepsRemuxLocalWhenProxyLacksTheRecipe(t *testing.T) 
 	defer transport.rollback()
 
 	if strings.HasPrefix(transport.url, proxy.URL) {
-		t.Fatalf("stream url = %q, want local fallback when the proxy lacks the recipe", transport.url)
+		t.Fatalf("stream url = %q, want local fallback when the proxy only has audio recipe v1", transport.url)
 	}
 	// Narrowing happens before selection, so no reservation is made against an
 	// incapable proxy in the first place and none needs releasing.
@@ -4810,7 +5255,7 @@ func TestPrepareTransportV3PrefersACapableSiblingProxy(t *testing.T) {
 		&playback.Session{ID: "session-sibling", UserID: 7, ProfileID: "profile-1"},
 		v3HandlerFixtureFile(t),
 		playback.PlannerResultV3{
-			Plan:           identityProxyPlanV3(playback.DeliveryRemuxProgressiveV3, playback.TransformationV3{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"}),
+			Plan:           identityProxyPlanV3(playback.DeliveryRemuxProgressiveV3, playback.TransformationV3{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3}),
 			PlayMethod:     playback.PlayRemux,
 			TranscodeAudio: true,
 		}, mediaAuthModeV3{})

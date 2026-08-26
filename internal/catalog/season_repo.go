@@ -18,7 +18,8 @@ var (
 	ErrSeasonNotFound = errors.New("season not found")
 )
 
-func fitsPostgresInteger(value int) bool {
+// FitsPostgresInteger reports whether value fits a PostgreSQL integer (int4) column.
+func FitsPostgresInteger(value int) bool {
 	return value >= -1<<31 && value <= 1<<31-1
 }
 
@@ -162,7 +163,7 @@ func (r *SeasonRepository) BulkUpsert(ctx context.Context, seasons []*models.Sea
 		if season == nil {
 			return fmt.Errorf("bulk upserting seasons: season %d is nil", i)
 		}
-		if !fitsPostgresInteger(season.SeasonNumber) {
+		if !FitsPostgresInteger(season.SeasonNumber) {
 			return fmt.Errorf("bulk upserting seasons: season %d number %d is outside PostgreSQL integer range", i, season.SeasonNumber)
 		}
 	}

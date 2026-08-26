@@ -640,6 +640,11 @@ func TestHandleStartPlaybackV3_PersistsSeriesPlaybackPreferenceForEpisodes(t *te
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
 	}
+	var response playback.DecisionResponseV3
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode start response: %v", err)
+	}
+	handler.waitForPlaybackStartSideEffectsV3(context.Background(), response.SessionID)
 
 	pref, err := store.GetSeriesPlaybackPreference(context.Background(), "profile-1", "series-1")
 	if err != nil {

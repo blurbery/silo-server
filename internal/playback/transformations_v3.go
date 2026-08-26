@@ -53,15 +53,35 @@ func ProbeTransformationRegistryWithToneMapV3Result(ctx context.Context, ffmpegP
 	encoders, encoderErr := exec.CommandContext(encoderCtx, ffmpegPath, "-hide_banner", "-encoders").Output()
 	encoderContextErr := encoderCtx.Err()
 	cancelEncoders()
+	audioRecipeCtx, cancelAudioRecipe := context.WithTimeout(ctx, 3*time.Second)
+	audioRecipeErr := exec.CommandContext(audioRecipeCtx, ffmpegPath,
+		"-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "anullsrc=r=8000:cl=5.1",
+		"-frames:a", "1", "-af", stereoDownmixBoostFilterV3,
+		"-f", "null", "-",
+	).Run()
+	audioRecipeContextErr := audioRecipeCtx.Err()
+	cancelAudioRecipe()
 	_, ffmpegErr := exec.LookPath(ffmpegPath)
 	registry := NewTransformationRegistryV3([]TransformationSpecV3{
 		{Name: TransformationServerDV7HDR10V3, RecipeVersion: TransformationServerDV7HDR10RecipeVersionV3, Available: bytes.Contains(bsfs, []byte("dovi_rpu")) && bytes.Contains(bsfs, []byte("filter_units")), RequiredCapability: "ffmpeg_bsf:dovi_rpu+filter_units", PromisedDynamicRange: DynamicRangeHDR10V3, ValidatedClaims: DV7ToHDR10ClaimsV3(), TerminalReason: TerminalDVConversionUnsupportedV3},
 		{Name: TransformationServerDV8BaseV3, RecipeVersion: TransformationServerDV8BaseRecipeVersionV3, Available: bytes.Contains(bsfs, []byte("dovi_rpu")) && bytes.Contains(bsfs, []byte("filter_units")), RequiredCapability: "ffmpeg_bsf:dovi_rpu+filter_units", ValidatedClaims: DV8ToBaseLayerClaimsV3(""), TerminalReason: TerminalDVConversionUnsupportedV3},
-		{Name: TransformationAudioToAACV3, RecipeVersion: "1", Available: ffmpegErr == nil && bytes.Contains(encoders, []byte(" aac ")), RequiredCapability: "ffmpeg_encoder:aac", ValidatedClaims: []string{ClaimAudioDecodeV3}, TerminalReason: TerminalAudioConversionUnsupportedV3},
+		{Name: TransformationAudioToAACV3, RecipeVersion: TransformationAudioToAACRecipeVersionV3, Available: ffmpegErr == nil && bytes.Contains(encoders, []byte(" aac ")) && audioRecipeErr == nil, RequiredCapability: "ffmpeg_encoder:aac+ffmpeg_filter_smoke:stereo_downmix_limiter_v2", ValidatedClaims: []string{ClaimAudioDecodeV3}, TerminalReason: TerminalAudioConversionUnsupportedV3},
 		{Name: TransformationVideoToH264V3, RecipeVersion: TransformationVideoToH264RecipeVersionV3, Available: ffmpegErr == nil && h264EncoderAvailableV3(encoders), RequiredCapability: "ffmpeg_encoder:h264", PromisedDynamicRange: DynamicRangeSDRV3, ValidatedClaims: []string{ClaimH264DecodeV3}, TerminalReason: TerminalVideoConversionUnsupportedV3},
 		{Name: TransformationHDRToSDRToneMapV3, RecipeVersion: TransformationHDRToSDRToneMapRecipeVersionV3, Available: len(toneMapCapabilities) > 0, RequiredCapability: "ffmpeg_filter:hdr_to_sdr_tonemap", PromisedDynamicRange: DynamicRangeSDRV3, ValidatedClaims: []string{ClaimHDRMetadataRemovedV3, ClaimSDRBT709OutputV3}, TerminalReason: TerminalHDRTranscodeUnsupportedV3},
 	})
-	return registry, errors.Join(bsfErr, encoderErr, bsfContextErr, encoderContextErr)
+	return registry, errors.Join(bsfErr, encoderErr, bsfContextErr, encoderContextErr, audioRecipeProbeInfrastructureError(audioRecipeErr), audioRecipeContextErr)
+}
+
+// An ordinary non-zero FFmpeg exit means the installed filter graph is not a
+// v2 executor; that is a capability result, not a failed inventory. Process
+// startup failures and caller cancellation still make the registry uncacheable.
+func audioRecipeProbeInfrastructureError(err error) error {
+	var exitErr *exec.ExitError
+	if err == nil || errors.As(err, &exitErr) {
+		return nil
+	}
+	return err
 }
 
 // h264EncodersV3 lists every H.264 encoder the transcode pipeline can select

@@ -21,6 +21,12 @@ const (
 	// PlayMethodToneMapTranscode makes frozen tone-map reconstruction fail
 	// closed on older readers that do not understand its recipe fields.
 	PlayMethodToneMapTranscode = "transcode_tonemap_v1"
+	// PlayMethodAudioDownmixTranscode and PlayMethodAudioDownmixRemux make a
+	// frozen source-channel recipe fail closed on older readers. Without that
+	// fact, an old binary can reconstruct different audio bytes by omitting the
+	// multichannel-to-stereo boost.
+	PlayMethodAudioDownmixTranscode = "transcode_audio_downmix_v1"
+	PlayMethodAudioDownmixRemux     = "remux_audio_downmix_v1"
 )
 
 // Claims holds everything a stateless proxy or transcode node needs
@@ -86,6 +92,7 @@ type Claims struct {
 	SourceVideoCodec           string  `json:"svc,omitempty"`
 	SourceVideoProfile         string  `json:"svp,omitempty"`
 	SourceVideoBitDepth        int     `json:"svb,omitempty"`
+	SourceAudioChannels        int     `json:"sach,omitempty"`
 	SoftwareVideoDecode        bool    `json:"svd,omitempty"`
 	ToneMapPolicy              string  `json:"tmp,omitempty"`
 	ToneMapMode                string  `json:"tmm,omitempty"`

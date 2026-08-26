@@ -147,7 +147,7 @@ func escalationFixtureV3(t *testing.T, hlsCapable bool) (*PlaybackHandler, playb
 		"playback.local_transcode_fallback": "false",
 	}}
 	registry := playback.NewTransformationRegistryV3([]playback.TransformationSpecV3{
-		{Name: playback.TransformationAudioToAACV3, RecipeVersion: "1", Available: true},
+		{Name: playback.TransformationAudioToAACV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3, Available: true},
 		{Name: playback.TransformationVideoToH264V3, RecipeVersion: playback.TransformationVideoToH264RecipeVersionV3, Available: true},
 	})
 	presetLocalRegistryV3(handler, registry)
@@ -226,7 +226,7 @@ func TestPlanNodeSessionV3SkipsCapabilityFanOutWithoutConsumer(t *testing.T) {
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fetches++
 		writeJSON(w, http.StatusOK, playback.HWAccelInfo{Transformations: []playback.TransformationV3{
-			{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"},
+			{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3},
 		}})
 	}))
 	defer node.Close()
@@ -242,7 +242,7 @@ func TestPlanNodeSessionV3SkipsCapabilityFanOutWithoutConsumer(t *testing.T) {
 	plan := &playback.PlanV3{
 		PlanID:          "plan:no-consumer",
 		Delivery:        playback.DeliveryRemuxHLSV3,
-		Transformations: []playback.TransformationV3{{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"}},
+		Transformations: []playback.TransformationV3{{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3}},
 	}
 	for _, localEgress := range []bool{false, true} {
 		selected := handler.planNodeSessionV3(context.Background(), &playback.Session{ID: "session-no-consumer"}, playback.PlannerResultV3{Plan: plan, PlayMethod: playback.PlayRemux}, localEgress)

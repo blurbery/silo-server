@@ -19,11 +19,17 @@ const (
 	ArtifactToneMapQueued  = "tone_map_queued"
 	ArtifactToneMapRunning = "tone_map_running"
 	ArtifactToneMapReady   = "tone_map_ready"
+	ArtifactAudioV2Queued  = "audio_v2_queued"
+	ArtifactAudioV2Running = "audio_v2_running"
+	ArtifactAudioV2Ready   = "audio_v2_ready"
 	ArtifactReady          = "ready"
 	ArtifactFailed         = "failed"
 )
 
-func queuedArtifactStatus(mode tonemap.Mode) string {
+func queuedArtifactStatus(mode tonemap.Mode, audioRecipeVersion string) string {
+	if audioRecipeVersion != "" {
+		return ArtifactAudioV2Queued
+	}
 	if mode != "" {
 		return ArtifactToneMapQueued
 	}
@@ -31,7 +37,7 @@ func queuedArtifactStatus(mode tonemap.Mode) string {
 }
 
 func artifactReady(artifact *Artifact) bool {
-	return artifact != nil && (artifact.Status == ArtifactReady || artifact.Status == ArtifactToneMapReady)
+	return artifact != nil && (artifact.Status == ArtifactReady || artifact.Status == ArtifactToneMapReady || artifact.Status == ArtifactAudioV2Ready)
 }
 
 // ErrNoArtifactJob is returned by the queue when no claimable job exists.
@@ -47,6 +53,7 @@ type Artifact struct {
 	Container                  string
 	CodecVideo                 string
 	CodecAudio                 string
+	AudioRecipeVersion         string
 	Resolution                 string
 	AudioTrackIndex            int
 	TargetBitrateKbps          int
@@ -119,6 +126,16 @@ func paramsHashWithToneMapRevision(params paramsHashParams) string {
 	}
 	sum := sha256.Sum256([]byte(input))
 	return hex.EncodeToString(sum[:])
+}
+
+// artifactUsesExecutionFingerprint distinguishes source-sensitive recipes from
+// legacy parameter-only artifacts. AudioRecipeVersion is also the durable
+// queue discriminator that keeps a pre-v2 worker from claiming these bytes.
+func artifactUsesExecutionFingerprint(a *Artifact) bool {
+	if a == nil {
+		return false
+	}
+	return a.ToneMapMode != "" || a.AudioRecipeVersion != ""
 }
 
 // effectiveArtifactDir resolves where prepared artifacts are written: the

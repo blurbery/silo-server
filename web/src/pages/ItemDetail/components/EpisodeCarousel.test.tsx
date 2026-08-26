@@ -64,6 +64,41 @@ describe("EpisodeCarousel", () => {
     expect(prefetchEpisodeDetail).toHaveBeenCalledWith("ep-1");
   });
 
+  it("passes partial-progress restart eligibility to episode menus", () => {
+    renderToStaticMarkup(
+      <MemoryRouter>
+        <EpisodeCarousel
+          currentEpisodeNumber={1}
+          episodes={[
+            {
+              content_id: "ep-1",
+              season_number: 1,
+              episode_number: 1,
+              title: "Pilot",
+              overview: "",
+              air_date: null,
+              runtime: 42,
+              still_url: "",
+              still_thumbhash: "",
+              files: [],
+              user_data: {
+                played: false,
+                position_seconds: 120,
+                duration_seconds: 1800,
+              },
+            },
+          ]}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(capturedMenuProps[0]).toMatchObject({
+      contentId: "ep-1",
+      mediaType: "episode",
+      hasPartialProgress: true,
+    });
+  });
+
   it("places the watched circle-check beside the episode label instead of over the artwork", () => {
     render(
       <MemoryRouter>

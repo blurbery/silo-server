@@ -5,14 +5,10 @@ import {
   EyeOff,
   FileText,
   Heart,
-  History,
   LoaderCircle,
   MoreVertical,
-  Pencil,
   Plus,
-  RefreshCw,
   RotateCcw,
-  Search,
   X,
 } from "lucide-react";
 import { useLocation } from "react-router";
@@ -20,6 +16,7 @@ import { useViewTransitionNavigate } from "@/hooks/useViewTransition";
 import type { ItemDetail, MediaItemUserState } from "@/api/types";
 import { useOptionalAuth } from "@/hooks/useAuth";
 import { useCurrentProfile } from "@/hooks/useCurrentProfile";
+import { useIsActingAdmin } from "@/hooks/useIsActingAdmin";
 import { useCatalogItemDetail } from "@/hooks/queries/catalogRead";
 import { useRefreshItemMetadata, useWatchedStateMutation } from "@/hooks/queries/items";
 import { type DismissHomeItemVariables, useDismissHomeItem } from "@/hooks/queries/homeDismissals";
@@ -48,16 +45,14 @@ import {
 import { cn } from "@/lib/utils";
 import { useWatchPlaybackController } from "@/playback/watchPlaybackContext";
 import { buildMediaPlayHref } from "@/lib/mediaNavigation";
-import {
-  canCurateMetadata as canCurateMetadataForUser,
-  isActingAdmin as isActingAdminForUser,
-} from "@/lib/permissions";
+import { canCurateMetadata as canCurateMetadataForUser } from "@/lib/permissions";
 import {
   mediaItemMenuIconClassName,
   mediaItemMenuTriggerClassName,
   type PosterActionDensity,
 } from "@/components/mediaItemMenuTrigger";
 import { useUICustomization } from "@/hooks/useUICustomization";
+import { MediaActionIcon } from "@/components/mediaActionIcons";
 
 type MediaItemType = ItemDetail["type"];
 
@@ -252,15 +247,13 @@ function MediaItemMenuActionIcon({
     case "viewDetails":
       return <FileText aria-hidden="true" className="size-4" />;
     case "viewPlayHistory":
-      return <History aria-hidden="true" className="size-4" />;
+      return <MediaActionIcon action="viewPlayHistory" />;
     case "refreshMetadata":
-      return (
-        <RefreshCw aria-hidden="true" className={cn("size-4", isRefreshing && "animate-spin")} />
-      );
+      return <MediaActionIcon action="refreshMetadata" isPending={isRefreshing} />;
     case "editMetadata":
-      return <Pencil aria-hidden="true" className="size-4" />;
+      return <MediaActionIcon action="editMetadata" />;
     case "matchItem":
-      return <Search aria-hidden="true" className="size-4" />;
+      return <MediaActionIcon action="matchItem" />;
   }
 }
 
@@ -576,10 +569,11 @@ export default function MediaItemMenu({
   const user = useOptionalAuth()?.user;
   const { profile: currentProfile, hasSelectedProfile } = useCurrentProfile();
   const profileIsResolved = !hasSelectedProfile || Boolean(currentProfile);
-  const isAdmin = profileIsResolved && isActingAdminForUser(user, currentProfile);
+  const isAdmin = useIsActingAdmin();
   const canCurateMetadata = profileIsResolved && canCurateMetadataForUser(user, currentProfile);
   const { cardPresentation } = useUICustomization();
   const [currentUserState, setCurrentUserState] = useState(userState);
+  const lastSyncedUserStateRef = useRef(userState);
   const [refreshDialogOpen, setRefreshDialogOpen] = useState(false);
   const [filesDialogOpen, setFilesDialogOpen] = useState(false);
   const [metadataAction, setMetadataAction] = useState<MetadataAction | null>(null);
@@ -588,8 +582,17 @@ export default function MediaItemMenu({
   const pointerClosedMenuRef = useRef(false);
 
   useEffect(() => {
+    const lastSynced = lastSyncedUserStateRef.current;
+    if (
+      lastSynced?.played === userState?.played &&
+      lastSynced?.is_favorite === userState?.is_favorite &&
+      lastSynced?.in_watchlist === userState?.in_watchlist
+    ) {
+      return;
+    }
+    lastSyncedUserStateRef.current = userState;
     setCurrentUserState(userState);
-  }, [userState?.played, userState?.is_favorite, userState?.in_watchlist]);
+  }, [userState]);
 
   const watchedMutation = useWatchedStateMutation({
     content_id: contentId,
@@ -651,31 +654,34 @@ export default function MediaItemMenu({
 
   const triggerClassName = mediaItemMenuTriggerClassName(variant, posterActionDensity);
 
-  async function handleWatchedToggle() {
-    if (!currentUserState || watchedMutation.isPending) return;
-    const wasPlayed = currentUserState.played;
-    const nextPlayed = !wasPlayed;
-    setCurrentUserState((previous) => (previous ? { ...previous, played: nextPlayed } : previous));
+  async function runOptimisticToggle(
+    field: "played" | "is_favorite",
+    pending: boolean,
+    mutate: (nextValue: boolean, previousValue: boolean) => Promise<unknown>,
+  ) {
+    if (!currentUserState || pending) return;
+    const previousValue = currentUserState[field];
+    const nextValue = !previousValue;
+    setCurrentUserState((previous) => (previous ? { ...previous, [field]: nextValue } : previous));
     try {
-      await watchedMutation.mutateAsync(nextPlayed);
+      await mutate(nextValue, previousValue);
     } catch {
-      setCurrentUserState((previous) => (previous ? { ...previous, played: wasPlayed } : previous));
+      setCurrentUserState((previous) =>
+        previous ? { ...previous, [field]: previousValue } : previous,
+      );
     }
   }
 
-  async function handleFavoriteToggle() {
-    if (!currentUserState || favoriteMutation.isPending) return;
-    const wasFavorite = currentUserState.is_favorite;
-    setCurrentUserState((previous) =>
-      previous ? { ...previous, is_favorite: !wasFavorite } : previous,
+  async function handleWatchedToggle() {
+    await runOptimisticToggle("played", watchedMutation.isPending, (nextValue) =>
+      watchedMutation.mutateAsync(nextValue),
     );
-    try {
-      await favoriteMutation.mutateAsync(wasFavorite);
-    } catch {
-      setCurrentUserState((previous) =>
-        previous ? { ...previous, is_favorite: wasFavorite } : previous,
-      );
-    }
+  }
+
+  async function handleFavoriteToggle() {
+    await runOptimisticToggle("is_favorite", favoriteMutation.isPending, (_, previousValue) =>
+      favoriteMutation.mutateAsync(previousValue),
+    );
   }
 
   async function handleAction(actionKey: MediaItemMenuActionKey) {

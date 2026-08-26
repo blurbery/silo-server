@@ -336,7 +336,7 @@ func goldenCapabilityResponse() playback.CapabilityResponseV3 {
 		// A real server advertises only what its installed FFmpeg probed; the
 		// fixture pins the full set so a client sees every shape it must parse.
 		Transformations: []playback.TransformationV3{
-			{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: "1", ValidatedClaims: []string{playback.ClaimAudioDecodeV3}},
+			{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3, ValidatedClaims: []string{playback.ClaimAudioDecodeV3}},
 			{Name: playback.TransformationHDRToSDRToneMapV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationHDRToSDRToneMapRecipeVersionV3, ValidatedClaims: []string{playback.ClaimHDRMetadataRemovedV3, playback.ClaimSDRBT709OutputV3}},
 			{Name: playback.TransformationServerDV7HDR10V3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3, ValidatedClaims: playback.DV7ToHDR10ClaimsV3()},
 			{Name: playback.TransformationServerDV8BaseV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationServerDV8BaseRecipeVersionV3, ValidatedClaims: playback.DV8ToBaseLayerClaimsV3("")},
@@ -441,7 +441,7 @@ func goldenAttemptKeys() []opaqueAttemptKeyFixture {
 			// retired name proves both properties stay true.
 			Transformations: []playback.TransformationV3{
 				{Name: "hdr_to_sdr_tonemap", Executor: playback.ExecutorServerV3, RecipeVersion: "1", ValidatedClaims: []string{}},
-				{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: "1", ValidatedClaims: []string{}},
+				{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3, ValidatedClaims: []string{}},
 			},
 			OutputContextID: "7",
 			LocalMutations:  []string{"transport_reopen", "pcm:truehd:8"},
@@ -567,7 +567,7 @@ func goldenConformanceMatrix() playback.ConformanceMatrixV3 {
 	toneMapSettings.SoftwareToneMapEnabled = true
 	toneMapRegistry := playback.NewTransformationRegistryV3([]playback.TransformationSpecV3{
 		{Name: playback.TransformationVideoToH264V3, RecipeVersion: playback.TransformationVideoToH264RecipeVersionV3, Available: true},
-		{Name: playback.TransformationAudioToAACV3, RecipeVersion: "1", Available: true},
+		{Name: playback.TransformationAudioToAACV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3, Available: true},
 		{Name: playback.TransformationHDRToSDRToneMapV3, RecipeVersion: playback.TransformationHDRToSDRToneMapRecipeVersionV3, Available: true},
 	})
 	softwarePQ := tonemap.Capabilities{{Mode: tonemap.ModeSoftware, Backend: "software", Filter: tonemap.SoftwareFilterBT2390, SourceKinds: []tonemap.SourceKind{tonemap.SourcePQ}}}
@@ -917,7 +917,7 @@ func conformanceFallbackFile() *models.MediaFile {
 
 func conformanceRegistry() *playback.TransformationRegistryV3 {
 	return playback.NewTransformationRegistryV3([]playback.TransformationSpecV3{
-		{Name: playback.TransformationAudioToAACV3, RecipeVersion: "1", Available: true},
+		{Name: playback.TransformationAudioToAACV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3, Available: true},
 		{Name: playback.TransformationVideoToH264V3, RecipeVersion: "1", Available: true},
 		{Name: playback.TransformationServerDV7HDR10V3, RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3, Available: true},
 	})

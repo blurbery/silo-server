@@ -64,6 +64,7 @@ type RecipeCard struct {
 	SourceVideoCodec           string                 `json:"source_video_codec,omitempty"`
 	SourceVideoProfile         string                 `json:"source_video_profile,omitempty"`
 	SourceVideoBitDepth        int                    `json:"source_video_bit_depth,omitempty"`
+	SourceAudioChannels        int                    `json:"source_audio_channels,omitempty"`
 	SoftwareVideoDecode        bool                   `json:"software_video_decode,omitempty"`
 	ToneMapPolicy              tonemap.Policy         `json:"tone_map_policy,omitempty"`
 	ToneMapMode                tonemap.Mode           `json:"tone_map_mode,omitempty"`
@@ -120,6 +121,7 @@ func NewRecipeCard(userID int, profileID string, mediaFileID int, transcodeNodeU
 		SourceVideoCodec:           opts.SourceVideoCodec,
 		SourceVideoProfile:         opts.SourceVideoProfile,
 		SourceVideoBitDepth:        opts.SourceVideoBitDepth,
+		SourceAudioChannels:        opts.SourceAudioChannels,
 		SoftwareVideoDecode:        opts.SoftwareVideoDecode,
 		ToneMapPolicy:              opts.ToneMapPolicy,
 		ToneMapMode:                opts.ToneMapMode,
@@ -219,6 +221,7 @@ func (c RecipeCard) TranscodeOpts(outputDir, ffmpegPath string, logSink FFmpegLo
 		SourceVideoCodec:           c.SourceVideoCodec,
 		SourceVideoProfile:         c.SourceVideoProfile,
 		SourceVideoBitDepth:        c.SourceVideoBitDepth,
+		SourceAudioChannels:        c.SourceAudioChannels,
 		SoftwareVideoDecode:        c.SoftwareVideoDecode,
 		ToneMapPolicy:              c.ToneMapPolicy,
 		ToneMapMode:                c.ToneMapMode,
@@ -276,7 +279,20 @@ const MaxTokenTTL = 24 * time.Hour
 // change applies to reconstructed sessions too.
 func (c RecipeCard) ToClaims() streamtoken.Claims {
 	playMethod := string(c.PlayMethod)
-	if c.PlayMethod == PlayTranscode && c.ToneMapMode != "" {
+	sourceAudioChannels := 0
+	targetAudioChannels := c.TargetAudioChannels
+	if c.TranscodeAudio && IsAudioToAACStereoDownmixV3(c.SourceAudioChannels, c.TargetCodecAudio, targetAudioChannels) {
+		sourceAudioChannels = c.SourceAudioChannels
+		// Tokens cross executor generations, so spell out the effective stereo
+		// default before selecting the v2-only method discriminator.
+		targetAudioChannels = 2
+		switch c.PlayMethod {
+		case PlayTranscode:
+			playMethod = streamtoken.PlayMethodAudioDownmixTranscode
+		case PlayRemux:
+			playMethod = streamtoken.PlayMethodAudioDownmixRemux
+		}
+	} else if c.PlayMethod == PlayTranscode && c.ToneMapMode != "" {
 		// Older binaries do not understand the frozen tone-map claims. Give
 		// them a method they reject instead of silently reconstructing SDR
 		// output without the required recipe.
@@ -309,6 +325,7 @@ func (c RecipeCard) ToClaims() streamtoken.Claims {
 		SourceVideoCodec:           c.SourceVideoCodec,
 		SourceVideoProfile:         c.SourceVideoProfile,
 		SourceVideoBitDepth:        c.SourceVideoBitDepth,
+		SourceAudioChannels:        sourceAudioChannels,
 		SoftwareVideoDecode:        c.SoftwareVideoDecode,
 		ToneMapPolicy:              string(c.ToneMapPolicy),
 		ToneMapMode:                string(c.ToneMapMode),
@@ -334,7 +351,7 @@ func (c RecipeCard) ToClaims() streamtoken.Claims {
 		TotalDuration:              c.TotalDuration,
 		FastStart:                  c.FastStart,
 		TargetCodecAudio:           c.TargetCodecAudio,
-		TargetAudioChannels:        c.TargetAudioChannels,
+		TargetAudioChannels:        targetAudioChannels,
 		TargetAudioBitrateKbps:     c.TargetAudioBitrateKbps,
 	}
 }
@@ -349,8 +366,11 @@ func RecipeCardFromClaims(c *streamtoken.Claims) RecipeCard {
 		return RecipeCard{}
 	}
 	method := PlayMethod(c.PlayMethod)
-	if c.PlayMethod == streamtoken.PlayMethodToneMapTranscode {
+	switch c.PlayMethod {
+	case streamtoken.PlayMethodToneMapTranscode, streamtoken.PlayMethodAudioDownmixTranscode:
 		method = PlayTranscode
+	case streamtoken.PlayMethodAudioDownmixRemux:
+		method = PlayRemux
 	}
 	if method == "" {
 		method = PlayTranscode
@@ -379,6 +399,7 @@ func RecipeCardFromClaims(c *streamtoken.Claims) RecipeCard {
 		SourceVideoCodec:           c.SourceVideoCodec,
 		SourceVideoProfile:         c.SourceVideoProfile,
 		SourceVideoBitDepth:        c.SourceVideoBitDepth,
+		SourceAudioChannels:        c.SourceAudioChannels,
 		SoftwareVideoDecode:        c.SoftwareVideoDecode,
 		ToneMapPolicy:              tonemap.Policy(c.ToneMapPolicy),
 		ToneMapMode:                tonemap.Mode(c.ToneMapMode),

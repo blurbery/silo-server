@@ -116,7 +116,11 @@ export async function invalidateMediaSurfaceQueries(
     queryClient.invalidateQueries({ queryKey: historyKeys.all }),
     queryClient.invalidateQueries({ queryKey: favoriteKeys.all }),
     queryClient.invalidateQueries({ queryKey: watchlistKeys.all }),
-    queryClient.invalidateQueries({ queryKey: libraryCollectionKeys.all }),
+    queryClient.invalidateQueries({
+      queryKey: libraryCollectionKeys.all,
+      predicate: (query) =>
+        options.libraryId === undefined || query.queryKey[2] === options.libraryId,
+    }),
     queryClient.invalidateQueries({ queryKey: recKeys.all }),
     queryClient.invalidateQueries({ queryKey: personKeys.all }),
     queryClient.invalidateQueries({

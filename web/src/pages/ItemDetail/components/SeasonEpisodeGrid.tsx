@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import { Play } from "lucide-react";
 import type { EpisodeListItem } from "@/api/types";
 import { WatchedCheckIndicator } from "@/components/CardWatchedBadge";
+import { toEpisodeUserState } from "@/components/episodeUserState";
 import MediaItemMenu from "@/components/MediaItemMenu";
 import CardOverlays from "@/components/overlays/CardOverlays";
 import { useOverlayPrefs } from "@/hooks/useOverlayPrefs";
@@ -81,9 +82,9 @@ export default function SeasonEpisodeGrid({
                   {!episode.user_data?.played &&
                     (episode.user_data?.position_seconds ?? 0) > 0 &&
                     (episode.user_data?.duration_seconds ?? 0) > 0 && (
-                      <div className="absolute inset-x-0 bottom-0 h-[3px] bg-black/40">
+                      <div className="absolute inset-x-2 bottom-1.5 h-[3px] overflow-hidden rounded-full bg-black/40">
                         <div
-                          className="progress-fill h-full rounded-r-sm"
+                          className="progress-fill h-full rounded-full"
                           style={{
                             width: `${Math.max(
                               0,
@@ -104,11 +105,7 @@ export default function SeasonEpisodeGrid({
               <MediaItemMenu
                 contentId={episode.content_id}
                 mediaType="episode"
-                userState={{
-                  played: episode.user_data?.played ?? false,
-                  is_favorite: false,
-                  in_watchlist: false,
-                }}
+                userState={toEpisodeUserState(episode.user_data)}
                 variant="wide"
                 showCollectionActions={false}
                 showWatchedShortcut

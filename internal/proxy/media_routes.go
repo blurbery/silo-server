@@ -13,6 +13,8 @@ var proxyMediaRoutes = []streamtelemetry.MediaRoute{
 	proxyRoute(http.MethodHead, "/stream/direct/{token}", streamtelemetry.ClassPlayback, true),
 	proxyRoute(http.MethodGet, "/stream/remux/{token}", streamtelemetry.ClassPlayback, true),
 	proxyRoute(http.MethodHead, "/stream/remux/{token}", streamtelemetry.ClassPlayback, true),
+	proxyRoute(http.MethodGet, "/stream/remux/audio-v2/{token}", streamtelemetry.ClassPlayback, true),
+	proxyRoute(http.MethodHead, "/stream/remux/audio-v2/{token}", streamtelemetry.ClassPlayback, true),
 	proxyRoute(http.MethodGet, "/stream/transcode/{token}/master.m3u8", streamtelemetry.ClassManifest, true),
 	proxyRoute(http.MethodHead, "/stream/transcode/{token}/master.m3u8", streamtelemetry.ClassManifest, true),
 	proxyRoute(http.MethodGet, "/stream/transcode/{token}/segment/{name}", streamtelemetry.ClassPlayback, true),

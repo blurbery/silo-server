@@ -1136,7 +1136,7 @@ func (s *Service) resolveDownloadBytesTarget(ctx context.Context, dl *Download, 
 			return nil, catalog.ErrItemNotFound
 		}
 		expectedFingerprint := ""
-		if artifact.ToneMapMode != "" {
+		if artifactUsesExecutionFingerprint(artifact) {
 			expectedFingerprint = artifact.ParamsHash
 		}
 		return &FileTarget{

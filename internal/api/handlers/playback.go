@@ -246,21 +246,27 @@ type PlaybackHandler struct {
 	tm *playback.TranscodeManager
 	// PlanStoreV3 owns the short-lived protocol-v3 control-plane state. Router
 	// wiring replaces the in-memory default with PostgreSQL in integrated mode.
-	PlanStoreV3          playback.PlanStoreV3
-	v3RegistryMu         sync.Mutex
-	v3Registry           *playback.TransformationRegistryV3
-	v3RegistryProbe      func(context.Context, string, tonemap.Capabilities) (*playback.TransformationRegistryV3, error)
-	v3ToneMapProbe       func(context.Context, string, string, string) (tonemap.Capabilities, error)
-	v3NodeCapabilitiesMu sync.Mutex
-	v3NodeCapabilities   map[string]v3NodeCapabilityCache
-	v3EventOnce          sync.Once
-	v3EventQueue         chan playback.RouteEventRecordV3
-	v3ReplanMu           sync.Mutex
-	v3ReplanLocks        map[string]*v3ReplanLock
-	v3ReplanSlotsOnce    sync.Once
-	v3ReplanSlots        chan struct{}
-	v3EventRateMu        sync.Mutex
-	v3EventRates         map[string]v3EventRate
+	PlanStoreV3             playback.PlanStoreV3
+	v3RegistryMu            sync.Mutex
+	v3Registry              *playback.TransformationRegistryV3
+	v3RegistryProbe         func(context.Context, string, tonemap.Capabilities) (*playback.TransformationRegistryV3, error)
+	v3ToneMapProbe          func(context.Context, string, string, string) (tonemap.Capabilities, error)
+	v3NodeCapabilitiesMu    sync.Mutex
+	v3NodeCapabilities      map[string]v3NodeCapabilityCache
+	v3NodeCapabilityRefresh sync.Map
+	v3EventOnce             sync.Once
+	v3EventQueue            chan playback.RouteEventRecordV3
+	v3StartEffectsOnce      sync.Once
+	v3StartEffectsQueue     chan playbackStartSideEffectsV3
+	v3StartEffectsMu        sync.Mutex
+	v3StartEffectsPending   map[string]*playbackStartSideEffectsStateV3
+	v3AudioPreferenceMu     sync.Mutex
+	v3ReplanMu              sync.Mutex
+	v3ReplanLocks           map[string]*v3ReplanLock
+	v3ReplanSlotsOnce       sync.Once
+	v3ReplanSlots           chan struct{}
+	v3EventRateMu           sync.Mutex
+	v3EventRates            map[string]v3EventRate
 }
 
 type PlaybackWatchScrobbler interface {
@@ -708,6 +714,9 @@ func identityRecipeCard(s *playback.Session) playback.RecipeCard {
 		card.TargetCodecAudio = s.TargetAudioCodec
 		card.TargetAudioChannels = s.TargetAudioChannels
 		card.TargetAudioBitrateKbps = s.TargetAudioBitrateKbps
+		if s.TranscodeAudio && playback.IsAudioToAACStereoDownmixV3(s.SourceAudioChannels, s.TargetAudioCodec, s.TargetAudioChannels) {
+			card.SourceAudioChannels = s.SourceAudioChannels
+		}
 	default:
 		card = playback.NewDirectRecipeCard(s.ID, s.UserID, s.ProfileID, s.MediaFileID)
 	}
@@ -1077,6 +1086,7 @@ func (h *PlaybackHandler) finalizeSessionStop(ctx context.Context, session *play
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	h.cancelPlaybackStartSideEffectsV3(ctx, session.ID)
 
 	stopResult := h.persistStopAndHistory(ctx, session)
 	if h.WatchScrobbler != nil {
@@ -1126,6 +1136,7 @@ func (h *PlaybackHandler) finalizeSessionAbort(ctx context.Context, session *pla
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	h.cancelPlaybackStartSideEffectsV3(ctx, session.ID)
 
 	if h.WatchScrobbler != nil && h.fileResolver != nil {
 		if file, err := h.loadFileByPreferredID(ctx, requestedMediaFileID(session), session.MediaFileID); err == nil && file != nil {

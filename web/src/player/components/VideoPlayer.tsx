@@ -35,7 +35,8 @@ import type {
 import { resolvePendingSeekTime } from "../utils/pendingSeek";
 import { resolveVersionAudioLanguage } from "../utils/effectiveAudioLanguage";
 import { HlsStartupGuard } from "../utils/hlsStartupGuard";
-import { resolveHLSEngineV3 } from "../utils/hlsEngine";
+import { isSafariBrowserV3, resolveHLSEngineV3 } from "../utils/hlsEngine";
+import { isFirefoxUserAgent } from "../utils/browser";
 import { normalizeSubtitleMode } from "../utils/subtitleMode";
 import type {
   PlaybackExitState,
@@ -514,9 +515,7 @@ export function VideoPlayer({
   }, [isPlayerReady, planRevision]);
 
   const isFirefoxBrowser =
-    typeof navigator !== "undefined" &&
-    /firefox/i.test(navigator.userAgent) &&
-    !/seamonkey/i.test(navigator.userAgent);
+    typeof navigator !== "undefined" && isFirefoxUserAgent(navigator.userAgent);
   const watchTogether =
     watchTogetherConnection ??
     ({
@@ -1524,6 +1523,13 @@ export function VideoPlayer({
       if (isHlsStream) {
         try {
           const nativeSupported = video.canPlayType("application/vnd.apple.mpegurl") !== "";
+          // Safari's HLS capability evidence comes from its media element, so
+          // keep every Safari plan on that same engine. Chromium can also
+          // advertise native HLS, but treats an in-progress copy remux as live
+          // and jumps toward its rapidly advancing production edge; its
+          // conservative HLS claims and runtime both use hls.js instead.
+          const preferNativeHLS =
+            typeof navigator !== "undefined" && isSafariBrowserV3(navigator.userAgent);
           const resolution = await resolveHLSEngineV3(
             plannedDynamicRange,
             nativeSupported,
@@ -1531,6 +1537,7 @@ export function VideoPlayer({
             (error) => {
               console.error("[hls.js] Failed to initialize, falling back to native HLS:", error);
             },
+            preferNativeHLS,
           );
           if (destroyed || hlsStartupGuardRef.current?.hasFailed()) return;
 

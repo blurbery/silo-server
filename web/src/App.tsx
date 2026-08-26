@@ -51,6 +51,7 @@ import {
 } from "@/pages/catalogSearchParams";
 import { buildLegacyWebhookSyncRedirectTarget } from "@/lib/webhookSync";
 import { toast } from "sonner";
+import { prewarmCodecDetection } from "@/player/hooks/useCodecDetection";
 
 const AdminLayout = lazy(() => import("@/components/AdminLayout"));
 const OAuthComplete = lazy(() => import("@/pages/OAuthComplete"));
@@ -654,6 +655,13 @@ function AdminRealtimeEventChannels() {
   return null;
 }
 
+function PlaybackCapabilityPrewarmer() {
+  useEffect(() => {
+    void prewarmCodecDetection();
+  }, []);
+  return null;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -667,6 +675,7 @@ export default function App() {
                     <WatchPlaybackProvider>
                       <AudiobookPlaybackProvider>
                         <RealtimeEventsProvider>
+                          <PlaybackCapabilityPrewarmer />
                           <RealtimeEventChannels />
                           <ScrollRestorationManager />
                           <RouteAnnouncer />

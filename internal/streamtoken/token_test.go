@@ -91,3 +91,33 @@ func TestStartedAtSameSecondPreservesActualOrder(t *testing.T) {
 		t.Fatal("same-second token round trip lost nanosecond ordering")
 	}
 }
+
+func TestSourceAudioChannelsRoundTripUsesDistinctClaim(t *testing.T) {
+	token, err := Sign(Claims{
+		SessionID:           "source-audio",
+		AudioChannels:       2,
+		SourceAudioChannels: 6,
+	}, "secret", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := Verify(token, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.SourceAudioChannels != 6 || claims.AudioChannels != 2 {
+		t.Fatalf("source channels = %d, legacy audio channels = %d; want 6 and 2", claims.SourceAudioChannels, claims.AudioChannels)
+	}
+
+	legacyToken, err := Sign(Claims{SessionID: "legacy", AudioChannels: 2}, "secret", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyClaims, err := Verify(legacyToken, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyClaims.SourceAudioChannels != 0 || legacyClaims.AudioChannels != 2 {
+		t.Fatalf("legacy source channels = %d, audio channels = %d; want 0 and 2", legacyClaims.SourceAudioChannels, legacyClaims.AudioChannels)
+	}
+}

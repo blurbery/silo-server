@@ -391,11 +391,11 @@ func (r *EpisodeRepository) BulkUpsert(ctx context.Context, seriesID string, epi
 		if ep.SeriesID != seriesID {
 			return fmt.Errorf("bulk upserting episodes: episode %d belongs to series %q, want %q", i, ep.SeriesID, seriesID)
 		}
-		if !fitsPostgresInteger(ep.SeasonNumber) || !fitsPostgresInteger(ep.EpisodeNumber) {
+		if !FitsPostgresInteger(ep.SeasonNumber) || !FitsPostgresInteger(ep.EpisodeNumber) {
 			return fmt.Errorf("bulk upserting episodes: episode %d number %d/%d is outside PostgreSQL integer range",
 				i, ep.SeasonNumber, ep.EpisodeNumber)
 		}
-		if !fitsPostgresInteger(ep.Runtime) {
+		if !FitsPostgresInteger(ep.Runtime) {
 			return fmt.Errorf("bulk upserting episodes: episode %d runtime %d is outside PostgreSQL integer range", i, ep.Runtime)
 		}
 	}

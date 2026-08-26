@@ -225,6 +225,7 @@ func TestLoadOrReconstructTranscode_TransientExecutorFailureRetriesWithoutZombie
 		ToneMapSourceKind:    tonemap.SourcePQ,
 		ToneMapRecipeVersion: TransformationHDRToSDRToneMapRecipeVersionV3,
 		TargetCodecVideo:     "h264",
+		FastStart:            true,
 	})
 
 	var resolveCalls int
@@ -260,6 +261,9 @@ func TestLoadOrReconstructTranscode_TransientExecutorFailureRetriesWithoutZombie
 	got, runtime, status = m.LoadOrReconstructTranscode(ctx, sessions.GetSession, "s", 5, -1, &card)
 	if status != SessionLoaded || got == nil || runtime == nil {
 		t.Fatalf("retry = status %v session %v runtime %v, want loaded", status, got, runtime)
+	}
+	if runtime.Opts().FastStart {
+		t.Fatal("reconstructed runtime retained fresh-start manifest tuning")
 	}
 	if got.ToneMapMode != tonemap.ModeSoftware {
 		t.Fatalf("confirmed ToneMapMode = %q, want software", got.ToneMapMode)

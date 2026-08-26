@@ -13,7 +13,7 @@ func TestExecutableRecipeV3RoundTripPreservesOperationalFields(t *testing.T) {
 	revision := tonemap.SourceRevision{MediaFileID: 42, FileSize: 100, FileModifiedUnixNano: 200, StreamSignature: "stream"}
 	want := PlannerResultV3{
 		Plan: plan, PlayMethod: PlayTranscode, TranscodeAudio: true, DropInitialLeadingPictures: true,
-		TargetVideoCodec: "h264", TargetAudioCodec: "aac", TargetAudioChannels: 6, TargetAudioBitrateKbps: 320,
+		TargetVideoCodec: "h264", TargetAudioCodec: "aac", SourceAudioChannels: 8, TargetAudioChannels: 6, TargetAudioBitrateKbps: 320,
 		TargetResolution: "1080p", TargetBitrateKbps: 18_000,
 		ToneMapPolicy: tonemap.PolicyHardwareThenSoftware, ToneMapMode: tonemap.ModeHardware,
 		ToneMapSourceKind: tonemap.SourceSDRBT709, ToneMapRecipeVersion: TransformationHDRToSDRToneMapRecipeVersionV3,
@@ -37,7 +37,7 @@ func TestExecutableRecipeV3RoundTripPreservesOperationalFields(t *testing.T) {
 	got := recipe.PlannerResult(plan)
 	if got.Plan != plan || got.PlayMethod != want.PlayMethod || got.TranscodeAudio != want.TranscodeAudio || got.DropInitialLeadingPictures != want.DropInitialLeadingPictures ||
 		got.TargetVideoCodec != want.TargetVideoCodec || got.TargetAudioCodec != want.TargetAudioCodec ||
-		got.TargetAudioChannels != want.TargetAudioChannels || got.TargetAudioBitrateKbps != want.TargetAudioBitrateKbps || got.TargetResolution != want.TargetResolution ||
+		got.SourceAudioChannels != want.SourceAudioChannels || got.TargetAudioChannels != want.TargetAudioChannels || got.TargetAudioBitrateKbps != want.TargetAudioBitrateKbps || got.TargetResolution != want.TargetResolution ||
 		got.TargetBitrateKbps != want.TargetBitrateKbps || got.SubtitleTrackIndex != want.SubtitleTrackIndex ||
 		got.ToneMapPolicy != want.ToneMapPolicy || got.ToneMapMode != want.ToneMapMode ||
 		got.ToneMapSourceKind != want.ToneMapSourceKind || got.ToneMapRecipeVersion != want.ToneMapRecipeVersion || got.ToneMapPreflightRequired != want.ToneMapPreflightRequired || got.ToneMapSourceRevision != revision ||
@@ -63,6 +63,30 @@ func TestExecutableRecipeV3RejectsToneMapFieldsOnLegacyVersion(t *testing.T) {
 	recipe.ToneMapDVConfigPresent = true
 	if recipe.Valid() {
 		t.Fatal("version 1 recipe accepted additive Dolby presence fields")
+	}
+}
+
+func TestExecutableRecipeV3RequiresVersion3ForSourceAudioChannels(t *testing.T) {
+	for _, version := range []int{executableRecipeVersionLegacyV3, executableRecipeVersionV3} {
+		recipe := ExecutableRecipeV3{
+			Version: version, PlanID: "plan:downmix", PlayMethod: PlayTranscode,
+			SourceAudioChannels: 6,
+		}
+		if recipe.Valid() {
+			t.Fatalf("version %d recipe accepted source audio channels", version)
+		}
+	}
+
+	recipe := ExecutableRecipeV3{
+		Version: executableRecipeVersionSourceAudioV3, PlanID: "plan:downmix", PlayMethod: PlayTranscode,
+		SourceAudioChannels: 6,
+	}
+	if !recipe.Valid() {
+		t.Fatal("version 3 recipe rejected source audio channels")
+	}
+	recipe.SourceAudioChannels = -1
+	if recipe.Valid() {
+		t.Fatal("recipe accepted a negative source audio channel count")
 	}
 }
 
@@ -105,6 +129,12 @@ func TestFreezeExecutableRecipeV3SelectsVersionFromAdditiveFields(t *testing.T) 
 				t.Fatalf("recipe version = %d, want %d", got, executableRecipeVersionV3)
 			}
 		})
+	}
+
+	withAudioChannels := base
+	withAudioChannels.SourceAudioChannels = 6
+	if got := FreezeExecutableRecipeV3(withAudioChannels).Version; got != executableRecipeVersionSourceAudioV3 {
+		t.Fatalf("source-audio recipe version = %d, want %d", got, executableRecipeVersionSourceAudioV3)
 	}
 }
 
@@ -179,6 +209,9 @@ func TestExecutableRecipeV3SurvivesJSONRoundTrip(t *testing.T) {
 	}
 	if _, ok := fields["tone_map_source_revision"]; ok {
 		t.Fatalf("non-tone-mapped recipe encoded an empty source revision: %s", encoded)
+	}
+	if _, ok := fields["source_audio_channels"]; ok {
+		t.Fatalf("legacy recipe encoded unknown source audio channels: %s", encoded)
 	}
 	var decoded ExecutableRecipeV3
 	if err := json.Unmarshal(encoded, &decoded); err != nil {

@@ -132,12 +132,15 @@ func TestValidateArtifactToneMapRevisionRejectsCatalogProbeDrift(t *testing.T) {
 	}
 }
 
-func TestArtifactReadyStatusIncludesFencedToneMapRows(t *testing.T) {
+func TestArtifactReadyStatusIncludesFencedRecipeRows(t *testing.T) {
 	if !artifactReady(&Artifact{Status: ArtifactReady}) {
 		t.Fatal("ordinary ready artifact was not ready")
 	}
 	if !artifactReady(&Artifact{Status: ArtifactToneMapReady}) {
 		t.Fatal("fenced tone-map ready artifact was not ready")
+	}
+	if !artifactReady(&Artifact{Status: ArtifactAudioV2Ready}) {
+		t.Fatal("fenced audio-v2 ready artifact was not ready")
 	}
 	if artifactReady(&Artifact{Status: ArtifactToneMapRunning}) {
 		t.Fatal("running tone-map artifact was ready")
@@ -169,6 +172,59 @@ func TestToneMapArtifactExecutionFingerprintRejectsRefreshedPathOrDuration(t *te
 	changedDuration.TotalDuration++
 	if toneMapArtifactExecutionFingerprintMatches(artifact, changedDuration) {
 		t.Fatal("changed duration reused the frozen artifact hash")
+	}
+}
+
+func TestPreparedAudioBoostFreezesSelectedSourceChannelsInExecutionFingerprint(t *testing.T) {
+	manager := &ArtifactManager{}
+	file := &models.MediaFile{
+		ID: 42, FilePath: "/media/movie.mkv", Duration: 3600,
+		AudioTracks: []models.AudioTrack{{Channels: 2}, {Channels: 6}},
+	}
+	artifact := &Artifact{
+		ID: "artifact-audio", MediaFileID: file.ID, Format: "transcode",
+		Container: "mp4", CodecVideo: "h264", CodecAudio: "aac", AudioTrackIndex: 1,
+	}
+	artifact.ParamsHash = paramsHash(artifact.Format, artifact.Container, artifact.CodecVideo, artifact.CodecAudio, artifact.Resolution, artifact.AudioTrackIndex, artifact.TargetBitrateKbps, false)
+	opts := manager.buildOpts(file, artifact)
+	if opts.SourceAudioChannels != 6 {
+		t.Fatalf("SourceAudioChannels = %d, want selected surround track", opts.SourceAudioChannels)
+	}
+	if artifactUsesExecutionFingerprint(artifact) {
+		t.Fatal("legacy parameter hash was misclassified as a frozen execution fingerprint")
+	}
+
+	artifact.AudioRecipeVersion = playback.TransformationAudioToAACRecipeVersionV3
+	artifact.ParamsHash = downloadprepare.NewRequest(artifact.ID, opts).ExecutionFingerprint()
+	if !artifactUsesExecutionFingerprint(artifact) || !artifactExecutionFingerprintMatches(artifact, opts) {
+		t.Fatal("source-sensitive audio recipe was not protected by its execution fingerprint")
+	}
+	changed := opts
+	changed.SourceAudioChannels = 8
+	if artifactExecutionFingerprintMatches(artifact, changed) {
+		t.Fatal("changed selected source channels reused the frozen audio artifact")
+	}
+}
+
+func TestPreparedSourceAudioChannelsRequiresAACSurroundToDefaultStereo(t *testing.T) {
+	file := &models.MediaFile{AudioTracks: []models.AudioTrack{{Channels: 2}, {Channels: 6}}}
+	for _, test := range []struct {
+		name       string
+		trackIndex int
+		codec      string
+		want       int
+	}{
+		{name: "AAC surround", trackIndex: 1, codec: "aac", want: 6},
+		{name: "AAC stereo", trackIndex: 0, codec: "aac"},
+		{name: "EAC3 surround", trackIndex: 1, codec: "eac3"},
+		{name: "Opus surround", trackIndex: 1, codec: "opus"},
+		{name: "copy surround", trackIndex: 1, codec: "copy"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := preparedSourceAudioChannels(file, test.trackIndex, test.codec); got != test.want {
+				t.Fatalf("preparedSourceAudioChannels() = %d, want %d", got, test.want)
+			}
+		})
 	}
 }
 

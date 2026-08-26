@@ -330,8 +330,12 @@ func (m *ArtifactManager) ensureResolved(ctx context.Context, file *models.Media
 		OutputPath:                 artifactOutputPath(m.artifactDir(), file.ID, format, hash),
 		MaxAttempts:                artifactMaxAttempts,
 	}
-	if a.ToneMapMode != "" {
-		a.ParamsHash = downloadprepare.NewRequest(a.ID, m.buildOpts(file, a)).ExecutionFingerprint()
+	request := downloadprepare.NewRequest(a.ID, m.buildOpts(file, a))
+	if request.StereoDownmixBoostRequested() {
+		a.AudioRecipeVersion = request.AudioRecipeVersion
+	}
+	if a.ToneMapMode != "" || a.AudioRecipeVersion != "" {
+		a.ParamsHash = request.ExecutionFingerprint()
 		a.OutputPath = artifactOutputPath(m.artifactDir(), file.ID, format, a.ParamsHash)
 	}
 	row, created, err := m.repo.EnsureQueued(ctx, a)
@@ -357,7 +361,7 @@ func (m *ArtifactManager) ensureResolved(ctx context.Context, file *models.Media
 		case err != nil:
 			return nil, err
 		default:
-			row.Status = queuedArtifactStatus(row.ToneMapMode)
+			row.Status = queuedArtifactStatus(row.ToneMapMode, row.AudioRecipeVersion)
 		}
 		m.triggerDrain()
 		return row, nil
@@ -661,7 +665,7 @@ func (m *ArtifactManager) probeRemoteArtifactGroup(ctx context.Context, lifecycl
 			// One node-level failure suppresses the rest of this origin's batch.
 			slog.WarnContext(ctx, "remote download artifact check failed; skipping remaining origin batch", "component", "downloads", "artifact_id", a.ID, "node", a.OriginNodeURL, "error", err)
 			return
-		case result.FileSize != a.FileSize || (a.ToneMapMode != "" && result.ExecutionFingerprint != a.ParamsHash):
+		case result.FileSize != a.FileSize || (artifactUsesExecutionFingerprint(a) && result.ExecutionFingerprint != a.ParamsHash):
 			m.requeueWrongSizedRemoteArtifact(ctx, lifecycle, a)
 		}
 	}
@@ -821,8 +825,8 @@ func (m *ArtifactManager) encodeOne(ctx context.Context, a *Artifact) {
 	}
 
 	opts := m.buildOpts(file, a)
-	if !toneMapArtifactExecutionFingerprintMatches(a, opts) {
-		m.failJob(ctx, a, "frozen tone-map execution recipe no longer matches source metadata")
+	if !artifactExecutionFingerprintMatches(a, opts) {
+		m.failJob(ctx, a, "frozen execution recipe no longer matches source metadata")
 		return
 	}
 	// Each lease attempt owns a distinct node-local object. A worker that loses
@@ -851,9 +855,9 @@ func (m *ArtifactManager) encodeOne(ctx context.Context, a *Artifact) {
 	}
 
 	remoteFieldsPresent := prepared.OriginNodeID != 0 || prepared.OriginNodeURL != "" || prepared.OriginNodeGroup != "" || prepared.OriginArtifactID != ""
-	if !toneMapArtifactExecutionFingerprintMatches(a, opts) {
+	if !artifactExecutionFingerprintMatches(a, opts) {
 		m.cleanupRejectedPrepared(ctx, a.ID, prepared)
-		m.failJob(ctx, a, "frozen tone-map execution recipe changed before commit")
+		m.failJob(ctx, a, "frozen execution recipe changed before commit")
 		return
 	}
 	if prepared.FileSize <= 0 || (remoteFieldsPresent && !prepared.Remote()) || (!prepared.Remote() && prepared.OutputPath == "") {
@@ -896,12 +900,19 @@ func (m *ArtifactManager) encodeOne(ctx context.Context, a *Artifact) {
 	}
 }
 
-func toneMapArtifactExecutionFingerprintMatches(a *Artifact, opts playback.TranscodeOpts) bool {
-	if a == nil || a.ToneMapMode == "" {
+func artifactExecutionFingerprintMatches(a *Artifact, opts playback.TranscodeOpts) bool {
+	if !artifactUsesExecutionFingerprint(a) {
 		return true
 	}
 	fingerprint := downloadprepare.NewRequest(a.ID, opts).ExecutionFingerprint()
 	return fingerprint != "" && fingerprint == a.ParamsHash
+}
+
+// toneMapArtifactExecutionFingerprintMatches preserves the package's existing
+// test/helper name while audio-sensitive recipes now share the same durable
+// execution fence.
+func toneMapArtifactExecutionFingerprintMatches(a *Artifact, opts playback.TranscodeOpts) bool {
+	return artifactExecutionFingerprintMatches(a, opts)
 }
 
 func (m *ArtifactManager) cleanupRejectedPrepared(ctx context.Context, artifactID string, prepared PreparedArtifact) {
@@ -1066,12 +1077,30 @@ func (m *ArtifactManager) buildOpts(file *models.MediaFile, a *Artifact) playbac
 		ToneMapDVBLPresent:         a.ToneMapDVBLPresent,
 		ToneMapDVRPUPresent:        a.ToneMapDVRPUPresent,
 		AudioTrackIndex:            a.AudioTrackIndex,
+		SourceAudioChannels:        preparedSourceAudioChannels(file, a.AudioTrackIndex, a.CodecAudio),
 		SubtitleTrackIndex:         -1,
 		FFmpegPath:                 cfg.Playback.FFmpegPath,
 		HWAccel:                    cfg.Playback.HWAccel,
 		HWDevice:                   cfg.Playback.HWDevice,
 		TotalDuration:              float64(file.Duration),
 	}
+}
+
+func preparedSourceAudioChannels(file *models.MediaFile, audioTrackIndex int, targetAudioCodec string) int {
+	if file == nil || len(file.AudioTracks) == 0 {
+		return 0
+	}
+	if audioTrackIndex < 0 {
+		audioTrackIndex = 0
+	}
+	if audioTrackIndex >= len(file.AudioTracks) {
+		return 0
+	}
+	channels := file.AudioTracks[audioTrackIndex].Channels
+	if !playback.IsAudioToAACStereoDownmixV3(channels, targetAudioCodec, 0) {
+		return 0
+	}
+	return channels
 }
 
 // Hygiene retention windows. These remove only rows nothing can serve again —

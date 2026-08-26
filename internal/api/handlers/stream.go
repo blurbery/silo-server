@@ -214,6 +214,7 @@ func (h *StreamHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 			FFmpegPath:                 h.ffmpegPath(),
 			ContentType:                playback.RemuxContentType(file.IsAudioOnly()),
 			AudioOnly:                  file.IsAudioOnly(),
+			SourceAudioChannels:        session.SourceAudioChannels,
 			TargetAudioChannels:        session.TargetAudioChannels,
 			TargetAudioBitrateKbps:     session.TargetAudioBitrateKbps,
 			Abort:                      abort,

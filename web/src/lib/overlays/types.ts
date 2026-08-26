@@ -94,6 +94,14 @@ export interface CardOverlayPrefs {
 // How a preset paints the accent color when one is set.
 export type AccentStrategy = "bg" | "border" | "text" | "dot";
 
+export interface OverlayShadow {
+  x: number;
+  y: number;
+  blur: number;
+  spread?: number;
+  color: string;
+}
+
 export interface OverlayPreset {
   id: PresetId;
   label: string;
@@ -107,6 +115,8 @@ export interface OverlayPreset {
   borderRadiusVariable?: string;
   borderWidth?: number;
   borderLeftWidth?: number;
+  textShadow?: OverlayShadow;
+  boxShadow?: OverlayShadow;
   iconSize: number;
   iconGap: number;
   preferIcon: boolean; // true when icon-prefixed renderings are preferred

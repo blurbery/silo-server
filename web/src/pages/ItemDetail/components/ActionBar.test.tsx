@@ -1,6 +1,5 @@
 import type { ComponentProps } from "react";
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import type { FileVersion } from "@/api/types";
@@ -8,10 +7,6 @@ import ActionBar from "./ActionBar";
 
 vi.mock("@/playback/watchPlaybackContext", () => ({
   useWatchPlaybackController: () => ({ startPlayback: vi.fn() }),
-}));
-
-vi.mock("@/components/AddToCollectionDialog", () => ({
-  default: () => null,
 }));
 
 vi.mock("./SubtitlesPopover", () => ({
@@ -56,14 +51,16 @@ describe("ActionBar", () => {
         "cursor-pointer",
         "transform-gpu",
         "transition-transform",
+        "duration-150",
         "hover:bg-primary",
         "motion-safe:hover:scale-[1.02]",
-        "motion-reduce:transition-none",
+        "motion-safe:active:scale-[0.98]",
+        "motion-reduce:hover:bg-primary/90",
       );
     },
   );
 
-  it("keeps detail action feedback on compositor-only hover paths", () => {
+  it("keeps the watched action on a compositor-only hover path and shows pointers", () => {
     renderActionBar({
       watchedLabel: "Mark Watched",
       onToggleWatched: () => {},
@@ -71,63 +68,39 @@ describe("ActionBar", () => {
     });
 
     expect(screen.getByRole("button", { name: "Mark Watched" })).toHaveClass(
-      "cursor-pointer",
-      "glass-subtle",
+      "enabled:cursor-pointer",
       "transform-gpu",
       "transition-transform",
+      "duration-150",
+      "glass-hover",
+      "glass-hover-surface",
       "motion-safe:hover:scale-[1.02]",
-      "motion-reduce:transition-none",
-    );
-    expect(screen.getByRole("button", { name: "Mark Watched" })).not.toHaveClass(
-      "hover:bg-[color-mix(in_srgb,var(--surface)_40%,transparent)]",
+      "motion-safe:active:scale-[0.98]",
     );
     expect(screen.getByTitle("Favorite")).toHaveClass(
       "cursor-pointer",
-      "glass-subtle",
-      "detail-action-hover",
-      "detail-action-hover-surface",
+      "glass-hover",
+      "glass-hover-surface",
       "transition-none",
     );
     expect(screen.getByTitle("More")).toHaveClass(
       "cursor-pointer",
-      "glass-subtle",
-      "detail-action-hover",
-      "detail-action-hover-surface",
+      "glass-hover",
+      "glass-hover-surface",
       "transition-none",
     );
   });
 
-  it("uses matching icons and longest-entry sizing in the detail menu", async () => {
-    render(
-      <MemoryRouter>
-        <ActionBar
-          contentId="series-1"
-          isAdmin
-          canCurateMetadata
-          onToggleWatchlist={() => {}}
-          onRefresh={() => {}}
-          onEditMetadata={() => {}}
-          onMatchItem={() => {}}
-          onSplitItem={() => {}}
-        />
-      </MemoryRouter>,
-    );
+  it("does not expose an enabled pointer affordance while the watched action is pending", () => {
+    renderActionBar({
+      watchedLabel: "Mark Watched",
+      onToggleWatched: () => {},
+      isUpdatingWatched: true,
+    });
 
-    await userEvent.click(screen.getByTitle("More"));
-
-    const menu = screen.getByRole("menu");
-    expect(menu).toHaveClass("w-max", "max-w-[calc(100vw-2rem)]", "min-w-0");
-    expect(menu).not.toHaveClass("w-56");
-    for (const item of screen.getAllByRole("menuitem")) {
-      expect(item.querySelector("svg"), item.textContent ?? "menu item").toBeTruthy();
-    }
-    expect(
-      screen.getByRole("menuitem", { name: "View Play History" }).querySelector(".lucide-history"),
-    ).toBeTruthy();
-    expect(
-      screen
-        .getByRole("menuitem", { name: "Refresh Metadata" })
-        .querySelector(".lucide-refresh-cw"),
-    ).toBeTruthy();
+    const watchedAction = screen.getByRole("button", { name: "Mark Watched" });
+    expect(watchedAction).toBeDisabled();
+    expect(watchedAction).toHaveClass("enabled:cursor-pointer");
+    expect(watchedAction).not.toHaveClass("cursor-pointer");
   });
 });

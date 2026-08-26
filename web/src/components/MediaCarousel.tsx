@@ -100,7 +100,7 @@ export default function MediaCarousel({
 
         <div
           ref={emblaRef}
-          className={`embla__viewport overflow-hidden${viewportPadX}`}
+          className={`embla__viewport -mt-1 overflow-hidden pt-1${viewportPadX}`}
           tabIndex={0}
           aria-label="Media carousel"
           onKeyDown={(e) => {

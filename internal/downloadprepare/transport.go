@@ -87,10 +87,19 @@ type Request struct {
 	ToneMapDVRPUPresent        bool                   `json:"tone_map_dv_rpu_present,omitempty"`
 	TargetCodecVideo           string                 `json:"target_codec_video"`
 	TargetCodecAudio           string                 `json:"target_codec_audio"`
+	TargetAudioChannels        int                    `json:"target_audio_channels,omitempty"`
+	TargetAudioBitrateKbps     int                    `json:"target_audio_bitrate_kbps,omitempty"`
 	TargetResolution           string                 `json:"target_resolution,omitempty"`
 	TargetBitrateKbps          int                    `json:"target_bitrate_kbps,omitempty"`
 	AudioTrackIndex            int                    `json:"audio_track_index"`
-	TotalDuration              float64                `json:"total_duration,omitempty"`
+	// AudioRecipeVersion makes the prepared-file executor contract explicit;
+	// older nodes ignore it and therefore cannot return the matching execution
+	// fingerprint required by the current caller.
+	AudioRecipeVersion string `json:"audio_recipe_version,omitempty"`
+	// SourceAudioChannels freezes the selected input stream's probed channel
+	// count. Zero is the mixed-version-safe unknown value and never enables gain.
+	SourceAudioChannels int     `json:"source_audio_channels,omitempty"`
+	TotalDuration       float64 `json:"total_duration,omitempty"`
 }
 
 // Result identifies a completed artifact without exposing the node's local
@@ -171,6 +180,28 @@ func (r Request) ToneMapRequested() bool {
 		r.ToneMapDVConfigPresent || r.ToneMapDVBLCompatIDPresent || r.ToneMapDVBLPresent || r.ToneMapDVRPUPresent
 }
 
+// AudioRecipeRequested includes incomplete requests so the node can reject a
+// partial recipe instead of treating it as an ordinary encode.
+func (r Request) AudioRecipeRequested() bool {
+	return r.AudioRecipeVersion != "" || r.SourceAudioChannels != 0
+}
+
+// StereoDownmixBoostRequested reports whether this is the complete,
+// source-sensitive audio_to_aac v2 recipe. Prepared encoded audio uses the
+// historical stereo default, so only a known surround source qualifies.
+func (r Request) StereoDownmixBoostRequested() bool {
+	return r.AudioRecipeVersion == playback.TransformationAudioToAACRecipeVersionV3 &&
+		playback.IsAudioToAACStereoDownmixV3(r.SourceAudioChannels, r.TargetCodecAudio, r.TargetAudioChannels)
+}
+
+// ExecutionAttestationRequested reports whether accepting bytes requires a
+// receipt from a node that understood all newly transported recipe fields.
+// Explicit audio output settings affect bytes even when the v2 boost does not.
+func (r Request) ExecutionAttestationRequested() bool {
+	return r.ToneMapRequested() || r.AudioRecipeRequested() ||
+		r.TargetAudioChannels != 0 || r.TargetAudioBitrateKbps != 0
+}
+
 // ValidToneMapAttestation reports whether a requested recipe carries every
 // frozen field needed to compare a node's artifact receipt exactly.
 func (r Request) ValidToneMapAttestation() bool {
@@ -195,7 +226,7 @@ func (r Request) ExecutionFingerprint() string {
 // NewRequest freezes the byte-affecting recipe while deliberately omitting
 // environment-specific execution settings.
 func NewRequest(artifactID string, opts playback.TranscodeOpts) Request {
-	return Request{
+	request := Request{
 		ArtifactID:                 artifactID,
 		InputPath:                  opts.InputPath,
 		SourceVideoCodec:           opts.SourceVideoCodec,
@@ -214,11 +245,18 @@ func NewRequest(artifactID string, opts playback.TranscodeOpts) Request {
 		ToneMapDVRPUPresent:        opts.ToneMapDVRPUPresent,
 		TargetCodecVideo:           opts.TargetCodecVideo,
 		TargetCodecAudio:           opts.TargetCodecAudio,
+		TargetAudioChannels:        opts.TargetAudioChannels,
+		TargetAudioBitrateKbps:     opts.TargetAudioBitrateKbps,
 		TargetResolution:           opts.TargetResolution,
 		TargetBitrateKbps:          opts.TargetBitrateKbps,
 		AudioTrackIndex:            opts.AudioTrackIndex,
 		TotalDuration:              opts.TotalDuration,
 	}
+	if playback.IsAudioToAACStereoDownmixV3(opts.SourceAudioChannels, request.TargetCodecAudio, request.TargetAudioChannels) {
+		request.SourceAudioChannels = opts.SourceAudioChannels
+		request.AudioRecipeVersion = playback.TransformationAudioToAACRecipeVersionV3
+	}
+	return request
 }
 
 // TranscodeOpts reconstructs the prepared-file options using the selected
@@ -242,9 +280,12 @@ func (r Request) TranscodeOpts(ffmpegPath, hwAccel, hwDevice string, sink playba
 		ToneMapDVRPUPresent:        r.ToneMapDVRPUPresent,
 		TargetCodecVideo:           r.TargetCodecVideo,
 		TargetCodecAudio:           r.TargetCodecAudio,
+		TargetAudioChannels:        r.TargetAudioChannels,
+		TargetAudioBitrateKbps:     r.TargetAudioBitrateKbps,
 		TargetResolution:           r.TargetResolution,
 		TargetBitrateKbps:          r.TargetBitrateKbps,
 		AudioTrackIndex:            r.AudioTrackIndex,
+		SourceAudioChannels:        r.SourceAudioChannels,
 		SubtitleTrackIndex:         -1,
 		FFmpegPath:                 ffmpegPath,
 		HWAccel:                    hwAccel,

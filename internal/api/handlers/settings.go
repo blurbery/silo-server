@@ -1229,6 +1229,6 @@ func (h *SettingsHandler) HandleGetOverlayConfig(w http.ResponseWriter, r *http.
 		}
 	}
 
-	w.Header().Set("Cache-Control", "private, max-age=60")
+	w.Header().Set("Cache-Control", "private, no-cache")
 	writeJSON(w, http.StatusOK, resp)
 }

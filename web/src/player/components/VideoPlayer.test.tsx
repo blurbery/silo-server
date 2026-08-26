@@ -78,8 +78,8 @@ vi.mock("hls.js", () => ({
     static ErrorTypes = { NETWORK_ERROR: "networkError", MEDIA_ERROR: "mediaError" };
     static isSupported = () => hlsJS.supported;
 
-    constructor() {
-      hlsJS.constructed();
+    constructor(config?: unknown) {
+      hlsJS.constructed(config);
     }
 
     on() {}
@@ -540,6 +540,7 @@ describe("VideoPlayer native HLS timeline", () => {
 
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -575,6 +576,11 @@ describe("VideoPlayer native HLS timeline", () => {
 
   it("uses native HLS for Dolby Vision when hls.js is also available", async () => {
     hlsJS.supported = true;
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/26.0 Safari/605.1.15",
+    });
     const plan = fixturePlanV3({
       delivery: "server_remux_hls",
       stream: {
@@ -606,6 +612,33 @@ describe("VideoPlayer native HLS timeline", () => {
 
     expect(video.currentTime).toBe(7);
     expect(hlsJS.constructed).not.toHaveBeenCalled();
+  });
+
+  it("uses hls.js for Dolby Vision in Chromium even when native HLS is advertised", async () => {
+    hlsJS.supported = true;
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36",
+    });
+    const plan = fixturePlanV3({
+      delivery: "server_remux_hls",
+      stream: {
+        url: "/playback/transcode/session-1/master.m3u8",
+        protocol: "hls",
+        headers: {},
+        header_refresh: "none",
+      },
+      effective_recipe: {
+        video_codec: "hevc",
+        audio_codec: "aac",
+        dynamic_range: "dolby_vision",
+      },
+    });
+
+    renderPlayer({ plan });
+
+    await waitFor(() => expect(hlsJS.constructed).toHaveBeenCalledOnce());
   });
 });
 

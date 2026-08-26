@@ -65,6 +65,8 @@ interface PlaybackSessionState {
   replanning: boolean;
   errorTitle: string | null;
   error: string | null;
+  initialSubtitleErrorTitle: string | null;
+  initialSubtitleError: string | null;
 }
 
 interface PlaybackSessionErrorState {
@@ -195,6 +197,8 @@ function planToSessionState(
     replanning: false,
     errorTitle: null,
     error: null,
+    initialSubtitleErrorTitle: null,
+    initialSubtitleError: null,
   };
 }
 
@@ -259,6 +263,7 @@ export function usePlaybackSession(
   resumeHints?: ResumeHints,
   explicitAudioTrackIndex?: number | null,
   initialSubtitleTrackIndexByFileId?: Record<number, number>,
+  initialBitmapSubtitleTrackIndexByFileId?: Record<number, number>,
 ): UsePlaybackSessionResult {
   const config = usePlayerConfig();
   const { probe, settled: capabilityDetectionSettled } = useCodecDetectionState();
@@ -287,6 +292,8 @@ export function usePlaybackSession(
     replanning: false,
     errorTitle: null,
     error: null,
+    initialSubtitleErrorTitle: null,
+    initialSubtitleError: null,
   });
 
   const sessionIdRef = useRef<string | null>(null);
@@ -431,7 +438,10 @@ export function usePlaybackSession(
    * Returns whether a plan was adopted.
    */
   const adoptDecision = useCallback(
-    (decision: DecisionResponseV3): boolean => {
+    (
+      decision: DecisionResponseV3,
+      initialSubtitleFailure?: PlaybackSessionErrorState | null,
+    ): boolean => {
       serverFeaturesRef.current = decision.server_features;
       const plan = decision.playback_plan;
       if (!plan) {
@@ -475,8 +485,8 @@ export function usePlaybackSession(
         awaitingInitialPlayerPositionRef.current = plan.timeline.source_start_seconds > 0;
       }
 
-      setState(
-        planToSessionState(
+      setState((current) => ({
+        ...planToSessionState(
           plan,
           sessionId ?? null,
           playbackAttemptIdRef.current ?? "",
@@ -485,7 +495,15 @@ export function usePlaybackSession(
           playbackPlayingRef.current,
           config,
         ),
-      );
+        initialSubtitleErrorTitle:
+          initialSubtitleFailure === undefined
+            ? current.initialSubtitleErrorTitle
+            : (initialSubtitleFailure?.title ?? null),
+        initialSubtitleError:
+          initialSubtitleFailure === undefined
+            ? current.initialSubtitleError
+            : (initialSubtitleFailure?.message ?? null),
+      }));
       reportEvent("plan_selected");
       return true;
     },
@@ -498,6 +516,7 @@ export function usePlaybackSession(
       position: number,
       forceStartPosition: boolean,
       playbackAttemptId: string,
+      subtitleTrackIndex: number | undefined,
     ): Promise<DecisionResponseV3> => {
       const body = buildStartRequestV3({
         extraClientFeatures: VIDEO_CLIENT_FEATURES_V3,
@@ -508,7 +527,7 @@ export function usePlaybackSession(
         position,
         forceStartPosition,
         explicitAudioTrackIndex,
-        subtitleTrackIndex: initialSubtitleTrackIndexByFileId?.[targetFileId],
+        subtitleTrackIndex,
         metered: detectMeteredV3(),
         bandwidthEstimateKbps: detectBandwidthEstimateKbpsV3(),
         bandwidthCapKbps: maxBitrateKbps,
@@ -521,14 +540,7 @@ export function usePlaybackSession(
         body: JSON.stringify(body),
       });
     },
-    [
-      clientCapabilities,
-      clientPlaybackContext,
-      config,
-      explicitAudioTrackIndex,
-      initialSubtitleTrackIndexByFileId,
-      maxBitrateKbps,
-    ],
+    [clientCapabilities, clientPlaybackContext, config, explicitAudioTrackIndex, maxBitrateKbps],
   );
 
   const stopSession = useCallback(
@@ -630,10 +642,12 @@ export function usePlaybackSession(
         replacing: hasExistingSession,
         errorTitle: hasExistingSession ? current.errorTitle : null,
         error: hasExistingSession ? current.error : null,
+        initialSubtitleErrorTitle: hasExistingSession ? current.initialSubtitleErrorTitle : null,
+        initialSubtitleError: hasExistingSession ? current.initialSubtitleError : null,
       }));
 
       // A start begins a new attempt chain: fresh attempt id, empty loop guard.
-      const playbackAttemptId = randomUUID();
+      let playbackAttemptId = randomUUID();
       playbackAttemptIdRef.current = playbackAttemptId;
       attemptedPlanKeysRef.current = [];
       attemptCountRef.current = 1;
@@ -678,6 +692,7 @@ export function usePlaybackSession(
           position,
           forceStartPosition,
           playbackAttemptId,
+          initialSubtitleTrackIndexByFileId?.[selectedFileId],
         );
 
         if (loadSequence !== loadSequenceRef.current) {
@@ -690,7 +705,50 @@ export function usePlaybackSession(
           return;
         }
 
-        const adopted = adoptDecision(decision);
+        let decisionToAdopt = decision;
+        let initialSubtitleFailure: PlaybackSessionErrorState | null = null;
+        const bitmapSubtitleTrackIndex = initialBitmapSubtitleTrackIndexByFileId?.[selectedFileId];
+        if (!decision.playback_plan && bitmapSubtitleTrackIndex !== undefined) {
+          initialSubtitleFailure = describeDecisionWithoutPlan(decision);
+          if (decision.session_id) {
+            void stopSession(decision.session_id).catch(() => {
+              // Best effort cleanup for the refused subtitle-bearing start.
+            });
+          }
+
+          // A fresh attempt id avoids colliding with start idempotency: the
+          // retry intentionally changes the request by dropping the bitmap
+          // subtitle that made the first plan impossible.
+          const fallbackPlaybackAttemptId = randomUUID();
+          playbackAttemptId = fallbackPlaybackAttemptId;
+          playbackAttemptIdRef.current = fallbackPlaybackAttemptId;
+          decisionToAdopt = await requestStart(
+            selectedFileId,
+            position,
+            forceStartPosition,
+            fallbackPlaybackAttemptId,
+            undefined,
+          );
+          if (!decisionToAdopt.playback_plan) {
+            initialSubtitleFailure = null;
+          }
+        }
+
+        if (loadSequence !== loadSequenceRef.current) {
+          const staleSessionId =
+            decisionToAdopt.playback_plan?.session_id ??
+            decisionToAdopt.session_id ??
+            decision.playback_plan?.session_id ??
+            decision.session_id;
+          if (staleSessionId) {
+            await stopSession(staleSessionId).catch(() => {
+              // Best effort cleanup for a superseded start/replan chain.
+            });
+          }
+          return;
+        }
+
+        const adopted = adoptDecision(decisionToAdopt, initialSubtitleFailure);
         if (!adopted && hasExistingSession && allowPreserveExistingSessionOnError) {
           restorePreviousAttempt();
           setState((current) => ({
@@ -740,7 +798,16 @@ export function usePlaybackSession(
         endAdoption(loadSequence);
       }
     },
-    [adoptDecision, beginAdoption, endAdoption, requestStart, selectFileId, stopSession],
+    [
+      adoptDecision,
+      beginAdoption,
+      endAdoption,
+      initialBitmapSubtitleTrackIndexByFileId,
+      initialSubtitleTrackIndexByFileId,
+      requestStart,
+      selectFileId,
+      stopSession,
+    ],
   );
 
   useEffect(() => {
@@ -947,7 +1014,13 @@ export function usePlaybackSession(
           attemptCountRef.current = 1;
         }
 
-        const adopted = adoptDecision(decision);
+        // Keep a refused-start subtitle pinned off across unrelated replans.
+        // A successful explicit subtitle choice is the one action that clears
+        // the marker and lets the new server-selected track take ownership.
+        const adopted = adoptDecision(
+          decision,
+          options.operation === "track_change" && options.subtitle !== undefined ? null : undefined,
+        );
         if (!adopted && retireSessionOnRefusal) {
           const pending = pendingReplanRef.current;
           const newerOutputProbePending =

@@ -44,6 +44,7 @@ describe("buildDeliveriesV3", () => {
       progressiveCodecsVideo: ["h264"],
       hlsCodecsVideo: ["h264"],
       codecsAudio: ["aac"],
+      progressiveCodecsAudio: ["aac"],
       maxResolution: "1080p",
       hdr: false,
       hdrDetails: {
@@ -72,12 +73,17 @@ describe("buildDeliveriesV3", () => {
 });
 
 describe("structured HDR capabilities", () => {
+  const safariUA =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/26.0 Safari/605.1.15";
+  const chromeUA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36";
   const probe: WebCapabilityProbe = {
     containers: ["mp4"],
     codecsVideo: ["hevc"],
     progressiveCodecsVideo: ["hevc"],
     hlsCodecsVideo: ["hevc"],
     codecsAudio: ["eac3"],
+    progressiveCodecsAudio: ["eac3"],
     maxResolution: "2160p",
     hdr: true,
     hdrDetails: {
@@ -129,7 +135,7 @@ describe("structured HDR capabilities", () => {
   });
 
   it("publishes exact media-element HDR evidence to native HLS", () => {
-    const deliveries = buildDeliveriesV3({ ...probe, nativeHls: true });
+    const deliveries = buildDeliveriesV3({ ...probe, nativeHls: true }, safariUA);
 
     expect(deliveries.progressive?.hdr_details?.dolby_vision_profiles).toEqual([]);
     expect(deliveries.hls?.hdr_details).toEqual(probe.hdrDetails);
@@ -137,6 +143,30 @@ describe("structured HDR capabilities", () => {
     expect(deliveries.hls?.features).toContain("native_hls_playback_v1");
     expect(deliveries.original_http?.hdr_details?.hdr10).toBe(false);
     expect(deliveries.original_http?.hdr_details?.dolby_vision_profiles).toEqual([]);
+  });
+
+  it("keeps Chromium native-HLS evidence scoped to its hls.js engine", () => {
+    const chromiumProbe = {
+      ...probe,
+      nativeHls: true,
+      codecsVideo: ["h264"],
+      progressiveCodecsVideo: ["h264", "hevc"],
+      hlsCodecsVideo: ["h264"],
+      hlsHDRDetails: {
+        ...probe.hlsHDRDetails,
+        hdr10: false,
+        hlg: false,
+        dolby_vision_profiles: [],
+        dolby_vision_profile_levels: [],
+      },
+    };
+
+    const deliveries = buildDeliveriesV3(chromiumProbe, chromeUA);
+
+    expect(deliveries.progressive?.hdr_details).toEqual(probe.hdrDetails);
+    expect(deliveries.hls?.hdr_details?.hdr10).toBe(false);
+    expect(deliveries.hls?.hdr_details?.dolby_vision_profiles).toEqual([]);
+    expect(deliveries.hls?.video_codecs).toEqual(["h264"]);
   });
 
   it("keeps normalized HDR sample entries on progressive without native HLS", () => {
@@ -161,5 +191,19 @@ describe("structured HDR capabilities", () => {
     expect(deliveries.original_http?.video_codecs).toEqual(["h264"]);
     expect(deliveries.progressive?.video_codecs).toEqual(["h264", "hevc"]);
     expect(deliveries.hls?.video_codecs).toEqual(["h264"]);
+  });
+
+  it("scopes container-specific audio evidence to progressive MP4", () => {
+    const containerScopedProbe = {
+      ...probe,
+      codecsAudio: ["aac", "vorbis"],
+      progressiveCodecsAudio: ["aac"],
+    };
+
+    const deliveries = buildDeliveriesV3(containerScopedProbe);
+
+    expect(deliveries.original_http?.audio_decode_codecs).toEqual(["aac", "vorbis"]);
+    expect(deliveries.progressive?.audio_decode_codecs).toEqual(["aac"]);
+    expect(deliveries.hls?.audio_decode_codecs).toEqual(["aac", "vorbis"]);
   });
 });

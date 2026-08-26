@@ -1355,6 +1355,7 @@ func TestTranscodesAudioMatchesFFmpegDefault(t *testing.T) {
 	}{
 		{"copy", false},
 		{"COPY", false},
+		{" COPY ", false},
 		{"", true},
 		{"aac", true},
 		{"opus", true},
@@ -1368,5 +1369,76 @@ func TestTranscodesAudioMatchesFFmpegDefault(t *testing.T) {
 		if copied != !tc.want {
 			t.Errorf("appendAudioArgs(%q) copy=%v disagrees with TranscodesAudio=%v", tc.codec, copied, tc.want)
 		}
+	}
+}
+
+func TestIsAudioToAACStereoDownmixV3RequiresExactRecipeShape(t *testing.T) {
+	tests := []struct {
+		name           string
+		codec          string
+		sourceChannels int
+		targetChannels int
+		want           bool
+	}{
+		{name: "AAC default stereo", codec: "aac", sourceChannels: 6, want: true},
+		{name: "AAC explicit stereo", codec: " AAC ", sourceChannels: 8, targetChannels: 2, want: true},
+		{name: "stereo source", codec: "aac", sourceChannels: 2, targetChannels: 2},
+		{name: "unknown source", codec: "aac", targetChannels: 2},
+		{name: "default AAC codec", sourceChannels: 6, targetChannels: 2, want: true},
+		{name: "unknown codec", codec: "unknown", sourceChannels: 6, targetChannels: 2},
+		{name: "Opus", codec: "opus", sourceChannels: 6, targetChannels: 2},
+		{name: "EAC3", codec: "eac3", sourceChannels: 6, targetChannels: 2},
+		{name: "mono output", codec: "aac", sourceChannels: 6, targetChannels: 1},
+		{name: "negative output", codec: "aac", sourceChannels: 6, targetChannels: -1},
+		{name: "noncanonical stereo output", codec: "aac", sourceChannels: 6, targetChannels: 3},
+		{name: "surround output", codec: "aac", sourceChannels: 6, targetChannels: 6},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := IsAudioToAACStereoDownmixV3(test.sourceChannels, test.codec, test.targetChannels); got != test.want {
+				t.Fatalf("IsAudioToAACStereoDownmixV3() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestAppendAudioArgsBoostsOnlyEncodedSurroundToStereo(t *testing.T) {
+	const wantFilter = "aresample=out_chlayout=stereo,alimiter=level_in=2:limit=0.794328235:attack=5:release=50:level=false:latency=true"
+	tests := []struct {
+		name           string
+		codec          string
+		sourceChannels int
+		targetChannels int
+		wantBoost      bool
+	}{
+		{name: "aac 5.1 to stereo", codec: "aac", sourceChannels: 6, targetChannels: 2, wantBoost: true},
+		{name: "default aac 7.1 to stereo", sourceChannels: 8, targetChannels: 2, wantBoost: true},
+		{name: "aac default target is stereo", codec: "aac", sourceChannels: 6, wantBoost: true},
+		{name: "opus has no versioned boost recipe", codec: "opus", sourceChannels: 6},
+		{name: "unknown codec fallback has no versioned boost", codec: "unknown", sourceChannels: 6, targetChannels: 2},
+		{name: "stereo aac encode", codec: "aac", sourceChannels: 2, targetChannels: 2},
+		{name: "unknown source channels", codec: "aac", targetChannels: 2},
+		{name: "surround to mono", codec: "aac", sourceChannels: 6, targetChannels: 1},
+		{name: "negative target resolves to ordinary stereo", codec: "aac", sourceChannels: 6, targetChannels: -1},
+		{name: "noncanonical target resolves to ordinary stereo", codec: "aac", sourceChannels: 6, targetChannels: 3},
+		{name: "surround preserved", codec: "aac", sourceChannels: 6, targetChannels: 6},
+		{name: "copy", codec: "copy", sourceChannels: 6, targetChannels: 2},
+		{name: "ac3 preserves source layout", codec: "ac3", sourceChannels: 6, targetChannels: 2},
+		{name: "eac3 preserves source layout", codec: "eac3", sourceChannels: 6, targetChannels: 2},
+		{name: "stereo opus encode", codec: "opus", sourceChannels: 2, targetChannels: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := appendAudioArgs(nil, TranscodeOpts{
+				TargetCodecAudio:    tt.codec,
+				SourceAudioChannels: tt.sourceChannels,
+				TargetAudioChannels: tt.targetChannels,
+			})
+			gotBoost := argsContainPair(args, "-af", wantFilter)
+			if gotBoost != tt.wantBoost {
+				t.Fatalf("downmix boost present=%t, want %t; args=%s", gotBoost, tt.wantBoost, strings.Join(args, " "))
+			}
+		})
 	}
 }

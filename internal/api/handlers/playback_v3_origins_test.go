@@ -206,14 +206,14 @@ func TestPrepareTransportV3AuthorizedOriginsCarryRemuxSourceFacts(t *testing.T) 
 
 	file := v3HandlerFixtureFile(t)
 	file.VideoTracks[0].DVProfile = 7
-	plan := identityProxyPlanV3(playback.DeliveryRemuxProgressiveV3, playback.TransformationV3{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"})
+	plan := identityProxyPlanV3(playback.DeliveryRemuxProgressiveV3, playback.TransformationV3{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3})
 	plan.Timeline = playback.TimelineV3{SourceStartSeconds: 39.5}
 
 	transport, transportErr := handler.prepareTransportV3(
 		httptest.NewRequest(http.MethodPost, "/", nil),
 		&playback.Session{ID: "session-origin-remux", UserID: 7, ProfileID: "profile-1"},
 		file,
-		playback.PlannerResultV3{Plan: plan, PlayMethod: playback.PlayRemux, TranscodeAudio: true, TargetAudioCodec: "aac"},
+		playback.PlannerResultV3{Plan: plan, PlayMethod: playback.PlayRemux, TranscodeAudio: true, TargetAudioCodec: "aac", SourceAudioChannels: 6, TargetAudioChannels: 2},
 		authorizedOriginsModeV3())
 	if transportErr != nil {
 		t.Fatalf("prepare identity transport: %v", transportErr)
@@ -232,6 +232,9 @@ func TestPrepareTransportV3AuthorizedOriginsCarryRemuxSourceFacts(t *testing.T) 
 	}
 	if !card.TranscodeAudio {
 		t.Fatal("grant must tell the proxy to convert audio")
+	}
+	if card.SourceAudioChannels != 6 || card.TargetAudioChannels != 2 {
+		t.Fatalf("grant audio recipe = source %d target %d, want 6 to 2", card.SourceAudioChannels, card.TargetAudioChannels)
 	}
 }
 

@@ -7,15 +7,12 @@ import {
   Captions,
   Download,
   FolderPlus,
-  History,
   Info,
   Loader2,
   MoreVertical,
   Play,
   RefreshCw,
-  Pencil,
   Scissors,
-  Search,
   RotateCcw,
   Tags,
 } from "lucide-react";
@@ -45,19 +42,19 @@ import type {
 import RefreshMetadataDialog from "@/components/RefreshMetadataDialog";
 import { MarkerEditor } from "@/components/markers/MarkerEditor";
 import StarRating from "@/components/StarRating";
+import { MediaActionIcon } from "@/components/mediaActionIcons";
 import { useWatchPlaybackController } from "@/playback/watchPlaybackContext";
 import { parseWatchHref } from "@/pages/watchRouteHelpers";
 import VersionDropdown from "./VersionDropdown";
 import AudioTracksPopover from "./AudioTracksPopover";
 import SubtitlesPopover from "./SubtitlesPopover";
 
-// Keep hover feedback on the compositor: repainting these controls while the detail backdrop is
+// Keep hover feedback on the compositor. Repainting these controls while the detail backdrop is
 // animating can stall the main thread on image-heavy movie and series pages.
 const responsivePrimaryActionClass =
-  "transform-gpu transition-transform duration-150 motion-safe:hover:scale-[1.02] motion-safe:active:scale-[0.98] motion-reduce:transition-none";
-const responsivePlayActionClass = `${responsivePrimaryActionClass} hover:bg-primary`;
-const responsiveWatchedActionClass = responsivePrimaryActionClass;
-const compositedGlassHoverClass = "detail-action-hover detail-action-hover-surface transition-none";
+  "transform-gpu transition-transform duration-150 motion-safe:hover:scale-[1.02] motion-safe:active:scale-[0.98]";
+const responsivePlayActionClass = `${responsivePrimaryActionClass} hover:bg-primary motion-reduce:hover:bg-primary/90`;
+const staticGlassActionClass = "transition-none";
 
 interface ActionBarProps {
   contentId?: string;
@@ -338,10 +335,10 @@ export default function ActionBar({
         {/* ── Watched toggle ─────────────────────────────────── */}
         {watchedLabel && onToggleWatched && (
           <Button
-            variant="glass-static"
+            variant="glass"
             onClick={onToggleWatched}
             disabled={isUpdatingWatched}
-            className={`${responsiveWatchedActionClass} h-11 cursor-pointer rounded-full px-5 text-[14px] font-semibold`}
+            className={`${responsivePrimaryActionClass} h-11 rounded-full px-5 text-[14px] font-semibold enabled:cursor-pointer`}
           >
             <Check className="size-[18px]" />
             {watchedLabel}
@@ -351,11 +348,11 @@ export default function ActionBar({
         {/* ── Icon action buttons ────────────────────────────── */}
         {onToggleFavorite && (
           <Button
-            variant="glass-static"
+            variant="glass"
             size="icon-lg"
             onClick={onToggleFavorite}
             title={isFavorite ? "Unfavorite" : "Favorite"}
-            className={`${compositedGlassHoverClass} size-11 cursor-pointer rounded-full`}
+            className={`${staticGlassActionClass} size-11 cursor-pointer rounded-full`}
           >
             <Heart
               className={`size-[18px] transition-colors ${isFavorite ? "fill-current text-red-400" : ""}`}
@@ -370,10 +367,10 @@ export default function ActionBar({
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
             <Button
-              variant="glass-static"
+              variant="glass"
               size="icon-lg"
               title="More"
-              className={`${compositedGlassHoverClass} size-11 cursor-pointer rounded-full`}
+              className={`${staticGlassActionClass} size-11 cursor-pointer rounded-full`}
             >
               <MoreVertical className="size-[18px]" />
             </Button>
@@ -428,7 +425,7 @@ export default function ActionBar({
                       navigate(`/admin/history?media_item_id=${encodeURIComponent(contentId)}`)
                     }
                   >
-                    <History className="size-4" />
+                    <MediaActionIcon action="viewPlayHistory" />
                     View Play History
                   </DropdownMenuItem>
                 )}
@@ -439,7 +436,7 @@ export default function ActionBar({
                       setRefreshDialogOpen(true);
                     }}
                   >
-                    <RefreshCw className={`size-4 ${isRefreshing ? "animate-spin" : ""}`} />
+                    <MediaActionIcon action="refreshMetadata" isPending={isRefreshing} />
                     Refresh Metadata
                   </DropdownMenuItem>
                 )}
@@ -451,7 +448,7 @@ export default function ActionBar({
                 )}
                 {canCurateMetadata && onEditMetadata && (
                   <DropdownMenuItem onSelect={onEditMetadata}>
-                    <Pencil className="size-4" />
+                    <MediaActionIcon action="editMetadata" />
                     Edit Metadata
                   </DropdownMenuItem>
                 )}
@@ -463,7 +460,7 @@ export default function ActionBar({
                 )}
                 {canCurateMetadata && onMatchItem && (
                   <DropdownMenuItem onSelect={onMatchItem}>
-                    <Search className="size-4" />
+                    <MediaActionIcon action="matchItem" />
                     Match Item
                   </DropdownMenuItem>
                 )}

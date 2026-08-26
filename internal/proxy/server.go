@@ -161,6 +161,8 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/stream/direct/{token}", observeProxy(s.telemetry, http.MethodGet, "/stream/direct/{token}", s.handleDirectPlay))
 		r.Head("/stream/remux/{token}", observeProxy(s.telemetry, http.MethodHead, "/stream/remux/{token}", s.handleRemux))
 		r.Get("/stream/remux/{token}", observeProxy(s.telemetry, http.MethodGet, "/stream/remux/{token}", s.handleRemux))
+		r.Head("/stream/remux/audio-v2/{token}", observeProxy(s.telemetry, http.MethodHead, "/stream/remux/audio-v2/{token}", s.handleAudioV2Remux))
+		r.Get("/stream/remux/audio-v2/{token}", observeProxy(s.telemetry, http.MethodGet, "/stream/remux/audio-v2/{token}", s.handleAudioV2Remux))
 		r.Head("/stream/transcode/{token}/master.m3u8", observeProxy(s.telemetry, http.MethodHead, "/stream/transcode/{token}/master.m3u8", s.handleTranscodeManifest))
 		r.Get("/stream/transcode/{token}/master.m3u8", observeProxy(s.telemetry, http.MethodGet, "/stream/transcode/{token}/master.m3u8", s.handleTranscodeManifest))
 		r.Get("/stream/transcode/{token}/segment/{name}", observeProxy(s.telemetry, http.MethodGet, "/stream/transcode/{token}/segment/{name}", s.handleTranscodeSegment))
@@ -425,7 +427,40 @@ func (s *Server) handleRemux(w http.ResponseWriter, r *http.Request) {
 	if claims == nil {
 		return
 	}
+	// A boosted recipe must use the versioned route below. Keeping it off the
+	// legacy route makes the URL itself part of rolling-upgrade negotiation: a
+	// pre-v2 proxy has no matching endpoint and therefore cannot silently run
+	// the old quiet downmix after a stale capability probe.
+	if claims.PlayMethod == streamtoken.PlayMethodAudioDownmixRemux {
+		http.NotFound(w, r)
+		return
+	}
 	s.serveRemuxClaims(w, r, claims)
+}
+
+func (s *Server) handleAudioV2Remux(w http.ResponseWriter, r *http.Request) {
+	claims := s.verifyToken(w, r)
+	if claims == nil {
+		return
+	}
+	// The endpoint attests the audio_to_aac v2 execution contract, not merely a
+	// second spelling of the legacy route. Reject an ordinary or internally
+	// inconsistent token before FFmpeg opens the source.
+	if !validAudioV2RemuxClaims(claims) {
+		http.NotFound(w, r)
+		return
+	}
+	s.serveRemuxClaims(w, r, claims)
+}
+
+// validAudioV2RemuxClaims proves the complete shape consumed by the proxy's
+// fixed AAC remux path. The versioned URL is not a general remux alias.
+func validAudioV2RemuxClaims(claims *streamtoken.Claims) bool {
+	return claims != nil &&
+		claims.PlayMethod == streamtoken.PlayMethodAudioDownmixRemux &&
+		claims.TranscodeAudio &&
+		playback.IsAudioToAACStereoDownmixV3(claims.SourceAudioChannels, claims.TargetCodecAudio, claims.TargetAudioChannels) &&
+		claims.TargetAudioChannels == 2
 }
 
 // serveRemuxClaims serves a progressive remux from an already-authorized
@@ -453,6 +488,7 @@ func (s *Server) serveRemuxClaims(w http.ResponseWriter, r *http.Request, claims
 		FFmpegPath:                 s.watcher.Config().Playback.FFmpegPath,
 		ContentType:                playback.RemuxContentType(claims.AudioOnly),
 		AudioOnly:                  claims.AudioOnly,
+		SourceAudioChannels:        claims.SourceAudioChannels,
 		TargetAudioChannels:        claims.TargetAudioChannels,
 		TargetAudioBitrateKbps:     claims.TargetAudioBitrateKbps,
 	})

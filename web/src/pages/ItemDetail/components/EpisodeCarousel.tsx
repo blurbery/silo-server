@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { Play, ChevronLeft, ChevronRight } from "lucide-react";
 import type { EpisodeListItem } from "@/api/types";
 import { WatchedCheckIndicator } from "@/components/CardWatchedBadge";
+import { toEpisodeUserState } from "@/components/episodeUserState";
 import { decodeThumbhash } from "@/lib/thumbhash";
 import { cn } from "@/lib/utils";
 import MediaItemMenu from "@/components/MediaItemMenu";
@@ -126,9 +127,9 @@ export default function EpisodeCarousel({
                             </div>
                           )}
                           {progress != null && (
-                            <div className="absolute inset-x-0 bottom-0 h-[3px] bg-black/40">
+                            <div className="absolute inset-x-2 bottom-1.5 h-[3px] overflow-hidden rounded-full bg-black/40">
                               <div
-                                className="h-full rounded-r-sm"
+                                className="h-full rounded-full"
                                 style={{ width: `${progress}%`, background: "var(--primary)" }}
                               />
                             </div>
@@ -138,11 +139,7 @@ export default function EpisodeCarousel({
                       <MediaItemMenu
                         contentId={ep.content_id}
                         mediaType="episode"
-                        userState={{
-                          played: ep.user_data?.played ?? false,
-                          is_favorite: false,
-                          in_watchlist: false,
-                        }}
+                        userState={toEpisodeUserState(ep.user_data)}
                         variant="wide"
                         showCollectionActions={false}
                         showWatchedShortcut
