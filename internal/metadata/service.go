@@ -7670,55 +7670,124 @@ func (s *MetadataService) FetchItemImages(ctx context.Context, providerIDs map[s
 	return allImages, providerErrors, nil
 }
 
-// FetchSeasonImages queries the configured season provider chain and returns
-// only the primary poster reported for the requested season by each provider.
-// The existing plugin image contract cannot request alternate season artwork,
-// but GetSeasons is already scoped to the parent series and preserves season 0
-// for Specials.
+// FetchSeasonImages queries the configured season provider chain for the full
+// artwork gallery of one exact season. Providers must echo SeasonNumber on
+// scoped results, preventing an older plugin that ignores the request field
+// from leaking show artwork into a numbered season. If a provider has not yet
+// adopted the gallery contract, its exact primary poster from GetSeasons is a
+// compatibility fallback. Specials additionally include ordinary show posters
+// after every exact Specials result, giving users a useful fallback when no
+// dedicated Specials artwork exists.
 func (s *MetadataService) FetchSeasonImages(ctx context.Context, providerIDs map[string]string, language string, folderID int, seasonNumber int) ([]RemoteImage, map[string]string, error) {
 	chain, err := s.resolveChainCached(ctx, folderID, "season")
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolving provider chain: %w", err)
 	}
 
-	var images []RemoteImage
+	var exactImages []RemoteImage
+	var specialsFallback []RemoteImage
 	providerErrors := make(map[string]string)
 	seen := make(map[string]struct{})
+	appendPoster := func(target *[]RemoteImage, image RemoteImage) bool {
+		if image.Type != ImagePoster || strings.TrimSpace(image.URL) == "" {
+			return false
+		}
+		if _, duplicate := seen[image.URL]; duplicate {
+			return false
+		}
+		seen[image.URL] = struct{}{}
+		*target = append(*target, image)
+		return true
+	}
 
 	for _, p := range chain {
-		ep, ok := p.(EpisodeProvider)
-		if !ok {
-			continue
+		exactFound := false
+		ip, imageCapable := p.(ImageProvider)
+		if imageCapable {
+			requestedSeason := seasonNumber
+			images, imageErr := ip.GetImages(ctx, ImageRequest{
+				ProviderIDs:  providerIDs,
+				ContentType:  "series",
+				Language:     language,
+				SeasonNumber: &requestedSeason,
+			})
+			if imageErr != nil {
+				slog.WarnContext(ctx, "fetch season images: provider gallery error", "component", "metadata",
+					"provider", p.Slug(), "season", seasonNumber, "error", imageErr)
+				providerErrors[p.Slug()] = imageErr.Error()
+			} else {
+				for _, image := range images {
+					if image.SeasonNumber == nil || *image.SeasonNumber != seasonNumber {
+						continue
+					}
+					if strings.TrimSpace(image.ProviderID) == "" {
+						image.ProviderID = p.Slug()
+					}
+					if appendPoster(&exactImages, image) {
+						exactFound = true
+					}
+				}
+			}
 		}
-		seasons, err := ep.GetSeasons(ctx, SeasonsRequest{
-			ProviderIDs: providerIDs,
-			ContentType: "series",
-			Language:    language,
-		})
-		if err != nil {
-			slog.WarnContext(ctx, "fetch season images: provider error", "component", "metadata",
-				"provider", p.Slug(), "season", seasonNumber, "error", err)
-			providerErrors[p.Slug()] = err.Error()
-			continue
+
+		// Backward-compatible exact primary for providers that do not yet emit
+		// season-scoped gallery records.
+		if !exactFound {
+			if ep, ok := p.(EpisodeProvider); ok {
+				seasons, seasonErr := ep.GetSeasons(ctx, SeasonsRequest{
+					ProviderIDs: providerIDs,
+					ContentType: "series",
+					Language:    language,
+				})
+				if seasonErr != nil {
+					slog.WarnContext(ctx, "fetch season images: provider season error", "component", "metadata",
+						"provider", p.Slug(), "season", seasonNumber, "error", seasonErr)
+					providerErrors[p.Slug()] = seasonErr.Error()
+				} else {
+					for _, season := range seasons {
+						if season.SeasonNumber != seasonNumber || strings.TrimSpace(season.PosterPath) == "" {
+							continue
+						}
+						n := seasonNumber
+						appendPoster(&exactImages, RemoteImage{
+							ProviderID:   p.Slug(),
+							URL:          season.PosterPath,
+							Type:         ImagePoster,
+							SeasonNumber: &n,
+						})
+						break
+					}
+				}
+			}
 		}
-		for _, season := range seasons {
-			if season.SeasonNumber != seasonNumber || season.PosterPath == "" {
+
+		if seasonNumber == 0 && imageCapable {
+			images, imageErr := ip.GetImages(ctx, ImageRequest{
+				ProviderIDs: providerIDs,
+				ContentType: "series",
+				Language:    language,
+			})
+			if imageErr != nil {
+				slog.WarnContext(ctx, "fetch season images: Specials show fallback error", "component", "metadata",
+					"provider", p.Slug(), "error", imageErr)
+				providerErrors[p.Slug()] = imageErr.Error()
 				continue
 			}
-			if _, duplicate := seen[season.PosterPath]; duplicate {
-				break
+			for _, image := range images {
+				if image.SeasonNumber != nil {
+					continue
+				}
+				if strings.TrimSpace(image.ProviderID) == "" {
+					image.ProviderID = p.Slug()
+				}
+				appendPoster(&specialsFallback, image)
 			}
-			seen[season.PosterPath] = struct{}{}
-			images = append(images, RemoteImage{
-				ProviderID: p.Slug(),
-				URL:        season.PosterPath,
-				Type:       ImagePoster,
-			})
-			break
 		}
 	}
 
-	return images, providerErrors, nil
+	sort.SliceStable(exactImages, func(i, j int) bool { return exactImages[i].Rating > exactImages[j].Rating })
+	sort.SliceStable(specialsFallback, func(i, j int) bool { return specialsFallback[i].Rating > specialsFallback[j].Rating })
+	return append(exactImages, specialsFallback...), providerErrors, nil
 }
 
 // ApplyItemImage downloads a single image, caches it to S3, and returns
