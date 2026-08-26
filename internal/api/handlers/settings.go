@@ -1203,7 +1203,11 @@ func (h *SettingsHandler) resolveEffectiveSetting(
 
 const retiredWebWatchedIndicatorStyle = "none"
 
-const defaultCardQuickActionMode = "both"
+const (
+	defaultCardQuickActionMode   = "both"
+	cardQuickActionModeFavorites = calendarFilterFavorites
+	cardQuickActionModeWatched   = "watched"
+)
 
 // overlayConfigResponse is returned by GET /settings/overlay-config.
 type overlayConfigResponse struct {
@@ -1237,7 +1241,7 @@ func (h *SettingsHandler) HandleGetOverlayConfig(w http.ResponseWriter, r *http.
 			resp.QuickActionsEnabled = false
 		}
 		switch v, _ := h.serverSettings.Get(r.Context(), "defaults.card_quick_actions"); v {
-		case defaultCardQuickActionMode, "favorites", "watched":
+		case defaultCardQuickActionMode, cardQuickActionModeFavorites, cardQuickActionModeWatched:
 			resp.QuickActionsDefault = v
 		}
 	}
