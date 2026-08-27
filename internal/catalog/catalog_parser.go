@@ -408,7 +408,7 @@ func parseCatalogMediaScope(raw string) string {
 
 func defaultCatalogQuerySort(searchQuery string) QuerySort {
 	if strings.TrimSpace(searchQuery) != "" {
-		return QuerySort{Field: "relevance", Order: "desc"}
+		return QuerySort{Field: relevanceSortField, Order: "desc"}
 	}
 	return QuerySort{Field: "title", Order: "asc"}
 }
@@ -417,7 +417,7 @@ func normalizeExplicitCatalogSort(field, order string) QuerySort {
 	normalizedField := strings.ToLower(strings.TrimSpace(field))
 	normalizedOrder := strings.ToLower(strings.TrimSpace(order))
 
-	if normalizedField == "relevance" {
+	if normalizedField == relevanceSortField {
 		if normalizedOrder == "" {
 			normalizedOrder = "desc"
 		}

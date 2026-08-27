@@ -265,7 +265,7 @@ func (r *CatalogResolver) resolveQuerySource(ctx context.Context, req CatalogReq
 		return nil, err
 	}
 
-	if NormalizeQuerySort(req.Query.Sort).Field == "relevance" {
+	if NormalizeQuerySort(req.Query.Sort).Field == relevanceSortField {
 		items = filterCatalogSearchItems(items, req.SearchQuery)
 		items = filterCatalogNamePrefix(items, req.NamePrefix)
 		items = filterCatalogItems(items, req.Query)
@@ -1449,7 +1449,7 @@ func validateCatalogOverlayQuery(searchQuery string, def QueryDefinition, ruleFi
 	if def.Sort.Order != "" && def.Sort.Order != "asc" && def.Sort.Order != "desc" {
 		return fmt.Errorf("%w: sort.order must be 'asc' or 'desc'", ErrInvalidCatalogRequest)
 	}
-	if def.Sort.Field == "relevance" {
+	if def.Sort.Field == relevanceSortField {
 		if !allowRelevance {
 			return fmt.Errorf("%w: relevance sort is only supported for query source", ErrInvalidCatalogRequest)
 		}
@@ -1564,7 +1564,7 @@ func useDirectSearchPath(req CatalogRequest) bool {
 	if len(req.Query.Groups) > 0 || requiresAdvancedQueryExecution(req.Query) {
 		return false
 	}
-	return req.Query.Sort.Field == "relevance" && req.Query.Sort.Order == "desc"
+	return req.Query.Sort.Field == relevanceSortField && req.Query.Sort.Order == "desc"
 }
 
 type catalogPageSection struct {
