@@ -903,13 +903,14 @@ func TestHandleStartPlaybackV3ReturnsExecutableDirectPlan(t *testing.T) {
 
 func TestHandleStartPlaybackV3NegotiatesHeaderAuthenticatedDirectAndSubtitleURLs(t *testing.T) {
 	for _, test := range []struct {
-		name         string
-		optIn        bool
-		appleBuild31 bool
-		wantStream   bool
+		name                 string
+		optIn                bool
+		appleBuild31         bool
+		wantStream           bool
+		wantCapabilityHeader bool
 	}{
 		{name: "opted-in URLs carry no playback credential", optIn: true},
-		{name: "tvOS build 31 uses a session-bound playback credential", optIn: true, appleBuild31: true, wantStream: true},
+		{name: "Apple build 31 uses a session-bound header credential", optIn: true, appleBuild31: true, wantCapabilityHeader: true},
 		{name: "legacy URL keeps restart token", wantStream: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -951,8 +952,18 @@ func TestHandleStartPlaybackV3NegotiatesHeaderAuthenticatedDirectAndSubtitleURLs
 			if got := streamURL.Query().Get(streamTokenParam); (got != "") != test.wantStream {
 				t.Fatalf("stream token present = %v for URL %q, want %v", got != "", response.PlaybackPlan.Stream.URL, test.wantStream)
 			}
-			if len(response.PlaybackPlan.Stream.Headers) != 0 {
+			capability := response.PlaybackPlan.Stream.Headers[streamtoken.Header]
+			if (capability != "") != test.wantCapabilityHeader {
+				t.Fatalf("session capability header present = %v, want %v", capability != "", test.wantCapabilityHeader)
+			}
+			if _, ok := response.PlaybackPlan.Stream.Headers["Authorization"]; ok {
 				t.Fatalf("plan persisted bearer material in headers: %#v", response.PlaybackPlan.Stream.Headers)
+			}
+			if capability != "" {
+				claims, verifyErr := streamtoken.Verify(capability, handler.JWTSecret)
+				if verifyErr != nil || claims.SessionID != response.SessionID || claims.MediaFileID != file.ID {
+					t.Fatalf("session capability claims = %#v, err = %v", claims, verifyErr)
+				}
 			}
 
 			artifact := response.PlaybackPlan.Subtitle.Artifact
@@ -973,7 +984,7 @@ func TestHandleStartPlaybackV3NegotiatesHeaderAuthenticatedDirectAndSubtitleURLs
 	}
 }
 
-func TestMediaAuthModeForStartV3AppliesOnlyToAffectedTVOSClient(t *testing.T) {
+func TestMediaAuthModeForStartV3AppliesOnlyToAffectedAppleClient(t *testing.T) {
 	base := playback.StartRequestV3{
 		ClientFeatures: []string{
 			playback.FeatureHeaderAuthenticatedMediaV3,
@@ -991,29 +1002,42 @@ func TestMediaAuthModeForStartV3AppliesOnlyToAffectedTVOSClient(t *testing.T) {
 	for _, test := range []struct {
 		name           string
 		mutate         func(*playback.StartRequestV3)
-		wantHeaderAuth bool
+		wantCapability bool
 	}{
-		{name: "tvOS build 31 uses session capability"},
+		{name: "tvOS build 31 uses session capability", wantCapability: true},
+		{
+			name: "iOS build 31 uses session capability",
+			mutate: func(req *playback.StartRequestV3) {
+				req.ClientPlaybackContext.Device.Platform = "ios"
+				req.ClientPlaybackContext.FormFactor = "mobile"
+			},
+			wantCapability: true,
+		},
+		{
+			name: "macOS build 31 uses session capability",
+			mutate: func(req *playback.StartRequestV3) {
+				req.ClientPlaybackContext.Device.Platform = "macos"
+				req.ClientPlaybackContext.FormFactor = "desktop"
+			},
+			wantCapability: true,
+		},
 		{
 			name: "later tvOS build keeps header authentication",
 			mutate: func(req *playback.StartRequestV3) {
 				req.ClientPlaybackContext.AppBuild = "32"
 			},
-			wantHeaderAuth: true,
 		},
 		{
 			name: "client without device quirks keeps header authentication",
 			mutate: func(req *playback.StartRequestV3) {
 				req.ClientFeatures = []string{playback.FeatureHeaderAuthenticatedMediaV3}
 			},
-			wantHeaderAuth: true,
 		},
 		{
-			name: "non tvOS client keeps header authentication",
+			name: "non Apple client keeps header authentication",
 			mutate: func(req *playback.StartRequestV3) {
 				req.ClientPlaybackContext.Device.Platform = "android"
 			},
-			wantHeaderAuth: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1022,8 +1046,15 @@ func TestMediaAuthModeForStartV3AppliesOnlyToAffectedTVOSClient(t *testing.T) {
 			if test.mutate != nil {
 				test.mutate(&req)
 			}
-			if got := mediaAuthModeForStartV3(req); got.headerAuth != test.wantHeaderAuth {
-				t.Fatalf("headerAuth = %t, want %t", got.headerAuth, test.wantHeaderAuth)
+			got := mediaAuthModeForStartV3(req)
+			if !got.headerAuth {
+				t.Fatal("header-authenticated media contract was disabled")
+			}
+			if got.sessionHeaderCapability != test.wantCapability {
+				t.Fatalf("sessionHeaderCapability = %t, want %t", got.sessionHeaderCapability, test.wantCapability)
+			}
+			if got.sessionHeaderCapability && got.proxyEgress {
+				t.Fatal("session header capability must keep media on the API origin")
 			}
 		})
 	}

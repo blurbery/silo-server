@@ -55,14 +55,33 @@ func TestRequireTransportAuthUsesSessionBoundCapabilityWhenAccessTokenExpired(t 
 	router.With(middleware.RequireTransportAuth(secret)).Get("/stream/{session_id}", handler)
 	router.With(middleware.RequireTransportAuth(secret)).Head("/stream/{session_id}", handler)
 
-	for _, method := range []string{http.MethodGet, http.MethodHead} {
-		req := httptest.NewRequest(method, "/stream/playback-1?"+streamtoken.QueryParameter+"="+url.QueryEscape(token), nil)
-		req.Header.Set("Authorization", "Bearer expired-access-token")
-		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, req)
+	for _, carrier := range []struct {
+		name  string
+		apply func(*http.Request)
+	}{
+		{
+			name: "query",
+			apply: func(req *http.Request) {
+				req.URL.RawQuery = streamtoken.QueryParameter + "=" + url.QueryEscape(token)
+			},
+		},
+		{
+			name: "header",
+			apply: func(req *http.Request) {
+				req.Header.Set(streamtoken.Header, token)
+			},
+		},
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			req := httptest.NewRequest(method, "/stream/playback-1", nil)
+			carrier.apply(req)
+			req.Header.Set("Authorization", "Bearer expired-access-token")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusNoContent {
-			t.Fatalf("%s status = %d, body = %s", method, rec.Code, rec.Body.String())
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("%s %s status = %d, body = %s", carrier.name, method, rec.Code, rec.Body.String())
+			}
 		}
 	}
 	if validator.calls != 0 {

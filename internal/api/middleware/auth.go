@@ -172,6 +172,9 @@ func (am *AuthMiddleware) RequireTransportAuth(secret string) func(http.Handler)
 		regularAuth := am.RequireAuth(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := r.URL.Query().Get(streamtoken.QueryParameter)
+			if token == "" {
+				token = r.Header.Get(streamtoken.Header)
+			}
 			sessionID := chi.URLParam(r, "session_id")
 			if secret != "" && token != "" {
 				claims, err := streamtoken.Verify(token, secret)
