@@ -903,11 +903,13 @@ func TestHandleStartPlaybackV3ReturnsExecutableDirectPlan(t *testing.T) {
 
 func TestHandleStartPlaybackV3NegotiatesHeaderAuthenticatedDirectAndSubtitleURLs(t *testing.T) {
 	for _, test := range []struct {
-		name       string
-		optIn      bool
-		wantStream bool
+		name         string
+		optIn        bool
+		appleBuild31 bool
+		wantStream   bool
 	}{
 		{name: "opted-in URLs carry no playback credential", optIn: true},
+		{name: "tvOS build 31 uses a session-bound playback credential", optIn: true, appleBuild31: true, wantStream: true},
 		{name: "legacy URL keeps restart token", wantStream: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -922,6 +924,12 @@ func TestHandleStartPlaybackV3NegotiatesHeaderAuthenticatedDirectAndSubtitleURLs
 			start := v3HandlerStartRequest()
 			if test.optIn {
 				start.ClientFeatures = append(start.ClientFeatures, playback.FeatureHeaderAuthenticatedMediaV3)
+			}
+			if test.appleBuild31 {
+				start.ClientFeatures = append(start.ClientFeatures, playback.FeatureDeviceQuirksV3)
+				start.ClientPlaybackContext.FormFactor = "tv"
+				start.ClientPlaybackContext.AppBuild = "31"
+				start.ClientPlaybackContext.Device.Platform = "tvos"
 			}
 			subtitleIndex := 0
 			start.SubtitleTrackID = playback.TrackIDV3(file.ID, "subtitle", subtitleIndex)
@@ -960,6 +968,62 @@ func TestHandleStartPlaybackV3NegotiatesHeaderAuthenticatedDirectAndSubtitleURLs
 			}
 			if test.optIn && !playback.HasFeatureV3(response.ServerFeatures, playback.FeatureHeaderAuthenticatedMediaV3) {
 				t.Fatalf("server features = %v, want %q", response.ServerFeatures, playback.FeatureHeaderAuthenticatedMediaV3)
+			}
+		})
+	}
+}
+
+func TestMediaAuthModeForStartV3AppliesOnlyToAffectedTVOSClient(t *testing.T) {
+	base := playback.StartRequestV3{
+		ClientFeatures: []string{
+			playback.FeatureHeaderAuthenticatedMediaV3,
+			playback.FeatureDeviceQuirksV3,
+		},
+		ClientPlaybackContext: playback.ClientPlaybackContextV3{
+			FormFactor: "tv",
+			AppBuild:   "31",
+			Device: playback.DeviceContextV3{
+				Platform: "tvos",
+			},
+		},
+	}
+
+	for _, test := range []struct {
+		name           string
+		mutate         func(*playback.StartRequestV3)
+		wantHeaderAuth bool
+	}{
+		{name: "tvOS build 31 uses session capability"},
+		{
+			name: "later tvOS build keeps header authentication",
+			mutate: func(req *playback.StartRequestV3) {
+				req.ClientPlaybackContext.AppBuild = "32"
+			},
+			wantHeaderAuth: true,
+		},
+		{
+			name: "client without device quirks keeps header authentication",
+			mutate: func(req *playback.StartRequestV3) {
+				req.ClientFeatures = []string{playback.FeatureHeaderAuthenticatedMediaV3}
+			},
+			wantHeaderAuth: true,
+		},
+		{
+			name: "non tvOS client keeps header authentication",
+			mutate: func(req *playback.StartRequestV3) {
+				req.ClientPlaybackContext.Device.Platform = "android"
+			},
+			wantHeaderAuth: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			req := base
+			req.ClientFeatures = append([]string(nil), base.ClientFeatures...)
+			if test.mutate != nil {
+				test.mutate(&req)
+			}
+			if got := mediaAuthModeForStartV3(req); got.headerAuth != test.wantHeaderAuth {
+				t.Fatalf("headerAuth = %t, want %t", got.headerAuth, test.wantHeaderAuth)
 			}
 		})
 	}

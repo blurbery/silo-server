@@ -183,6 +183,26 @@ func headerAuthenticatedMediaV3(clientFeatures []string) mediaAuthModeV3 {
 	}
 }
 
+// mediaAuthModeForStartV3 keeps tvOS build 31 media requests independent of the
+// short-lived access token. Its API client refreshes normally, but AetherEngine
+// snapshots HTTP headers when an item loads and reuses them for range reads and
+// internal reloads. An automatic episode transition can therefore retain the
+// old bearer and begin receiving 401s while buffered playback continues. A
+// session-bound transport capability preserves the selected playback route and
+// is accepted before any stale Authorization header.
+func mediaAuthModeForStartV3(req playback.StartRequestV3) mediaAuthModeV3 {
+	mode := headerAuthenticatedMediaV3(req.ClientFeatures)
+	ctx := req.ClientPlaybackContext
+	if mode.headerAuth &&
+		playback.HasFeatureV3(req.ClientFeatures, playback.FeatureDeviceQuirksV3) &&
+		strings.EqualFold(ctx.Device.Platform, "tvos") &&
+		strings.EqualFold(ctx.FormFactor, "tv") &&
+		strings.TrimSpace(ctx.AppBuild) == "31" {
+		return mediaAuthModeV3{}
+	}
+	return mode
+}
+
 // recipeCardStoreV3 is the shared control-plane store central hands a recipe
 // card to another Silo process through (*noderecipe.Store). One instance owns
 // one key space; the handler holds two of them, and what a stored card
@@ -1174,7 +1194,7 @@ func (h *PlaybackHandler) handleStartPlaybackV3(w http.ResponseWriter, r *http.R
 	}
 	// A refused progressive remux is escalated before the decision is logged or
 	// a session is opened, so the logged route is the one that will actually run.
-	escalated, escalateErr := h.escalateRefusedProgressiveRemuxV3(r.Context(), headerAuthenticatedMediaV3(req.ClientFeatures),
+	escalated, escalateErr := h.escalateRefusedProgressiveRemuxV3(r.Context(), mediaAuthModeForStartV3(req),
 		func() playback.PlannerInputV3 {
 			return h.plannerInputV3(r.Context(), req, requestedFile, effectiveFile, audioIndex, nil)
 		}, result)
@@ -1341,7 +1361,7 @@ func (h *PlaybackHandler) startPlannedPlaybackV3(r *http.Request, userID int, pr
 	if result.Plan == nil {
 		return playback.DecisionResponseV3{}, &transportErrorV3{reason: "internal_error", message: "The server produced no playback plan."}
 	}
-	mode := headerAuthenticatedMediaV3(req.ClientFeatures)
+	mode := mediaAuthModeForStartV3(req)
 	if checker, ok := h.sessionMgr.(transcodePermissionChecker); ok && (result.PlayMethod == playback.PlayTranscode || result.TranscodeAudio) {
 		if err := checker.CheckTranscodingAllowed(r.Context(), userID, result.PlayMethod == playback.PlayTranscode); err != nil {
 			reason := "transcoding_disabled"
@@ -3763,7 +3783,7 @@ func (h *PlaybackHandler) executeReplanV3(r *http.Request, record *playback.Atte
 	// Media authentication is attempt-sticky (pinned in HandleReplanPlaybackV3),
 	// so this mode always equals the one the attempt started under: a reused
 	// transport cannot change the session's media security contract.
-	mode := headerAuthenticatedMediaV3(start.ClientFeatures)
+	mode := mediaAuthModeForStartV3(start)
 	if !seekReanchor {
 		// A freshly planned replan can land on the same refused progressive
 		// remux a start would have; escalate it identically. A seek reanchor
