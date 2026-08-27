@@ -142,6 +142,51 @@ func TestSendCurrentMarkerSnapshotLoadsPersistedSharedMarkers(t *testing.T) {
 	}
 }
 
+func TestHandleRealtimeClientMessageRequestsMarkerSnapshotOncePerConnection(t *testing.T) {
+	sessionMgr := playback.NewSessionManager(0, 0)
+	session, err := sessionMgr.StartSession(1, "profile-1", 100, playback.PlayDirect, false)
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	handler := NewPlaybackHandler(sessionMgr)
+	hello, err := json.Marshal(playback.HelloEnvelope{
+		Type:      playback.RealtimeMessageTypeHello,
+		SessionID: session.ID,
+		Client: playback.HelloClientInfo{
+			Name:    "ios",
+			Version: "1.0.0",
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(hello): %v", err)
+	}
+
+	helloReceived := false
+	sendMarkerSnapshot, err := handler.handleRealtimeClientMessage(session.ID, hello, &helloReceived)
+	if err != nil {
+		t.Fatalf("first hello: %v", err)
+	}
+	if !sendMarkerSnapshot {
+		t.Fatal("initial hello did not request a marker snapshot")
+	}
+	sendMarkerSnapshot, err = handler.handleRealtimeClientMessage(session.ID, hello, &helloReceived)
+	if err != nil {
+		t.Fatalf("second hello: %v", err)
+	}
+	if sendMarkerSnapshot {
+		t.Fatal("repeated hello requested a second marker snapshot")
+	}
+
+	replacementHelloReceived := false
+	sendMarkerSnapshot, err = handler.handleRealtimeClientMessage(session.ID, hello, &replacementHelloReceived)
+	if err != nil {
+		t.Fatalf("replacement connection hello: %v", err)
+	}
+	if !sendMarkerSnapshot {
+		t.Fatal("replacement connection did not request a fresh marker snapshot")
+	}
+}
+
 func waitForTelemetryRealtimeState(t *testing.T, registry *streamtelemetry.Registry, sessionID string, want bool) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
