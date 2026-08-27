@@ -8,7 +8,10 @@ import (
 	"strings"
 )
 
-const defaultSortField = "added_at"
+const (
+	defaultSortField = "added_at"
+	randomSortField  = "random"
+)
 
 type queryFieldDef struct {
 	columnSQL    string
@@ -221,7 +224,7 @@ func NormalizePersonalSourceSort(field, order string) (QuerySort, bool) {
 	field = strings.ToLower(strings.TrimSpace(field))
 	// Relevance needs a live search query and random is not stable, so neither
 	// is meaningful as a persisted preference if they join the general set.
-	if field == "relevance" || field == "random" || !QuerySortFieldSet(false)[field] {
+	if field == "relevance" || field == randomSortField || !QuerySortFieldSet(false)[field] {
 		return QuerySort{}, false
 	}
 	order = strings.ToLower(strings.TrimSpace(order))

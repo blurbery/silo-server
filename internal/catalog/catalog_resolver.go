@@ -413,8 +413,8 @@ func (r *CatalogResolver) resolveSectionSource(ctx context.Context, req CatalogR
 		return r.resolveSectionBrowseSource(ctx, req, access, section, "added_at", "desc")
 	case "recently_released":
 		return r.resolveSectionBrowseSource(ctx, req, access, section, "release_date", "desc")
-	case "random":
-		return r.resolveSectionBrowseSource(ctx, req, access, section, "random", "desc")
+	case randomSortField:
+		return r.resolveSectionBrowseSource(ctx, req, access, section, randomSortField, "desc")
 	case "genre", "custom_filter":
 		def, err := parseCatalogSectionQueryDefinition(section.Config)
 		if err != nil {

@@ -1512,7 +1512,7 @@ func buildOrderByPlan(sort, order string, snapshot *time.Time, argIdx int, singl
 	// OFFSET-based pagination is deterministic when many rows share the
 	// same sort value (e.g. same IMDB rating or NULL).
 	switch sort {
-	case "random":
+	case randomSortField:
 		if snapshot != nil && argIdx > 0 {
 			return fmt.Sprintf("ORDER BY md5(mi.content_id || $%d::text) ASC, mi.content_id ASC", argIdx), []any{snapshot.UTC().Format(time.RFC3339Nano)}
 		}
