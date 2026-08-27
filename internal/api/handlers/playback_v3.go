@@ -51,6 +51,9 @@ const (
 	transcodeStartFailedReasonV3 = "transcode_start_failed"
 	seekRestorationPlayerV3      = "player_position"
 	outputRouteChangedReasonV3   = "output_route_changed"
+	applePlatformIOSV3           = "ios"
+	applePlatformTVOSV3          = "tvos"
+	applePlatformMacOSV3         = "macos"
 	// Failed capability fetches are memoized briefly so an unreachable node
 	// costs one timeout per window instead of one per planning request.
 	v3NodeCapabilityErrorTTL = 15 * time.Second
@@ -202,7 +205,7 @@ func mediaAuthModeForStartV3(req playback.StartRequestV3) mediaAuthModeV3 {
 	mode := headerAuthenticatedMediaV3(req.ClientFeatures)
 	ctx := req.ClientPlaybackContext
 	platform := strings.ToLower(strings.TrimSpace(ctx.Device.Platform))
-	isApplePlatform := platform == "ios" || platform == "tvos" || platform == "macos"
+	isApplePlatform := platform == applePlatformIOSV3 || platform == applePlatformTVOSV3 || platform == applePlatformMacOSV3
 	if mode.headerAuth &&
 		playback.HasFeatureV3(req.ClientFeatures, playback.FeatureDeviceQuirksV3) &&
 		isApplePlatform &&
