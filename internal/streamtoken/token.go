@@ -12,6 +12,10 @@ const (
 	// the name here lets the API auth middleware and serve handlers agree without
 	// either package depending on the other.
 	QueryParameter = "st"
+	// Header carries the same session-bound capability when a client must keep
+	// credentials out of media URLs but cannot refresh a bearer captured by its
+	// media engine. It is checked before ordinary Authorization fallback.
+	Header = "X-Silo-Stream-Token"
 	// PlayMethodDownload identifies a token minted only after the API has
 	// authorized a file download. Proxy download routes reject playback tokens.
 	PlayMethodDownload = "download"
