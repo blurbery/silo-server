@@ -9,9 +9,11 @@ import (
 )
 
 const (
-	defaultSortField   = "added_at"
-	randomSortField    = "random"
-	relevanceSortField = "relevance"
+	ascendingSortOrder  = "asc"
+	defaultSortField    = "added_at"
+	descendingSortOrder = "desc"
+	randomSortField     = "random"
+	relevanceSortField  = "relevance"
 )
 
 type queryFieldDef struct {
@@ -231,7 +233,7 @@ func NormalizePersonalSourceSort(field, order string) (QuerySort, bool) {
 	order = strings.ToLower(strings.TrimSpace(order))
 	if order == "" {
 		order = querySortDefs[field].defaultOrder
-	} else if order != "asc" && order != "desc" {
+	} else if order != ascendingSortOrder && order != descendingSortOrder {
 		return QuerySort{}, false
 	}
 	return QuerySort{Field: field, Order: order}, true

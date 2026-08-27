@@ -414,7 +414,7 @@ func (r *CatalogResolver) resolveSectionSource(ctx context.Context, req CatalogR
 	case "recently_released":
 		return r.resolveSectionBrowseSource(ctx, req, access, section, "release_date", "desc")
 	case randomSortField:
-		return r.resolveSectionBrowseSource(ctx, req, access, section, randomSortField, "desc")
+		return r.resolveSectionBrowseSource(ctx, req, access, section, randomSortField, descendingSortOrder)
 	case "genre", "custom_filter":
 		def, err := parseCatalogSectionQueryDefinition(section.Config)
 		if err != nil {
@@ -1564,7 +1564,7 @@ func useDirectSearchPath(req CatalogRequest) bool {
 	if len(req.Query.Groups) > 0 || requiresAdvancedQueryExecution(req.Query) {
 		return false
 	}
-	return req.Query.Sort.Field == relevanceSortField && req.Query.Sort.Order == "desc"
+	return req.Query.Sort.Field == relevanceSortField && req.Query.Sort.Order == descendingSortOrder
 }
 
 type catalogPageSection struct {
