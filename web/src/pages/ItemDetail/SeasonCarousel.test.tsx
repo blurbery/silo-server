@@ -6,6 +6,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { Season } from "@/api/types";
 import SeasonCarousel from "./SeasonCarousel";
 
+vi.mock("@/components/CardPlayOverlay", () => ({
+  default: ({ contentId, title }: { contentId: string; title: string }) => (
+    <a href={`/watch/${contentId}`} aria-label={`Play ${title}`} />
+  ),
+}));
+
 const prefetchSeason = vi.hoisted(() => vi.fn());
 
 vi.mock("@/hooks/queries/catalogRead", () => ({
@@ -57,6 +63,20 @@ describe("SeasonCarousel", () => {
     expect(markup).toContain("overflow-hidden");
     expect(markup).not.toContain('data-slot="scroll-area"');
     expect(markup).not.toContain('data-slot="scroll-area-scrollbar"');
+  });
+
+  it("renders independent season detail and direct-play targets", () => {
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter>
+          <SeasonCarousel seasons={[makeSeason({ play_content_id: "episode-2" })]} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain('href="/item/season-1"');
+    expect(markup).toContain('href="/watch/episode-2"');
+    expect(markup).toContain('aria-label="Play Season 1"');
   });
 
   it("does not prefetch seasons during a fast pointer sweep", () => {

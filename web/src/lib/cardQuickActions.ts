@@ -1,3 +1,8 @@
+import { SETTING_DEFINITIONS, SETTING_KEYS } from "@/lib/settingsContract";
+
+// Hand-written only because the generated definition types its enum members as
+// unknown, which cannot produce the literal union the card props need; the test
+// pins this list to the contract.
 export const CARD_QUICK_ACTION_MODES = ["both", "favorites", "watched"] as const;
 
 export type EnabledCardQuickActionMode = (typeof CARD_QUICK_ACTION_MODES)[number];
@@ -6,11 +11,10 @@ export type CardQuickActionMode = EnabledCardQuickActionMode | "none";
 export const CARD_QUICK_ACTION_OPTIONS: ReadonlyArray<{
   value: EnabledCardQuickActionMode;
   label: string;
-}> = [
-  { value: "both", label: "Both" },
-  { value: "favorites", label: "Favorites only" },
-  { value: "watched", label: "Watch indicator only" },
-];
+}> = (SETTING_DEFINITIONS[SETTING_KEYS.UI_CARD_QUICK_ACTIONS].values ?? []).map((member) => ({
+  value: member.value as EnabledCardQuickActionMode,
+  label: member.label,
+}));
 
 export function normalizeCardQuickActionMode(
   value: unknown,

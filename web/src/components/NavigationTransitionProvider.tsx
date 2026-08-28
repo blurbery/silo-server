@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, type ReactNode } from "react";
-import { useLocation, useNavigate, type To } from "react-router";
+import { useLocation, useNavigate, useNavigationType, type To } from "react-router";
 import { createPath, resolvePath } from "react-router";
 import {
   NavigationTransitionContext,
@@ -11,6 +11,8 @@ import {
 import {
   isExpectedNavigationCommit,
   MAX_TRACKED_HISTORY_PATHS,
+  NAVIGATION_COMMIT_FALLBACK_MS,
+  NAVIGATION_HISTORY_PATHS_STORAGE_KEY,
   pruneNavigationHistory,
 } from "@/lib/backNavigation";
 import { SIDEBAR_RAIL_WIDTH, SIDEBAR_SURFACE_WIDTH } from "@/components/AppSidebar.logic";
@@ -24,6 +26,7 @@ interface PendingCommit {
   sourceLocationKey: string;
   destinationPath: string | null;
   navigationSequence: number;
+  acceptDestinationMismatch: boolean;
   resolve: () => void;
   timeout: number;
 }
@@ -32,8 +35,10 @@ interface PendingMainStageMotion {
   sourceLocationKey: string;
   destinationPath: string | null;
   navigationSequence: number;
+  acceptDestinationMismatch: boolean;
   direction: NavigationTransitionDirection;
   token: string;
+  timeout: number;
 }
 
 interface ActiveMainStageMotion {
@@ -47,8 +52,6 @@ interface ViewTransitionHandle {
 }
 
 type StartViewTransition = (update: () => void | Promise<void>) => ViewTransitionHandle;
-
-const COMMIT_FALLBACK_MS = 2_000;
 
 interface LocationSnapshot {
   pathname: string;
@@ -68,7 +71,6 @@ interface NavigationHistorySession {
 }
 
 const HISTORY_SESSION_STATE_KEY = "__siloNavigationSession";
-const HISTORY_PATHS_STORAGE_KEY = "silo:navigation-history-paths:v1";
 
 function browserHistoryState(): Record<string, unknown> {
   const state = window.history.state;
@@ -86,7 +88,7 @@ function restoreNavigationHistory(): NavigationHistorySession {
   }
 
   try {
-    const raw = window.sessionStorage.getItem(HISTORY_PATHS_STORAGE_KEY);
+    const raw = window.sessionStorage.getItem(NAVIGATION_HISTORY_PATHS_STORAGE_KEY);
     const stored = raw ? (JSON.parse(raw) as Partial<StoredNavigationHistory>) : null;
     if (stored?.sessionId !== stateSessionId || !Array.isArray(stored.paths)) {
       return { sessionId: stateSessionId, paths: new Map() };
@@ -107,13 +109,12 @@ function restoreNavigationHistory(): NavigationHistorySession {
 function persistNavigationHistory(session: NavigationHistorySession, currentIndex: number): void {
   try {
     const paths: Array<[number, string]> = [];
-    const firstRetainedIndex = Math.max(0, currentIndex - (MAX_TRACKED_HISTORY_PATHS - 1));
-    for (let index = firstRetainedIndex; index <= currentIndex; index += 1) {
-      const path = session.paths.get(index);
-      if (path != null) paths.push([index, path]);
+    pruneNavigationHistory(session.paths, currentIndex);
+    for (const entry of [...session.paths.entries()].sort(([left], [right]) => left - right)) {
+      paths.push(entry);
     }
     window.sessionStorage.setItem(
-      HISTORY_PATHS_STORAGE_KEY,
+      NAVIGATION_HISTORY_PATHS_STORAGE_KEY,
       JSON.stringify({ sessionId: session.sessionId, paths } satisfies StoredNavigationHistory),
     );
   } catch {
@@ -227,6 +228,7 @@ function finishMainStageMotion(token: string): void {
 export default function NavigationTransitionProvider({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
+  const navigationType = useNavigationType();
   const locationRef = useRef<LocationSnapshot>(location);
   const pendingCommitRef = useRef<PendingCommit | null>(null);
   const activeTransitionRef = useRef<ViewTransitionHandle | null>(null);
@@ -261,8 +263,7 @@ export default function NavigationTransitionProvider({ children }: { children: R
       }
 
       const currentPath = createPath(location);
-      const previouslyTrackedPath = navigationHistory.paths.get(historyIndex);
-      if (previouslyTrackedPath != null && previouslyTrackedPath !== currentPath) {
+      if (navigationType === "PUSH") {
         for (const index of navigationHistory.paths.keys()) {
           if (index >= historyIndex) navigationHistory.paths.delete(index);
         }
@@ -273,45 +274,66 @@ export default function NavigationTransitionProvider({ children }: { children: R
     }
 
     const pendingMainStageMotion = pendingMainStageMotionRef.current;
-    if (
-      pendingMainStageMotion &&
-      isExpectedNavigationCommit(
+    if (pendingMainStageMotion) {
+      const committedExpectedDestination = isExpectedNavigationCommit(
         pendingMainStageMotion.destinationPath,
         pendingMainStageMotion.navigationSequence,
         navigationSequenceRef.current,
         pendingMainStageMotion.sourceLocationKey,
         location.key,
         createPath(location),
-      )
-    ) {
-      pendingMainStageMotionRef.current = null;
-      if (activeMainStageAnimationRef.current) {
-        activeMainStageAnimationRef.current.animation.cancel();
-        finishMainStageMotion(activeMainStageAnimationRef.current.token);
-      }
-      const animation = startMainStageMotion(pendingMainStageMotion.direction);
-      const activeMotion = animation ? { animation, token: pendingMainStageMotion.token } : null;
-      activeMainStageAnimationRef.current = activeMotion;
-      if (animation) {
-        void animation.finished
-          .catch(() => undefined)
-          .finally(() => {
-            if (activeMainStageAnimationRef.current === activeMotion) {
-              // `fill: both` exposes the incoming offset before the first
-              // paint. Once finished, cancel the inert effect so normal page
-              // scrolling does not retain a route-sized animation layer.
-              animation.cancel();
-              activeMainStageAnimationRef.current = null;
-              finishMainStageMotion(pendingMainStageMotion.token);
-            }
-          });
-      } else {
+      );
+      const committedHistoryDestination =
+        pendingMainStageMotion.acceptDestinationMismatch &&
+        isExpectedNavigationCommit(
+          pendingMainStageMotion.destinationPath,
+          pendingMainStageMotion.navigationSequence,
+          navigationSequenceRef.current,
+          pendingMainStageMotion.sourceLocationKey,
+          location.key,
+          createPath(location),
+          true,
+        );
+
+      if (committedHistoryDestination && !committedExpectedDestination) {
+        window.clearTimeout(pendingMainStageMotion.timeout);
+        pendingMainStageMotionRef.current = null;
+        // A native POP can legitimately land somewhere other than the logical
+        // fallback (for example after a reload or restricted sessionStorage).
+        // Never hold the committed page hidden while waiting for a route that
+        // the browser did not choose, and do not animate a guessed direction.
         finishMainStageMotion(pendingMainStageMotion.token);
+      } else if (committedExpectedDestination) {
+        window.clearTimeout(pendingMainStageMotion.timeout);
+        pendingMainStageMotionRef.current = null;
+        if (activeMainStageAnimationRef.current) {
+          activeMainStageAnimationRef.current.animation.cancel();
+          finishMainStageMotion(activeMainStageAnimationRef.current.token);
+        }
+        const animation = startMainStageMotion(pendingMainStageMotion.direction);
+        const activeMotion = animation ? { animation, token: pendingMainStageMotion.token } : null;
+        activeMainStageAnimationRef.current = activeMotion;
+        if (animation) {
+          void animation.finished
+            .catch(() => undefined)
+            .finally(() => {
+              if (activeMainStageAnimationRef.current === activeMotion) {
+                // `fill: both` exposes the incoming offset before the first
+                // paint. Once finished, cancel the inert effect so normal page
+                // scrolling does not retain a route-sized animation layer.
+                animation.cancel();
+                activeMainStageAnimationRef.current = null;
+                finishMainStageMotion(pendingMainStageMotion.token);
+              }
+            });
+        } else {
+          finishMainStageMotion(pendingMainStageMotion.token);
+        }
       }
     }
 
     const pending = pendingCommitRef.current;
-    if (
+    const committedDestination =
       pending &&
       isExpectedNavigationCommit(
         pending.destinationPath,
@@ -320,11 +342,17 @@ export default function NavigationTransitionProvider({ children }: { children: R
         pending.sourceLocationKey,
         location.key,
         createPath(location),
-      )
-    ) {
+        pending.acceptDestinationMismatch,
+      );
+    if (committedDestination) {
+      // A changed location key is authoritative for a native history
+      // traversal, whose actual destination can differ from a logical
+      // fallback when provenance is unavailable. Push/replace navigation must
+      // still match its exact target so an intermediate commit cannot finish
+      // a newer transition.
       resolvePendingCommit();
     }
-  }, [location, resolvePendingCommit]);
+  }, [location, navigationType, resolvePendingCommit]);
 
   useLayoutEffect(
     () => () => {
@@ -334,6 +362,7 @@ export default function NavigationTransitionProvider({ children }: { children: R
         finishMainStageMotion(activeMainStageAnimationRef.current.token);
       }
       if (pendingMainStageMotionRef.current) {
+        window.clearTimeout(pendingMainStageMotionRef.current.timeout);
         finishMainStageMotion(pendingMainStageMotionRef.current.token);
       }
       pendingMainStageMotionRef.current = null;
@@ -413,6 +442,7 @@ export default function NavigationTransitionProvider({ children }: { children: R
         finishMainStageMotion(activeMainStageAnimationRef.current.token);
       }
       if (pendingMainStageMotionRef.current) {
+        window.clearTimeout(pendingMainStageMotionRef.current.timeout);
         finishMainStageMotion(pendingMainStageMotionRef.current.token);
       }
       activeMainStageAnimationRef.current = null;
@@ -452,12 +482,25 @@ export default function NavigationTransitionProvider({ children }: { children: R
       ) {
         const token = String(navigationSequence);
         document.documentElement.setAttribute(DETAIL_MAIN_STAGE_MOTION_ATTRIBUTE, token);
+        const timeout = window.setTimeout(() => {
+          const pendingMainStageMotion = pendingMainStageMotionRef.current;
+          if (
+            pendingMainStageMotion?.token !== token ||
+            pendingMainStageMotion.navigationSequence !== navigationSequence
+          ) {
+            return;
+          }
+          pendingMainStageMotionRef.current = null;
+          finishMainStageMotion(token);
+        }, NAVIGATION_COMMIT_FALLBACK_MS);
         pendingMainStageMotionRef.current = {
           sourceLocationKey: currentLocation.key,
           destinationPath: nextPath,
           navigationSequence,
+          acceptDestinationMismatch: historyDelta !== null,
           direction,
           token,
+          timeout,
         };
         performNavigation();
         return;
@@ -479,11 +522,12 @@ export default function NavigationTransitionProvider({ children }: { children: R
           updateStarted = true;
           const sourceLocationKey = locationRef.current.key;
           const committed = new Promise<void>((resolve) => {
-            const timeout = window.setTimeout(resolve, COMMIT_FALLBACK_MS);
+            const timeout = window.setTimeout(resolve, NAVIGATION_COMMIT_FALLBACK_MS);
             pendingCommitRef.current = {
               sourceLocationKey,
               destinationPath: nextPath,
               navigationSequence,
+              acceptDestinationMismatch: historyDelta !== null,
               resolve,
               timeout,
             };

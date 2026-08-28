@@ -1,4 +1,4 @@
-import { useId, useMemo } from "react";
+import { useMemo } from "react";
 import { useSettingsForm } from "@/hooks/useSettingsForm";
 import { SettingField } from "./SettingField";
 import { SaveBar } from "./SaveBar";
@@ -28,78 +28,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  CARD_QUICK_ACTION_OPTIONS,
-  normalizeCardQuickActionMode,
-  type EnabledCardQuickActionMode,
-} from "@/lib/cardQuickActions";
+import { CARD_QUICK_ACTION_OPTIONS, normalizeCardQuickActionMode } from "@/lib/cardQuickActions";
+import { OVERLAY_CONFIG_SERVER_KEYS } from "@/hooks/queries/admin/settings";
 
-const KEYS = [
-  "defaults.card_quick_actions_enabled",
-  "defaults.card_quick_actions",
-  "overlays.enabled",
-  "defaults.card_overlays",
-];
-
-function QuickActionsField({
-  enabled,
-  mode,
-  onEnabledChange,
-  onModeChange,
-}: {
-  enabled: boolean;
-  mode: EnabledCardQuickActionMode;
-  onEnabledChange: (enabled: boolean) => void;
-  onModeChange: (mode: EnabledCardQuickActionMode) => void;
-}) {
-  const selectId = useId();
-  const hintId = useId();
-
-  return (
-    <div className="flex flex-col justify-between gap-3 py-3 sm:flex-row sm:items-center">
-      <div className="space-y-0.5">
-        <Label htmlFor={selectId} className="text-sm font-medium">
-          Card quick actions
-        </Label>
-        <p id={hintId} className="text-muted-foreground text-xs">
-          Globally enable quick actions and set their default mode. When disabled, no profile can
-          show them.
-        </p>
-      </div>
-      <div className="flex items-center gap-2">
-        <Select
-          value={mode}
-          disabled={!enabled}
-          onValueChange={(value) => onModeChange(value as EnabledCardQuickActionMode)}
-        >
-          <SelectTrigger id={selectId} className="w-[190px]" aria-describedby={hintId}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {CARD_QUICK_ACTION_OPTIONS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Switch
-          checked={enabled}
-          onCheckedChange={onEnabledChange}
-          aria-label="Enable card quick actions"
-        />
-      </div>
-    </div>
-  );
-}
+const KEYS = [...OVERLAY_CONFIG_SERVER_KEYS];
 
 interface DefaultsEditorProps {
   value: string;
   onChange: (value: string) => void;
-  overlaysEnabled: boolean;
 }
 
-function DefaultsEditor({ value, onChange, overlaysEnabled }: DefaultsEditorProps) {
+function DefaultsEditor({ value, onChange }: DefaultsEditorProps) {
   const prefs = parseOverlayPrefs(value || null);
 
   const updateItem = (id: OverlayId, patch: Partial<CardOverlayPrefs["items"][OverlayId]>) => {
@@ -117,13 +56,9 @@ function DefaultsEditor({ value, onChange, overlaysEnabled }: DefaultsEditorProp
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2">
-        <div className={`space-y-2 ${overlaysEnabled ? "" : "opacity-50"}`}>
+        <div className="space-y-2">
           <Label className="text-sm font-medium">Default style preset</Label>
-          <Select
-            value={prefs.preset}
-            disabled={!overlaysEnabled}
-            onValueChange={(v) => setPreset(v as PresetId)}
-          >
+          <Select value={prefs.preset} onValueChange={(v) => setPreset(v as PresetId)}>
             <SelectTrigger className="w-full">
               <SelectValue />
             </SelectTrigger>
@@ -137,7 +72,7 @@ function DefaultsEditor({ value, onChange, overlaysEnabled }: DefaultsEditorProp
           </Select>
         </div>
       </div>
-      <div className={overlaysEnabled ? "" : "pointer-events-none opacity-50"}>
+      <div>
         {OVERLAY_CATEGORIES.map((category) => {
           const overlays = OVERLAY_REGISTRY.filter((d) => d.category === category);
           if (overlays.length === 0) return null;
@@ -161,7 +96,7 @@ function DefaultsEditor({ value, onChange, overlaysEnabled }: DefaultsEditorProp
                       <div className="flex items-center gap-2">
                         <Select
                           value={config.position}
-                          disabled={!overlaysEnabled || !config.enabled}
+                          disabled={!config.enabled}
                           onValueChange={(pos) =>
                             updateItem(def.id, { position: pos as OverlayPosition })
                           }
@@ -179,7 +114,6 @@ function DefaultsEditor({ value, onChange, overlaysEnabled }: DefaultsEditorProp
                         </Select>
                         <Switch
                           checked={config.enabled}
-                          disabled={!overlaysEnabled}
                           onCheckedChange={(checked) => updateItem(def.id, { enabled: checked })}
                         />
                       </div>
@@ -201,7 +135,6 @@ export default function OverlaySettings() {
   if (form.isLoading) return <div>Loading...</div>;
 
   const overlaysEnabled = form.getValue("overlays.enabled") !== "false";
-  const quickActionsEnabled = form.getValue("defaults.card_quick_actions_enabled") !== "false";
   const quickActionMode = normalizeCardQuickActionMode(
     form.getValue("defaults.card_quick_actions"),
   );
@@ -215,23 +148,31 @@ export default function OverlaySettings() {
         <h2 className="text-xl font-semibold tracking-tight">Card Overlays</h2>
         <p className="text-muted-foreground text-sm leading-relaxed">
           Configure card quick actions, default overlay badges, and the style preset shown on poster
-          cards. Users can customize the defaults while the server-wide controls are enabled.
+          cards. These are the defaults for profiles that have not chosen; each profile can turn
+          quick actions and overlay badges on or off for itself.
         </p>
       </div>
 
       <div className="flex-1 space-y-6">
         <FieldGroup label="General">
-          <QuickActionsField
-            enabled={quickActionsEnabled}
-            mode={quickActionMode}
-            onEnabledChange={(enabled) =>
-              form.setValue("defaults.card_quick_actions_enabled", enabled ? "true" : "false")
-            }
-            onModeChange={(mode) => form.setValue("defaults.card_quick_actions", mode)}
+          <SettingField
+            label="Card Quick Actions Default"
+            hint="Default for profiles that have not chosen; each profile can turn quick actions on or off for themselves."
+            type="toggle"
+            value={form.getValue("defaults.card_quick_actions_enabled") || "false"}
+            onChange={(v) => form.setValue("defaults.card_quick_actions_enabled", v)}
           />
           <SettingField
-            label="Card Overlays Enabled"
-            hint="When disabled, no overlay badges appear for any user regardless of their personal settings."
+            label="Card quick actions"
+            hint="The mode applied to profiles that have not chosen their own."
+            type="select"
+            options={[...CARD_QUICK_ACTION_OPTIONS]}
+            value={quickActionMode}
+            onChange={(v) => form.setValue("defaults.card_quick_actions", v)}
+          />
+          <SettingField
+            label="Card Overlays Default"
+            hint="Default for profiles that have not chosen; each profile can turn overlays on or off for themselves."
             type="toggle"
             value={form.getValue("overlays.enabled") || "true"}
             onChange={(v) => form.setValue("overlays.enabled", v)}
@@ -247,7 +188,6 @@ export default function OverlaySettings() {
               <DefaultsEditor
                 value={defaultsValue || serializeOverlayPrefs(buildDefaultPrefs())}
                 onChange={(v) => form.setValue("defaults.card_overlays", v)}
-                overlaysEnabled={overlaysEnabled}
               />
             </div>
             <div className="flex items-start justify-center lg:w-[180px]">

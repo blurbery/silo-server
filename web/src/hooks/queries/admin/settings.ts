@@ -20,13 +20,20 @@ interface SensitiveStatusResponse {
   managed_by_env?: string[];
 }
 
+/**
+ * server_settings keys surfaced by GET /settings/overlay-config, in the order
+ * the admin overlay page presents them. The page edits exactly these, and
+ * saving any of them must refresh every profile's cached overlay config.
+ */
+export const OVERLAY_CONFIG_SERVER_KEYS = [
+  "defaults.card_quick_actions_enabled",
+  "defaults.card_quick_actions",
+  "overlays.enabled",
+  "defaults.card_overlays",
+] as const;
+
 function affectsOverlayConfig(key: string) {
-  return (
-    key === "overlays.enabled" ||
-    key === "defaults.card_overlays" ||
-    key === "defaults.card_quick_actions_enabled" ||
-    key === "defaults.card_quick_actions"
-  );
+  return (OVERLAY_CONFIG_SERVER_KEYS as readonly string[]).includes(key);
 }
 
 export interface CatalogSearchStatus {

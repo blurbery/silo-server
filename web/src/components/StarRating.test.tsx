@@ -8,6 +8,9 @@ describe("StarRating", () => {
 
     const stars = screen.getAllByRole("radio");
 
+    // Hover previews are pure CSS (.star-rating-star[data-filled]) so pointer
+    // movement never schedules React renders; the DOM only carries the stored
+    // rating.
     expect(stars[1]).toHaveAttribute("data-filled", "true");
     expect(stars[2]).toHaveAttribute("data-filled", "false");
     for (const star of stars) {

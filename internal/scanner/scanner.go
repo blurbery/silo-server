@@ -2200,7 +2200,8 @@ func (s *Scanner) syncPresentState(ctx context.Context, folderID int, filePath *
 		{
 			// target_episode selects the episodes in scope; candidate then
 			// re-joins every active file of those episodes so first_seen_at
-			// aggregates over the whole episode, not just the scanned path.
+			// and the scan-run provenance aggregate over the whole episode,
+			// not just the scanned path.
 			desc: "restoring episode folder memberships",
 			sql: `
 		WITH target_episode AS (
@@ -2214,7 +2215,8 @@ func (s *Scanner) syncPresentState(ctx context.Context, folderID int, filePath *
 		candidate AS (
 			SELECT target.episode_id,
 			       target.media_folder_id,
-			       MIN(mf.created_at) AS first_seen_at
+			       MIN(mf.created_at) AS first_seen_at,
+			       (array_agg(mf.first_seen_scan_run_id ORDER BY mf.created_at ASC, mf.id ASC))[1] AS first_seen_scan_run_id
 			FROM target_episode target
 			JOIN media_files mf
 			  ON mf.episode_id = target.episode_id
@@ -2223,8 +2225,10 @@ func (s *Scanner) syncPresentState(ctx context.Context, folderID int, filePath *
 			GROUP BY target.episode_id, target.media_folder_id
 		),
 		inserted AS (
-			INSERT INTO episode_libraries (episode_id, media_folder_id, first_seen_at)
-			SELECT episode_id, media_folder_id, first_seen_at
+			INSERT INTO episode_libraries (
+				episode_id, media_folder_id, first_seen_at, first_seen_scan_run_id
+			)
+			SELECT episode_id, media_folder_id, first_seen_at, first_seen_scan_run_id
 			FROM candidate
 			ON CONFLICT (episode_id, media_folder_id) DO NOTHING
 			RETURNING episode_id, first_seen_at

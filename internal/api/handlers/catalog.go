@@ -132,7 +132,7 @@ func (h *CatalogHandler) HandleGetCatalog(w http.ResponseWriter, r *http.Request
 		}
 
 		resultItems := groupedCatalogItems(entries)
-		items := h.catalogItemResponses(r, resultItems, catalogSortMetricField(req, result), accessFilter)
+		items := h.catalogItemResponses(r, resultItems, catalogSortMetricField(req, result), playableTargetLibraryIDs(req), accessFilter)
 		for i := range items {
 			if i < len(entries) && entries[i].summary != nil {
 				applyWorkSummaryToCatalogItem(&items[i], entries[i].summary)
@@ -156,7 +156,7 @@ func (h *CatalogHandler) HandleGetCatalog(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve catalog")
 		return
 	}
-	items := h.catalogItemResponses(r, result.Items, catalogSortMetricField(req, result), accessFilter)
+	items := h.catalogItemResponses(r, result.Items, catalogSortMetricField(req, result), playableTargetLibraryIDs(req), accessFilter)
 	h.writeCatalogResponse(w, result, items, groupedByWork)
 }
 
@@ -171,19 +171,23 @@ func catalogSortMetricField(req catalog.CatalogRequest, result *catalog.CatalogR
 	return catalog.NormalizeQuerySort(req.Query.Sort).Field
 }
 
-func (h *CatalogHandler) catalogItemResponses(r *http.Request, resultItems []*models.MediaItem, sortField string, accessFilter catalog.AccessFilter) []itemListResponse {
+func playableTargetLibraryIDs(req catalog.CatalogRequest) []int {
+	if req.LibraryID > 0 {
+		return []int{req.LibraryID}
+	}
+	return req.Query.LibraryIDs
+}
+
+func (h *CatalogHandler) catalogItemResponses(r *http.Request, resultItems []*models.MediaItem, sortField string, libraryIDs []int, accessFilter catalog.AccessFilter) []itemListResponse {
 	var (
 		localizedItems   []*models.MediaItem
 		overlaySummaries map[string]*models.OverlaySummary
 		userStates       map[string]*itemUserStateResponse
-		episodeMetadata  map[string]struct {
-			SeriesTitle   string
-			SeasonNumber  *int
-			EpisodeNumber *int
-		}
+		episodeMetadata  map[string]episodeBrowseMetadata
+		playTargets      map[string]string
 	)
 	var enrichWG sync.WaitGroup
-	enrichWG.Add(4)
+	enrichWG.Add(5)
 	go func() {
 		defer enrichWG.Done()
 		localizedItems = h.itemsH.localizeItemListModels(r.Context(), resultItems, accessFilter)
@@ -199,6 +203,10 @@ func (h *CatalogHandler) catalogItemResponses(r *http.Request, resultItems []*mo
 	go func() {
 		defer enrichWG.Done()
 		episodeMetadata = h.itemsH.listEpisodeBrowseMetadata(r.Context(), resultItems)
+	}()
+	go func() {
+		defer enrichWG.Done()
+		playTargets = h.itemsH.listPlayableTargets(r, resultItems, libraryIDs, accessFilter)
 	}()
 	enrichWG.Wait()
 
@@ -234,10 +242,11 @@ func (h *CatalogHandler) catalogItemResponses(r *http.Request, resultItems []*mo
 			continue
 		}
 		resp := itemListResponseShell(item, overlaySummaries[item.ContentID], userStates[item.ContentID])
+		// The resolver validated the item's own hint against this profile, so
+		// its answer replaces the unvalidated one carried by the item.
+		resp.PlayContentID = playTargets[playableTargetKeyForItem(item)]
 		if meta, ok := episodeMetadata[item.ContentID]; ok {
-			resp.SeriesTitle = meta.SeriesTitle
-			resp.SeasonNumber = meta.SeasonNumber
-			resp.EpisodeNumber = meta.EpisodeNumber
+			applyEpisodeBrowseMetadata(&resp, meta)
 		}
 		resp.PosterURL = imageURLs[item.ContentID].posterURL
 		resp.BackdropURL = imageURLs[item.ContentID].backdropURL
@@ -245,6 +254,16 @@ func (h *CatalogHandler) catalogItemResponses(r *http.Request, resultItems []*mo
 		items = append(items, resp)
 	}
 	return items
+}
+
+func applyEpisodeBrowseMetadata(resp *itemListResponse, meta episodeBrowseMetadata) {
+	if resp == nil {
+		return
+	}
+	resp.SeriesID = meta.SeriesID
+	resp.SeriesTitle = meta.SeriesTitle
+	resp.SeasonNumber = meta.SeasonNumber
+	resp.EpisodeNumber = meta.EpisodeNumber
 }
 
 func (h *CatalogHandler) writeCatalogResponse(w http.ResponseWriter, result *catalog.CatalogResult, items []itemListResponse, groupedByWork bool) {

@@ -1194,8 +1194,10 @@ html[data-navigation-direction="back"]::view-transition-new(root) {
     --glass-hover-color: color-mix(in srgb, var(--accent) 60%, transparent);
   }
 
-  /* Match upstream #540: controls over a large detail backdrop keep the glass
-     appearance without re-sampling and blurring the artwork on interaction. */
+  /* Detail actions sit directly over large hero artwork. Repainting several
+     live backdrop filters after every button or popover state change blocks
+     scroll compositing on this surface, so retain the glass appearance with
+     an opaque color blend instead of sampling and blurring the backdrop. */
   .detail-action-bar .glass-subtle {
     background: color-mix(in srgb, var(--surface) 82%, var(--background));
     backdrop-filter: none;
@@ -1223,6 +1225,9 @@ html[data-navigation-direction="back"]::view-transition-new(root) {
     color: color-mix(in srgb, var(--muted-foreground) 50%, transparent);
   }
 
+  /* The stored rating is the resting state, so it survives a pointer that is
+     inside the pill but not over a star (its padding, the gaps between stars)
+     and it still renders where :has() is unsupported. */
   .star-rating-star[data-filled="true"] {
     color: rgb(250 204 21);
   }
@@ -1231,6 +1236,8 @@ html[data-navigation-direction="back"]::view-transition-new(root) {
     fill: currentcolor;
   }
 
+  /* Hovering a star previews that value instead: clear the stored fill first,
+     then fill up to the hovered position. */
   .star-rating:has(.star-rating-star:hover) .star-rating-star {
     color: color-mix(in srgb, var(--muted-foreground) 50%, transparent);
   }
@@ -1470,14 +1477,15 @@ html[data-navigation-direction="back"]::view-transition-new(root) {
               <div class="media-card-image"><img … /></div>
               <div>Title</div>
             </div>                                              */
-
   /* Home/library pages can contain hundreds of cards across off-screen rows.
      Let supporting engines skip layout and paint for those rows until they
      approach the viewport. Browsers without content-visibility ignore this
-     and keep the existing rendering path. */
+     and keep the existing rendering path. MediaCarousel sets the placeholder
+     height from carouselIntrinsicHeight(), which owns the per-card-size
+     values alongside the card widths they derive from. */
   .media-carousel {
     content-visibility: auto;
-    contain-intrinsic-size: auto 24rem;
+    contain-intrinsic-size: auto var(--carousel-intrinsic-h, 23rem);
   }
 
   /* Detail pages can contain several image-heavy rails below the fold. Match

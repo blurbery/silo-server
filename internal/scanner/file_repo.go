@@ -13,6 +13,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/markers"
 	"github.com/Silo-Server/silo-server/internal/models"
 	"github.com/Silo-Server/silo-server/internal/pathscope"
+	"github.com/Silo-Server/silo-server/internal/scanbatch"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -66,7 +67,8 @@ const fileColumns = `id, content_id, episode_id, extra_id, season_number, episod
 	presentation_kind, presentation_group_key, presentation_part_index, presentation_part_total,
 	multi_episode_start, multi_episode_end,
 	multiple_pps, multiple_pps_scan_size, multiple_pps_scan_mtime,
-	probe_source, probe_updated_at, match_attempted_at, missing_since, created_at, updated_at`
+	probe_source, probe_updated_at, match_attempted_at, missing_since,
+	first_seen_scan_run_id, created_at, updated_at`
 
 const overlayFileColumns = `content_id, episode_id, media_folder_id, file_path,
 	codec_video, codec_audio, resolution, audio_channels, hdr, container,
@@ -90,7 +92,8 @@ const mfFileColumns = `mf.id, mf.content_id, mf.episode_id, mf.extra_id, mf.seas
 	mf.presentation_kind, mf.presentation_group_key, mf.presentation_part_index, mf.presentation_part_total,
 	mf.multi_episode_start, mf.multi_episode_end,
 	mf.multiple_pps, mf.multiple_pps_scan_size, mf.multiple_pps_scan_mtime,
-	mf.probe_source, mf.probe_updated_at, mf.match_attempted_at, mf.missing_since, mf.created_at, mf.updated_at`
+	mf.probe_source, mf.probe_updated_at, mf.match_attempted_at, mf.missing_since,
+	mf.first_seen_scan_run_id, mf.created_at, mf.updated_at`
 
 // scanMediaFile scans a single row into a *models.MediaFile.
 func scanMediaFile(row pgx.Row) (*models.MediaFile, error) {
@@ -124,6 +127,7 @@ func scanMediaFile(row pgx.Row) (*models.MediaFile, error) {
 	var presentationPartIndex, presentationPartTotal *int
 	var multiEpisodeStart, multiEpisodeEnd *int
 	var presentationKind, presentationGroupKey *string
+	var firstSeenScanRunID *string
 	var chapterThumbnailRetryAfter *time.Time
 	var videoTracksJSON, audioTracksJSON, subtitleTracksJSON, externalSubtitlesJSON, chaptersJSON []byte
 
@@ -211,6 +215,7 @@ func scanMediaFile(row pgx.Row) (*models.MediaFile, error) {
 		&f.ProbeUpdatedAt,
 		&f.MatchAttemptedAt,
 		&f.MissingSince,
+		&firstSeenScanRunID,
 		&f.CreatedAt,
 		&f.UpdatedAt,
 	)
@@ -321,6 +326,9 @@ func scanMediaFile(row pgx.Row) (*models.MediaFile, error) {
 	}
 	if presentationGroupKey != nil {
 		f.PresentationGroupKey = *presentationGroupKey
+	}
+	if firstSeenScanRunID != nil {
+		f.FirstSeenScanRunID = *firstSeenScanRunID
 	}
 	if presentationPartIndex != nil {
 		f.PresentationPartIndex = *presentationPartIndex
@@ -437,6 +445,7 @@ func scanMediaFiles(rows pgx.Rows) ([]*models.MediaFile, error) {
 		var presentationPartIndex, presentationPartTotal *int
 		var multiEpisodeStart, multiEpisodeEnd *int
 		var presentationKind, presentationGroupKey *string
+		var firstSeenScanRunID *string
 		var chapterThumbnailRetryAfter *time.Time
 		var videoTracksJSON, audioTracksJSON, subtitleTracksJSON, externalSubtitlesJSON, chaptersJSON []byte
 
@@ -524,6 +533,7 @@ func scanMediaFiles(rows pgx.Rows) ([]*models.MediaFile, error) {
 			&f.ProbeUpdatedAt,
 			&f.MatchAttemptedAt,
 			&f.MissingSince,
+			&firstSeenScanRunID,
 			&f.CreatedAt,
 			&f.UpdatedAt,
 		)
@@ -630,6 +640,9 @@ func scanMediaFiles(rows pgx.Rows) ([]*models.MediaFile, error) {
 		}
 		if presentationGroupKey != nil {
 			f.PresentationGroupKey = *presentationGroupKey
+		}
+		if firstSeenScanRunID != nil {
+			f.FirstSeenScanRunID = *firstSeenScanRunID
 		}
 		if presentationPartIndex != nil {
 			f.PresentationPartIndex = *presentationPartIndex
@@ -869,7 +882,7 @@ func (r *FileRepository) Upsert(ctx context.Context, mf models.MediaFile) (*mode
 		edition_raw, edition_key, edition_confidence, edition_source,
 		presentation_kind, presentation_group_key, presentation_part_index, presentation_part_total,
 		multi_episode_start, multi_episode_end,
-		probe_source, probe_updated_at, missing_since
+		probe_source, probe_updated_at, missing_since, first_seen_scan_run_id
 	) VALUES (
 		$1, $2, $3, $4, $5,
 		$6, $7, $8, $9, $10,
@@ -881,7 +894,7 @@ func (r *FileRepository) Upsert(ctx context.Context, mf models.MediaFile) (*mode
 		$39, $40, $41, $42,
 		$43, $44, $45, $46,
 		$47, $48,
-		$49, $50, $51
+		$49, $50, $51, $52
 	)
 	ON CONFLICT (file_path) DO UPDATE SET
 		content_id = CASE
@@ -996,6 +1009,7 @@ func (r *FileRepository) Upsert(ctx context.Context, mf models.MediaFile) (*mode
 		probeSource,
 		mf.ProbeUpdatedAt,
 		mf.MissingSince,
+		nilIfEmpty(scanbatch.RunID(ctx)),
 	)
 
 	return scanMediaFile(row)
@@ -3449,10 +3463,12 @@ func (r *FileRepository) UpdateEpisodeLink(ctx context.Context, fileID int, epis
 				episode_number = $3,
 				updated_at = NOW()
 			WHERE id = $4
-			RETURNING episode_id, media_folder_id, created_at, missing_since
+			RETURNING episode_id, media_folder_id, created_at, missing_since, first_seen_scan_run_id
 		)
-		INSERT INTO episode_libraries (episode_id, media_folder_id, first_seen_at)
-		SELECT episode_id, media_folder_id, created_at
+		INSERT INTO episode_libraries (
+			episode_id, media_folder_id, first_seen_at, first_seen_scan_run_id
+		)
+		SELECT episode_id, media_folder_id, created_at, first_seen_scan_run_id
 		FROM updated
 		WHERE episode_id IS NOT NULL
 		  AND missing_since IS NULL
@@ -3518,11 +3534,16 @@ func (r *FileRepository) BulkLinkEpisodesBySeries(ctx context.Context, seriesCon
 			  AND e.series_id = $1
 			  AND mf.season_number = e.season_number
 			  AND mf.episode_number = e.episode_number
-			RETURNING mf.episode_id, mf.media_folder_id, mf.created_at
+			RETURNING mf.id, mf.episode_id, mf.media_folder_id, mf.created_at, mf.first_seen_scan_run_id
 		),
 		inserted AS (
-			INSERT INTO episode_libraries (episode_id, media_folder_id, first_seen_at)
-			SELECT episode_id, media_folder_id, MIN(created_at)
+			INSERT INTO episode_libraries (
+				episode_id, media_folder_id, first_seen_at, first_seen_scan_run_id
+			)
+			SELECT episode_id,
+			       media_folder_id,
+			       MIN(created_at),
+			       (array_agg(first_seen_scan_run_id ORDER BY created_at ASC, id ASC))[1]
 			FROM updated
 			GROUP BY episode_id, media_folder_id
 			ON CONFLICT (episode_id, media_folder_id) DO NOTHING

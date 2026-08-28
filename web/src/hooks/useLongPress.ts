@@ -37,6 +37,7 @@ export function useLongPress(
   useEffect(() => {
     const target = targetRef?.current;
     if (!target || !enabled) return;
+    // Aliased so the null check above narrows inside the hoisted handlers below.
     const targetElement = target;
 
     let timer: number | null = null;
