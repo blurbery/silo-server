@@ -1194,8 +1194,10 @@ html[data-navigation-direction="back"]::view-transition-new(root) {
     --glass-hover-color: color-mix(in srgb, var(--accent) 60%, transparent);
   }
 
-  /* Match upstream #540: controls over a large detail backdrop keep the glass
-     appearance without re-sampling and blurring the artwork on interaction. */
+  /* Detail actions sit directly over large hero artwork. Repainting several
+     live backdrop filters after every button or popover state change blocks
+     scroll compositing on this surface, so retain the glass appearance with
+     an opaque color blend instead of sampling and blurring the backdrop. */
   .detail-action-bar .glass-subtle {
     background: color-mix(in srgb, var(--surface) 82%, var(--background));
     backdrop-filter: none;
@@ -1212,78 +1214,6 @@ html[data-navigation-direction="back"]::view-transition-new(root) {
 
   /* Rating previews are CSS-only so moving across stars never schedules a
      React render or recomposites a live backdrop-filter surface. */
-  .star-rating {
-    contain: layout paint;
-    background: color-mix(in srgb, var(--surface) 82%, transparent);
-    border: 1px solid color-mix(in srgb, var(--border) 30%, transparent);
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.05);
-  }
-
-  .star-rating-star {
-    color: color-mix(in srgb, var(--muted-foreground) 50%, transparent);
-  }
-
-  .star-rating-star[data-filled="true"] {
-    color: rgb(250 204 21);
-  }
-
-  .star-rating-star[data-filled="true"] svg {
-    fill: currentcolor;
-  }
-
-  .star-rating:has(.star-rating-star:hover) .star-rating-star {
-    color: color-mix(in srgb, var(--muted-foreground) 50%, transparent);
-  }
-
-  .star-rating:has(.star-rating-star:hover) .star-rating-star svg {
-    fill: none;
-  }
-
-  .star-rating:has(.star-rating-star:nth-of-type(1):hover) .star-rating-star:nth-of-type(-n + 1),
-  .star-rating:has(.star-rating-star:nth-of-type(2):hover) .star-rating-star:nth-of-type(-n + 2),
-  .star-rating:has(.star-rating-star:nth-of-type(3):hover) .star-rating-star:nth-of-type(-n + 3),
-  .star-rating:has(.star-rating-star:nth-of-type(4):hover) .star-rating-star:nth-of-type(-n + 4),
-  .star-rating:has(.star-rating-star:nth-of-type(5):hover) .star-rating-star:nth-of-type(-n + 5) {
-    color: rgb(250 204 21);
-  }
-
-  .star-rating:has(.star-rating-star:nth-of-type(1):hover)
-    .star-rating-star:nth-of-type(-n + 1)
-    svg,
-  .star-rating:has(.star-rating-star:nth-of-type(2):hover)
-    .star-rating-star:nth-of-type(-n + 2)
-    svg,
-  .star-rating:has(.star-rating-star:nth-of-type(3):hover)
-    .star-rating-star:nth-of-type(-n + 3)
-    svg,
-  .star-rating:has(.star-rating-star:nth-of-type(4):hover)
-    .star-rating-star:nth-of-type(-n + 4)
-    svg,
-  .star-rating:has(.star-rating-star:nth-of-type(5):hover)
-    .star-rating-star:nth-of-type(-n + 5)
-    svg {
-    fill: currentcolor;
-  }
-
-  /* Detail actions sit directly over large hero artwork. Repainting several
-     live backdrop filters after every button or popover state change blocks
-     scroll compositing on this surface, so retain the glass appearance with
-     an opaque color blend instead of sampling and blurring the backdrop. */
-  .detail-action-bar .glass-subtle {
-    background: color-mix(in srgb, var(--surface) 82%, var(--background));
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-
-  /* The detail overflow menu opens without an entrance transition so it is
-     immediately interactive. Pointer hover is CSS-only. */
-  .detail-overflow-menu {
-    animation: none !important;
-    transition: none !important;
-  }
-
-  /* Rating hover stays entirely in CSS so moving across stars does not
-     schedule React renders or recomposite a live backdrop-filter surface. */
   .star-rating {
     contain: layout paint;
     background: color-mix(in srgb, var(--surface) 82%, transparent);
@@ -1547,14 +1477,15 @@ html[data-navigation-direction="back"]::view-transition-new(root) {
               <div class="media-card-image"><img … /></div>
               <div>Title</div>
             </div>                                              */
-
   /* Home/library pages can contain hundreds of cards across off-screen rows.
      Let supporting engines skip layout and paint for those rows until they
      approach the viewport. Browsers without content-visibility ignore this
-     and keep the existing rendering path. */
+     and keep the existing rendering path. MediaCarousel sets the placeholder
+     height from carouselIntrinsicHeight(), which owns the per-card-size
+     values alongside the card widths they derive from. */
   .media-carousel {
     content-visibility: auto;
-    contain-intrinsic-size: auto 24rem;
+    contain-intrinsic-size: auto var(--carousel-intrinsic-h, 23rem);
   }
 
   /* Detail pages can contain several image-heavy rails below the fold. Match
@@ -1581,17 +1512,6 @@ html[data-navigation-direction="back"]::view-transition-new(root) {
      to each card's stable surface. */
   .season-episode-card {
     contain: layout paint style;
-  }
-
-  /* Home/library pages can contain hundreds of cards across off-screen rows.
-     Let supporting engines skip layout and paint for those rows until they
-     approach the viewport. Browsers without content-visibility ignore this
-     and keep the existing rendering path. MediaCarousel sets the placeholder
-     height from carouselIntrinsicHeight(), which owns the per-card-size
-     values alongside the card widths they derive from. */
-  .media-carousel {
-    content-visibility: auto;
-    contain-intrinsic-size: auto var(--carousel-intrinsic-h, 23rem);
   }
 
   /* Card actions stay hidden at rest so touch devices get clean artwork; a
