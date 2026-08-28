@@ -6,7 +6,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
 import {
   Check,
@@ -59,6 +58,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { useLongPress } from "@/hooks/useLongPress";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
 import { useWatchPlaybackController } from "@/playback/watchPlaybackContext";
 import { buildMediaPlayHref } from "@/lib/mediaNavigation";
@@ -79,49 +79,11 @@ import {
 type MediaItemType = ItemDetail["type"];
 
 const FINE_POINTER_QUERY = "(any-hover: hover) and (any-pointer: fine)";
-const finePointerSubscribers = new Set<() => void>();
-let finePointerMediaQuery: MediaQueryList | undefined;
-
-function getFinePointerMediaQuery(): MediaQueryList | null {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return null;
-  finePointerMediaQuery ??= window.matchMedia(FINE_POINTER_QUERY);
-  return finePointerMediaQuery;
-}
-
-function notifyFinePointerSubscribers() {
-  for (const subscriber of finePointerSubscribers) subscriber();
-}
-
-function subscribeToFinePointer(subscriber: () => void) {
-  const query = getFinePointerMediaQuery();
-  finePointerSubscribers.add(subscriber);
-  if (query && finePointerSubscribers.size === 1) {
-    if (typeof query.addEventListener === "function") {
-      query.addEventListener("change", notifyFinePointerSubscribers);
-    } else {
-      query.addListener(notifyFinePointerSubscribers);
-    }
-  }
-  return () => {
-    finePointerSubscribers.delete(subscriber);
-    if (query && finePointerSubscribers.size === 0) {
-      if (typeof query.removeEventListener === "function") {
-        query.removeEventListener("change", notifyFinePointerSubscribers);
-      } else {
-        query.removeListener(notifyFinePointerSubscribers);
-      }
-    }
-  };
-}
-
-function hasFinePointerSnapshot() {
-  // Preserve the established quick actions in SSR, tests, and older browsers
-  // without matchMedia. Touch-capable modern browsers report this accurately.
-  return getFinePointerMediaQuery()?.matches ?? true;
-}
 
 function useHasFinePointer() {
-  return useSyncExternalStore(subscribeToFinePointer, hasFinePointerSnapshot, () => true);
+  // Preserve the established quick actions in SSR, tests, and older browsers
+  // without matchMedia. Touch-capable modern browsers report this accurately.
+  return useMediaQuery(FINE_POINTER_QUERY, true);
 }
 
 type MediaItemMenuEntry =
@@ -720,7 +682,7 @@ export default function MediaItemMenu({
   hasPartialProgress = false,
   showWatchedShortcut = false,
   narrowPosterActions = false,
-  quickActionMode = "both",
+  quickActionMode = "none",
   longPressRef,
   itemTitle,
 }: MediaItemMenuProps) {
@@ -740,6 +702,12 @@ export default function MediaItemMenu({
   const [filesDialogOpen, setFilesDialogOpen] = useState(false);
   const [metadataAction, setMetadataAction] = useState<MetadataAction | null>(null);
   const [actionSheetOpen, setActionSheetOpen] = useState(false);
+  // A card that has never opened one of these surfaces mounts nothing — a home
+  // page holds hundreds of cards. Once opened, the overlay stays mounted so
+  // closing runs its exit animation and restores focus instead of vanishing.
+  const [actionSheetMounted, setActionSheetMounted] = useState(false);
+  const [refreshDialogMounted, setRefreshDialogMounted] = useState(false);
+  const [filesDialogMounted, setFilesDialogMounted] = useState(false);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const lastMenuInteractionRef = useRef<"keyboard" | "pointer" | null>(null);
   const pointerClosedMenuRef = useRef(false);
@@ -791,7 +759,10 @@ export default function MediaItemMenu({
     dismissLabel,
   });
   useLongPress(longPressRef, {
-    onLongPress: () => setActionSheetOpen(true),
+    onLongPress: () => {
+      setActionSheetMounted(true);
+      setActionSheetOpen(true);
+    },
     enabled: model.length > 0,
   });
   const showPosterFavorite =
@@ -887,6 +858,7 @@ export default function MediaItemMenu({
         return;
       }
       case "viewDetails": {
+        setFilesDialogMounted(true);
         setFilesDialogOpen(true);
         return;
       }
@@ -900,6 +872,7 @@ export default function MediaItemMenu({
         return;
       }
       case "refreshMetadata": {
+        setRefreshDialogMounted(true);
         setRefreshDialogOpen(true);
         return;
       }
@@ -1056,9 +1029,9 @@ export default function MediaItemMenu({
           </DropdownMenu>
         )}
       </div>
-      {actionSheetOpen && (
+      {actionSheetMounted && (
         <MediaItemActionSheet
-          open
+          open={actionSheetOpen}
           onOpenChange={setActionSheetOpen}
           title={itemTitle}
           entries={model}
@@ -1071,12 +1044,14 @@ export default function MediaItemMenu({
           }}
         />
       )}
-      <RefreshMetadataDialog
-        open={refreshDialogOpen}
-        onOpenChange={setRefreshDialogOpen}
-        onConfirm={handleRefreshConfirm}
-        isPending={refreshMetadataMutation.isPending}
-      />
+      {refreshDialogMounted && (
+        <RefreshMetadataDialog
+          open={refreshDialogOpen}
+          onOpenChange={setRefreshDialogOpen}
+          onConfirm={handleRefreshConfirm}
+          isPending={refreshMetadataMutation.isPending}
+        />
+      )}
       {metadataAction && (
         <MetadataActionDialogHost
           action={metadataAction}
@@ -1085,7 +1060,7 @@ export default function MediaItemMenu({
           onClose={() => setMetadataAction(null)}
         />
       )}
-      {mediaType === "manga" && (
+      {mediaType === "manga" && filesDialogMounted && (
         <MangaFilesDialog
           contentId={contentId}
           open={filesDialogOpen}

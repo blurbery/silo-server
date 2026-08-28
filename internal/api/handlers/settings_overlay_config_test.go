@@ -24,7 +24,7 @@ func readOverlayConfig(t *testing.T, handler *SettingsHandler) overlayConfigResp
 	return response
 }
 
-func TestGetOverlayConfigIncludesDisabledWebWatchedIndicator(t *testing.T) {
+func TestGetOverlayConfigIncludesQuickActionDefaultsAndDisabledWebWatchedIndicator(t *testing.T) {
 	response := readOverlayConfig(t, NewSettingsHandler(nil))
 	if !response.Enabled {
 		t.Fatal("overlays enabled = false, want true")
@@ -32,8 +32,8 @@ func TestGetOverlayConfigIncludesDisabledWebWatchedIndicator(t *testing.T) {
 	if response.WatchedIndicator != "none" {
 		t.Fatalf("watched indicator = %q, want none", response.WatchedIndicator)
 	}
-	if !response.QuickActionsEnabled {
-		t.Fatal("card quick actions enabled = false, want true")
+	if response.QuickActionsEnabled {
+		t.Fatal("card quick actions enabled = true, want false")
 	}
 	if response.QuickActionsDefault != "both" {
 		t.Fatalf("card quick actions default = %q, want both", response.QuickActionsDefault)
@@ -65,5 +65,32 @@ func TestGetOverlayConfigIgnoresStaleWebWatchedIndicatorSetting(t *testing.T) {
 	}
 	if response.QuickActionsDefault != "favorites" {
 		t.Fatalf("card quick actions default = %q, want favorites", response.QuickActionsDefault)
+	}
+}
+
+func TestGetOverlayConfigEnablesQuickActionsWhenDefaultStoredTrue(t *testing.T) {
+	handler := NewSettingsHandler(nil)
+	handler.SetServerSettings(&fakeServerSettingsStore{values: map[string]string{
+		"defaults.card_quick_actions_enabled": "true",
+	}})
+
+	response := readOverlayConfig(t, handler)
+	if !response.QuickActionsEnabled {
+		t.Fatal("card quick actions enabled = false, want true")
+	}
+	if response.QuickActionsDefault != "both" {
+		t.Fatalf("card quick actions default = %q, want both", response.QuickActionsDefault)
+	}
+}
+
+func TestGetOverlayConfigRejectsInvalidQuickActionMode(t *testing.T) {
+	handler := NewSettingsHandler(nil)
+	handler.SetServerSettings(&fakeServerSettingsStore{values: map[string]string{
+		"defaults.card_quick_actions": "invalid",
+	}})
+
+	response := readOverlayConfig(t, handler)
+	if response.QuickActionsDefault != "both" {
+		t.Fatalf("card quick actions default = %q, want both", response.QuickActionsDefault)
 	}
 }

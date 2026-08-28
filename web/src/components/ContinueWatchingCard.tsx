@@ -14,6 +14,7 @@ import { parseWatchHref } from "@/pages/watchRouteHelpers";
 import { buildItemHref, buildMediaPlayHref, isVideoWatchHref } from "@/lib/mediaNavigation";
 import { useUICustomization } from "@/hooks/useUICustomization";
 import { carouselCardWidthClasses } from "@/lib/uiCustomization";
+import CardPlayOverlay from "@/components/CardPlayOverlay";
 import type { CardQuickActionMode } from "@/lib/cardQuickActions";
 
 type ContinueWatchingCardProps = (
@@ -42,6 +43,7 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
   const card =
     "sectionItem" in props && props.sectionItem
       ? {
+          contentId: props.sectionItem.content_id,
           watchHref: buildMediaPlayHref({
             contentId: props.sectionItem.content_id,
             type: props.sectionItem.type,
@@ -63,6 +65,7 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
           type: props.sectionItem.type,
         }
       : {
+          contentId: props.detail.content_id,
           watchHref: buildMediaPlayHref({
             contentId: props.detail.content_id,
             type: props.detail.type,
@@ -120,6 +123,7 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
   const isMangaChapter = card.type === "ebook" && !!card.seriesId && !!card.seriesTitle;
   const headingIsSeries = (hasEpisodeMeta && !!card.seriesTitle) || isMangaChapter;
   const heading = headingIsSeries ? card.seriesTitle : card.title;
+  const playTitle = heading ?? card.title ?? "item";
   // The heading shows the series title for episodes, so it should navigate to
   // the series page; everything else heads to the item's own page.
   const headingHref =
@@ -188,6 +192,7 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
 
   const variant = props.variant ?? "wide";
   const isPoster = variant === "poster";
+  const playableContentId = card.contentId ?? "";
   const containerWidth = isPoster
     ? carouselCardWidthClasses(cardPresentation.poster_size)
     : "w-[260px] shrink-0 sm:w-[315px]";
@@ -257,7 +262,7 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
             {!isNextUp && progressPercent > 0 && (
               <div className="absolute inset-x-2.5 bottom-2 h-[3px] overflow-hidden rounded-full bg-black/40">
                 <div
-                  className="h-full rounded-full transition-[width] duration-[--duration-fast]"
+                  className="h-full rounded-full transition-[width] duration-(--duration-fast)"
                   style={{
                     width: `${Math.min(progressPercent, 100)}%`,
                     background: "var(--primary)",
@@ -267,18 +272,27 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
             )}
           </div>
         </ViewTransitionLink>
-        <ViewTransitionLink
-          to={watchHref}
-          onClick={handleWatchClick}
-          aria-label={`${card.type === "ebook" ? "Read" : "Play"} ${heading}`}
-          className="media-card-play-trigger bg-primary text-primary-foreground hover:bg-primary/90 absolute top-1/2 left-1/2 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow-lg transition-[transform,background-color] duration-[--duration-fast] hover:scale-110 active:scale-95"
-        >
-          {card.type === "ebook" ? (
-            <BookOpen className="h-5 w-5" />
-          ) : (
-            <Play className="ml-0.5 h-5 w-5" fill="currentColor" />
-          )}
-        </ViewTransitionLink>
+        {isPoster && playableContentId && isVideoWatchHref(watchHref) ? (
+          <CardPlayOverlay
+            contentId={playableContentId}
+            title={playTitle}
+            type={card.type === "movie" ? "movie" : "episode"}
+            libraryId={props.libraryId}
+          />
+        ) : (
+          <ViewTransitionLink
+            to={watchHref}
+            onClick={handleWatchClick}
+            aria-label={`${card.type === "ebook" ? "Read" : "Play"} ${heading}`}
+            className="media-card-play-trigger bg-primary text-primary-foreground hover:bg-primary/90 absolute top-1/2 left-1/2 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow-lg transition-[transform,background-color] duration-(--duration-fast) hover:scale-110 active:scale-95"
+          >
+            {card.type === "ebook" ? (
+              <BookOpen className="h-5 w-5" />
+            ) : (
+              <Play className="ml-0.5 h-5 w-5" fill="currentColor" />
+            )}
+          </ViewTransitionLink>
+        )}
         <MediaItemMenu
           contentId={
             "sectionItem" in props && props.sectionItem
@@ -299,7 +313,7 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
           showFavoriteShortcut={false}
           dismissAction={dismissAction}
           hasPartialProgress={hasPartialProgress}
-          quickActionMode={props.quickActionMode}
+          quickActionMode={props.quickActionMode ?? "none"}
           longPressRef={cardRef}
           itemTitle={heading}
         />

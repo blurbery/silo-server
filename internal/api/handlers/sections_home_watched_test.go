@@ -231,7 +231,7 @@ func TestHomePreferenceFiltersOnlyHomeResponses(t *testing.T) {
 		t.Fatalf("Home response items = %#v, want only unwatched", got)
 	}
 
-	library := handler.buildSectionsResponse(req, sectionItems)
+	library := handler.buildSectionsResponse(req, sectionItems, nil)
 	if got := len(library.Sections[0].Items); got != 2 {
 		t.Fatalf("non-Home response has %d items, want 2", got)
 	}

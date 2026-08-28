@@ -410,6 +410,9 @@ func (r *CatalogResolver) resolveSectionSource(ctx context.Context, req CatalogR
 			UseSourceOrder: useSourceOrder,
 		}, access)
 	case "recently_added":
+		if result, handled, err := r.resolveRecentTVSectionSource(ctx, req, access, section); handled || err != nil {
+			return result, err
+		}
 		return r.resolveSectionBrowseSource(ctx, req, access, section, "added_at", "desc")
 	case "recently_released":
 		return r.resolveSectionBrowseSource(ctx, req, access, section, "release_date", "desc")
@@ -433,6 +436,91 @@ func (r *CatalogResolver) resolveSectionSource(ctx context.Context, req CatalogR
 	default:
 		return &CatalogResult{Items: []*models.MediaItem{}, Total: 0, HasMore: false, TotalExact: true}, nil
 	}
+}
+
+func (r *CatalogResolver) resolveRecentTVSectionSource(
+	ctx context.Context,
+	req CatalogRequest,
+	access AccessFilter,
+	section catalogPageSection,
+) (*CatalogResult, bool, error) {
+	filters := parseCatalogSectionFilters(section.Config)
+	requested := append([]int(nil), filters.LibraryIDs...)
+	if section.Scope == "library" && section.LibraryID != nil {
+		requested = []int{*section.LibraryID}
+	}
+	effectiveLibraryIDs, tvScoped, err := ResolveRecentTVLibraryIDs(
+		ctx,
+		r.itemRepo.pool,
+		requested,
+		filters.FilterType,
+		access,
+	)
+	if err != nil || !tvScoped {
+		return nil, tvScoped, err
+	}
+
+	snapshot := time.Now().UTC()
+	if req.SnapshotAt != nil {
+		snapshot = req.SnapshotAt.UTC()
+	}
+	targets, total, hasMore, err := NewRecentTVRepository(r.itemRepo.pool).List(ctx, RecentTVQuery{
+		LibraryIDs: effectiveLibraryIDs,
+		Access:     access,
+		NamePrefix: req.NamePrefix,
+		SnapshotAt: &snapshot,
+		Limit:      req.Limit,
+		Offset:     req.Offset,
+		SkipTotal:  req.SkipTotal,
+	})
+	if err != nil {
+		return nil, true, err
+	}
+
+	seriesIDs := make([]string, 0, len(targets))
+	episodeRows := make([]episodeCatalogEntryPageRow, 0, len(targets))
+	for _, target := range targets {
+		if target.Type == recentTVTypeEpisode {
+			episodeRows = append(episodeRows, episodeCatalogEntryPageRow{
+				episodeID: target.ContentID,
+				addedAt:   target.AddedAt,
+			})
+		} else {
+			seriesIDs = append(seriesIDs, target.ContentID)
+		}
+	}
+	seriesItems, err := r.itemRepo.GetByIDsWithAccess(ctx, seriesIDs, access)
+	if err != nil {
+		return nil, true, err
+	}
+	episodeItems, err := r.queryExecutorForScope(recentTVTypeEpisode, &snapshot).hydrateEpisodeCatalogEntryPage(ctx, episodeRows)
+	if err != nil {
+		return nil, true, err
+	}
+
+	itemByKey := make(map[string]*models.MediaItem, len(seriesItems)+len(episodeItems))
+	for _, item := range append(seriesItems, episodeItems...) {
+		itemByKey[item.Type+"\x00"+item.ContentID] = item
+	}
+	ordered := make([]*models.MediaItem, 0, len(targets))
+	for _, target := range targets {
+		item := itemByKey[target.Type+"\x00"+target.ContentID]
+		if item == nil {
+			continue
+		}
+		itemCopy := *item
+		t := target.AddedAt
+		itemCopy.AddedAt = &t
+		itemCopy.PlayContentID = target.PlayContentID
+		ordered = append(ordered, &itemCopy)
+	}
+	return &CatalogResult{
+		Items:      ordered,
+		Total:      total,
+		HasMore:    hasMore,
+		TotalExact: !req.SkipTotal,
+		SnapshotAt: snapshot,
+	}, true, nil
 }
 
 func (r *CatalogResolver) resolveSectionBrowseSource(ctx context.Context, req CatalogRequest, access AccessFilter, section catalogPageSection, sort, order string) (*CatalogResult, error) {

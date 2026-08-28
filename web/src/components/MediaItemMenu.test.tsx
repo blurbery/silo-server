@@ -403,6 +403,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -427,6 +428,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -451,6 +453,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -476,6 +479,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -496,6 +500,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -526,6 +531,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -564,6 +570,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -585,6 +592,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -609,6 +617,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="wide"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -623,6 +632,7 @@ describe("MediaItemMenu trigger visibility", () => {
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="wide"
           showWatchedShortcut
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -636,6 +646,7 @@ describe("MediaItemMenu trigger visibility", () => {
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
           narrowPosterActions
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -659,6 +670,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -673,6 +685,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="episode"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -687,6 +700,7 @@ describe("MediaItemMenu trigger visibility", () => {
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
           showWatchedShortcut
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -732,6 +746,7 @@ describe("MediaItemMenu trigger visibility", () => {
           userState={{ played: true, is_favorite: true, in_watchlist: false }}
           variant="poster"
           dismissAction={{ itemId: "movie-1", surface: "continue_watching" }}
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -770,6 +785,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -796,6 +812,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -819,6 +836,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -850,6 +868,7 @@ describe("MediaItemMenu trigger visibility", () => {
           variant="wide"
           showCollectionActions={false}
           showWatchedShortcut
+          quickActionMode="both"
         />
       </MemoryRouter>
     );
@@ -873,6 +892,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -904,6 +924,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -925,6 +946,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -946,6 +968,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: true, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -968,6 +991,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: true, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -992,6 +1016,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -1011,6 +1036,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="wide"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -1025,6 +1051,7 @@ describe("MediaItemMenu trigger visibility", () => {
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
           showCollectionActions={false}
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -1041,6 +1068,7 @@ describe("MediaItemMenu trigger visibility", () => {
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
           showFavoriteShortcut={false}
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -1070,6 +1098,7 @@ describe("MediaItemMenu long-press action sheet", () => {
             variant="poster"
             longPressRef={cardRef}
             itemTitle="Apex"
+            quickActionMode="both"
           />
         </div>
       </MemoryRouter>

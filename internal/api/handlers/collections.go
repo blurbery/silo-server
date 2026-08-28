@@ -448,9 +448,9 @@ func (h *CollectionHandler) HandleUpdateCollection(w http.ResponseWriter, r *htt
 				writeError(w, http.StatusBadRequest, "bad_request", "source_url can only be edited for MDBList collections")
 				return
 			}
-			normalized := usercollections.NormalizeMDBListURL(*req.SourceURL)
-			if normalized == "" {
-				writeError(w, http.StatusBadRequest, "bad_request", "source_url is required")
+			normalized, err := usercollections.CanonicalMDBListURL(*req.SourceURL)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "bad_request", "source_url must be an MDBList list (https://mdblist.com/lists/...)")
 				return
 			}
 			cfg.URL = normalized

@@ -130,6 +130,7 @@ type MediaFile struct {
 	ProbeUpdatedAt       *time.Time
 	MatchAttemptedAt     *time.Time
 	MissingSince         *time.Time
+	FirstSeenScanRunID   string
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 }
@@ -625,6 +626,9 @@ type MediaItem struct {
 	CreatedAt                    time.Time
 	UpdatedAt                    time.Time
 	AddedAt                      *time.Time // populated by browse queries (MIN(mil.first_seen_at))
+	// PlayContentID is transient presentation metadata populated by resolvers
+	// whose displayed item differs from the leaf item that should play.
+	PlayContentID string
 }
 
 // MediaItemAlias is a provider-confirmed searchable title for a media item.

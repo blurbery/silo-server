@@ -747,6 +747,7 @@ export type ItemUserData = LeafItemUserData | SeasonUserData;
 
 export interface Season {
   content_id: string;
+  play_content_id?: string;
   season_number: number;
   is_specials: boolean;
   title: string;
@@ -806,8 +807,10 @@ export interface BrowseItemSortMetrics {
 
 export interface BrowseItem {
   content_id: string;
+  play_content_id?: string;
   type: "movie" | "series" | "season" | "episode" | "audiobook" | "ebook" | "manga";
   title: string;
+  series_id?: string;
   series_title?: string;
   season_number?: number | null;
   episode_number?: number | null;
@@ -1136,6 +1139,7 @@ export interface ItemExtra {
 
 export interface ItemDetail {
   content_id: string;
+  play_content_id?: string;
   type: "movie" | "series" | "season" | "episode" | "audiobook" | "ebook" | "manga" | "podcast";
   status?: "pending" | "matched" | "unmatched" | "ambiguous";
 
@@ -3868,6 +3872,7 @@ export interface SectionItemUpcomingEvent {
 
 export interface SectionItem {
   content_id: string;
+  play_content_id?: string;
   type: "movie" | "series" | "season" | "episode" | "audiobook" | "ebook";
   title: string;
   series_id?: string;

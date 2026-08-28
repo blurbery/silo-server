@@ -9,7 +9,7 @@
  */
 
 export const SETTINGS_API_VERSION = 1;
-export const SETTINGS_REVISION = 9;
+export const SETTINGS_REVISION = 10;
 
 export interface SettingSuggestedOption {
   value: string;
@@ -233,6 +233,8 @@ export const SETTING_KEYS = {
   SUBTITLE_MATCHES_DEVICE: "subtitle.matches_device",
   /** Poster badges */
   UI_CARD_OVERLAYS: "ui.card_overlays",
+  /** Card overlays enabled */
+  UI_CARD_OVERLAYS_ENABLED: "ui.card_overlays_enabled",
   /** Media cards */
   UI_CARD_PRESENTATION: "ui.card_presentation",
   /** Card quick actions */
@@ -1025,6 +1027,22 @@ export const SETTING_DEFINITIONS: Record<SettingKey, SettingDefinition> = {
     category: "appearance",
     platforms: ["web", "ios", "tvos", "macos", "android", "android_tv"],
   },
+  "ui.card_overlays_enabled": {
+    key: "ui.card_overlays_enabled",
+    type: "boolean",
+    nullable: true,
+    persistence: "remote",
+    introducedIn: 8,
+    scopes: ["profile"],
+    scopeIntroducedIn: [8],
+    resolutionOrder: ["profile", "default"],
+    defaultValue: null,
+    label: "Card overlays enabled",
+    description: "Show overlay badges on media cards.",
+    category: "appearance",
+    control: "switch",
+    platforms: ["web"],
+  },
   "ui.card_presentation": {
     key: "ui.card_presentation",
     type: "object",
@@ -1046,9 +1064,9 @@ export const SETTING_DEFINITIONS: Record<SettingKey, SettingDefinition> = {
     type: "enum",
     nullable: true,
     persistence: "remote",
-    introducedIn: 9,
+    introducedIn: 8,
     scopes: ["profile"],
-    scopeIntroducedIn: [9],
+    scopeIntroducedIn: [8],
     resolutionOrder: ["profile", "default"],
     defaultValue: null,
     label: "Card quick actions",
@@ -1057,9 +1075,9 @@ export const SETTING_DEFINITIONS: Record<SettingKey, SettingDefinition> = {
     control: "select",
     platforms: ["web"],
     values: [
-      { value: "both", label: "Both", introducedIn: 9 },
-      { value: "favorites", label: "Favorites only", introducedIn: 9 },
-      { value: "watched", label: "Watch indicator only", introducedIn: 9 },
+      { value: "both", label: "Both", introducedIn: 8 },
+      { value: "favorites", label: "Favorites only", introducedIn: 8 },
+      { value: "watched", label: "Watch indicator only", introducedIn: 8 },
     ],
   },
   "ui.card_quick_actions_enabled": {
@@ -1067,14 +1085,13 @@ export const SETTING_DEFINITIONS: Record<SettingKey, SettingDefinition> = {
     type: "boolean",
     nullable: true,
     persistence: "remote",
-    introducedIn: 9,
+    introducedIn: 8,
     scopes: ["profile"],
-    scopeIntroducedIn: [9],
+    scopeIntroducedIn: [8],
     resolutionOrder: ["profile", "default"],
     defaultValue: null,
     label: "Card quick actions enabled",
-    description:
-      "Show the selected favorite and watched shortcuts when permitted by the server-wide admin setting.",
+    description: "Show the selected favorite and watched shortcuts on media cards.",
     category: "appearance",
     control: "switch",
     platforms: ["web"],

@@ -17,6 +17,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/cache"
 	evt "github.com/Silo-Server/silo-server/internal/events"
 	"github.com/Silo-Server/silo-server/internal/settingscontract"
+	"github.com/Silo-Server/silo-server/internal/settingskeys"
 	"github.com/Silo-Server/silo-server/internal/settingsmigrate"
 	"github.com/Silo-Server/silo-server/internal/userstore"
 )
@@ -1202,12 +1203,27 @@ func (h *SettingsHandler) resolveEffectiveSetting(
 }
 
 const retiredWebWatchedIndicatorStyle = "none"
+const defaultCardQuickActionMode = "both"
 
-const (
-	defaultCardQuickActionMode   = "both"
-	cardQuickActionModeFavorites = calendarFilterFavorites
-	cardQuickActionModeWatched   = "watched"
-)
+// isCardQuickActionMode reports whether v is one of the ui.card_quick_actions
+// enum members, read from the settings contract so a new mode never has to be
+// re-listed here.
+func isCardQuickActionMode(v string) bool {
+	contract, err := settingscontract.Load()
+	if err != nil {
+		return false
+	}
+	def, ok := contract.Lookup(settingskeys.UiCardQuickActions)
+	if !ok {
+		return false
+	}
+	for _, member := range def.ValueSchema.Values {
+		if member.Value == v {
+			return true
+		}
+	}
+	return false
+}
 
 // overlayConfigResponse is returned by GET /settings/overlay-config.
 type overlayConfigResponse struct {
@@ -1219,11 +1235,14 @@ type overlayConfigResponse struct {
 }
 
 // HandleGetOverlayConfig returns the server-wide overlay configuration.
-// Available to all authenticated users (not admin-only).
+// Available to all authenticated users (not admin-only). Enabled and
+// QuickActionsEnabled are only the defaults for profiles that have not chosen:
+// an explicit ui.card_overlays_enabled / ui.card_quick_actions_enabled profile
+// setting overrides them in either direction.
 func (h *SettingsHandler) HandleGetOverlayConfig(w http.ResponseWriter, r *http.Request) {
 	resp := overlayConfigResponse{
 		Enabled:             true,
-		QuickActionsEnabled: true,
+		QuickActionsEnabled: false,
 		QuickActionsDefault: defaultCardQuickActionMode,
 		// Retain the response field for existing /api/v1 clients while the
 		// configurable watched-indicator setting is retired.
@@ -1237,11 +1256,10 @@ func (h *SettingsHandler) HandleGetOverlayConfig(w http.ResponseWriter, r *http.
 		if v, _ := h.serverSettings.Get(r.Context(), "defaults.card_overlays"); v != "" {
 			resp.Defaults = v
 		}
-		if v, _ := h.serverSettings.Get(r.Context(), "defaults.card_quick_actions_enabled"); v == "false" {
-			resp.QuickActionsEnabled = false
+		if v, _ := h.serverSettings.Get(r.Context(), "defaults.card_quick_actions_enabled"); v == "true" {
+			resp.QuickActionsEnabled = true
 		}
-		switch v, _ := h.serverSettings.Get(r.Context(), "defaults.card_quick_actions"); v {
-		case defaultCardQuickActionMode, cardQuickActionModeFavorites, cardQuickActionModeWatched:
+		if v, _ := h.serverSettings.Get(r.Context(), "defaults.card_quick_actions"); isCardQuickActionMode(v) {
 			resp.QuickActionsDefault = v
 		}
 	}
