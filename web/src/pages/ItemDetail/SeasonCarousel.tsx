@@ -1,6 +1,6 @@
-import { Link } from "react-router";
 import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import type { Season } from "@/api/types";
+import ViewTransitionLink from "@/components/ViewTransitionLink";
 import { usePrefetchCatalogSeason } from "@/hooks/queries/catalogRead";
 import { useCarouselEmbla } from "@/hooks/useCarouselEmbla";
 import { formatSeasonMeta, getSeasonDisplayTitle } from "./itemDetailLayout";
@@ -53,7 +53,7 @@ export default function SeasonCarousel({ seasons }: SeasonCarouselProps) {
 
               return (
                 <li key={season.content_id} className="embla__slide shrink-0">
-                  <Link
+                  <ViewTransitionLink
                     to={`/item/${season.content_id}`}
                     className="group/season block w-[160px] sm:w-[170px]"
                     onMouseEnter={() => prefetchSeason(season.content_id)}
@@ -108,7 +108,7 @@ export default function SeasonCarousel({ seasons }: SeasonCarouselProps) {
                           : formatSeasonMeta(season)}
                       </div>
                     </div>
-                  </Link>
+                  </ViewTransitionLink>
                 </li>
               );
             })}
