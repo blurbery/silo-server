@@ -72,7 +72,7 @@ func TestBuildRemuxArgsHonorsPlannedAACOutput(t *testing.T) {
 }
 
 func TestBuildRemuxArgsBoostsOnlySurroundToStereoAAC(t *testing.T) {
-	const wantFilter = "aresample=out_chlayout=stereo,alimiter=level_in=2:limit=0.794328235:attack=5:release=50:level=false:latency=true"
+	const wantFilter = "aresample=out_chlayout=stereo:async=1,alimiter=level_in=2:limit=0.794328235:attack=5:release=50:level=false:latency=true"
 	tests := []struct {
 		name           string
 		transcodeAudio bool

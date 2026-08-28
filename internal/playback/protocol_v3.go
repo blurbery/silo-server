@@ -188,7 +188,7 @@ const (
 	TransformationHDRToSDRToneMapV3 = "hdr_to_sdr_tonemap"
 
 	TransformationVideoToH264RecipeVersionV3     = "2"
-	TransformationAudioToAACRecipeVersionV3      = "2"
+	TransformationAudioToAACRecipeVersionV3      = "3"
 	TransformationServerDV7HDR10RecipeVersionV3  = "3"
 	TransformationServerDV8BaseRecipeVersionV3   = "2"
 	TransformationHDRToSDRToneMapRecipeVersionV3 = "1"
