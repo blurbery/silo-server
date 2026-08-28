@@ -51,7 +51,7 @@ describe("ActionBar", () => {
         "cursor-pointer",
         "transform-gpu",
         "transition-transform",
-        "duration-150",
+        "duration-[--duration-fast]",
         "hover:bg-primary",
         "motion-safe:hover:scale-[1.02]",
         "motion-safe:active:scale-[0.98]",
@@ -65,13 +65,15 @@ describe("ActionBar", () => {
       watchedLabel: "Mark Watched",
       onToggleWatched: () => {},
       onToggleFavorite: () => {},
+      // The More button only renders when the overflow menu has at least one entry.
+      onToggleWatchlist: () => {},
     });
 
     expect(screen.getByRole("button", { name: "Mark Watched" })).toHaveClass(
       "enabled:cursor-pointer",
       "transform-gpu",
       "transition-transform",
-      "duration-150",
+      "duration-[--duration-fast]",
       "glass-hover",
       "glass-hover-surface",
       "motion-safe:hover:scale-[1.02]",

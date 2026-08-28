@@ -19,14 +19,13 @@ function RecommendationItemCard({ itemId }: RecommendationItemCardProps) {
     return <div className="bg-surface aspect-[2/3] animate-pulse rounded-lg" />;
   }
   return (
-    <ViewTransitionLink to={`/item/${encodeURIComponent(itemId)}`} className="group">
-      <div className="aspect-[2/3] overflow-hidden rounded-lg">
+    <ViewTransitionLink
+      to={`/item/${encodeURIComponent(itemId)}`}
+      className="media-card group block"
+    >
+      <div className="media-card-image aspect-[2/3] overflow-hidden rounded-lg">
         {item.poster_url ? (
-          <img
-            src={item.poster_url}
-            alt={item.title}
-            className="h-full w-full object-cover transition-transform group-hover:scale-105"
-          />
+          <img src={item.poster_url} alt={item.title} className="h-full w-full object-cover" />
         ) : (
           <div className="bg-surface text-muted-foreground flex h-full items-center justify-center text-xs">
             {item.title}
