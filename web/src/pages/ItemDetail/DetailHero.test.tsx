@@ -48,7 +48,20 @@ describe("DetailHero artwork revisions", () => {
     );
 
     const backdrop = container.querySelector('img[src="/backdrop.rev-a.webp"]');
+    const artwork = backdrop?.parentElement;
     expect(backdrop).not.toHaveClass("will-change-transform");
     expect(backdrop?.getAttribute("style") ?? "").not.toContain("animation");
+    expect(artwork).toHaveClass("hero-backdrop-artwork");
+    expect(artwork?.getAttribute("style") ?? "").not.toContain("filter");
+  });
+
+  it("places every detail-page action surface inside the opaque action boundary", () => {
+    const { container } = render(
+      <DetailHero title="Blade Runner" actions={<button>Play</button>} />,
+    );
+
+    expect(container.querySelector(".detail-action-bar")).toContainElement(
+      screen.getByRole("button", { name: "Play" }),
+    );
   });
 });
