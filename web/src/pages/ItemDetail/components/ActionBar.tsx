@@ -285,7 +285,7 @@ export default function ActionBar({
     ((versions && hasMultipleVersions) || (selectedVersion.audio_tracks?.length ?? 0) > 0 || true); // subs popover always shows when version is selected
 
   return (
-    <div className="space-y-2.5">
+    <div className="detail-action-bar space-y-2.5">
       {/* ── Primary actions ──────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-3">
         {/* ── Play button ────────────────────────────────────── */}

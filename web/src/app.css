@@ -1045,6 +1045,69 @@
     --glass-hover-color: var(--accent);
   }
 
+  /* Match upstream #540: controls over a large detail backdrop keep the glass
+     appearance without re-sampling and blurring the artwork on interaction. */
+  .detail-action-bar .glass-subtle {
+    background: color-mix(in srgb, var(--surface) 82%, var(--background));
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  /* Rating previews are CSS-only so moving across stars never schedules a
+     React render or recomposites a live backdrop-filter surface. */
+  .star-rating {
+    contain: layout paint;
+    background: color-mix(in srgb, var(--surface) 82%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border) 30%, transparent);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.05);
+  }
+
+  .star-rating-star {
+    color: color-mix(in srgb, var(--muted-foreground) 50%, transparent);
+  }
+
+  .star-rating-star[data-filled="true"] {
+    color: rgb(250 204 21);
+  }
+
+  .star-rating-star[data-filled="true"] svg {
+    fill: currentcolor;
+  }
+
+  .star-rating:has(.star-rating-star:hover) .star-rating-star {
+    color: color-mix(in srgb, var(--muted-foreground) 50%, transparent);
+  }
+
+  .star-rating:has(.star-rating-star:hover) .star-rating-star svg {
+    fill: none;
+  }
+
+  .star-rating:has(.star-rating-star:nth-of-type(1):hover) .star-rating-star:nth-of-type(-n + 1),
+  .star-rating:has(.star-rating-star:nth-of-type(2):hover) .star-rating-star:nth-of-type(-n + 2),
+  .star-rating:has(.star-rating-star:nth-of-type(3):hover) .star-rating-star:nth-of-type(-n + 3),
+  .star-rating:has(.star-rating-star:nth-of-type(4):hover) .star-rating-star:nth-of-type(-n + 4),
+  .star-rating:has(.star-rating-star:nth-of-type(5):hover) .star-rating-star:nth-of-type(-n + 5) {
+    color: rgb(250 204 21);
+  }
+
+  .star-rating:has(.star-rating-star:nth-of-type(1):hover)
+    .star-rating-star:nth-of-type(-n + 1)
+    svg,
+  .star-rating:has(.star-rating-star:nth-of-type(2):hover)
+    .star-rating-star:nth-of-type(-n + 2)
+    svg,
+  .star-rating:has(.star-rating-star:nth-of-type(3):hover)
+    .star-rating-star:nth-of-type(-n + 3)
+    svg,
+  .star-rating:has(.star-rating-star:nth-of-type(4):hover)
+    .star-rating-star:nth-of-type(-n + 4)
+    svg,
+  .star-rating:has(.star-rating-star:nth-of-type(5):hover)
+    .star-rating-star:nth-of-type(-n + 5)
+    svg {
+    fill: currentcolor;
+  }
+
   /* Less-transparent glass for small chips that sit over busy cover art
      (manga count/status pills) so the label stays legible. */
   .glass-chip {

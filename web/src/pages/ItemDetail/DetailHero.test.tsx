@@ -41,4 +41,14 @@ describe("DetailHero artwork revisions", () => {
     expect(layout).toHaveClass("lg:min-h-[42vh]");
     expect(layout).not.toHaveClass("lg:h-[42vh]");
   });
+
+  it("keeps the full-viewport backdrop static after it loads", () => {
+    const { container } = render(
+      <DetailHero title="Blade Runner" backdropUrl="/backdrop.rev-a.webp" />,
+    );
+
+    const backdrop = container.querySelector('img[src="/backdrop.rev-a.webp"]');
+    expect(backdrop).not.toHaveClass("will-change-transform");
+    expect(backdrop?.getAttribute("style") ?? "").not.toContain("animation");
+  });
 });
