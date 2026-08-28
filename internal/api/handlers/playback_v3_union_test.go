@@ -124,7 +124,7 @@ func TestHLSPlanningRegistryV3UnionsPooledNodeCapabilities(t *testing.T) {
 		}
 		writeJSON(w, http.StatusOK, playback.HWAccelInfo{Transformations: []playback.TransformationV3{
 			{Name: "video_to_h264", Executor: "server", RecipeVersion: "2"},
-			{Name: "audio_to_aac", Executor: "server", RecipeVersion: "2"},
+			{Name: "audio_to_aac", Executor: "server", RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3},
 		}})
 	}))
 	defer remote.Close()
