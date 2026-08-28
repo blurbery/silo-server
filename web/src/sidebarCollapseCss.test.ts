@@ -181,3 +181,16 @@ describe("sidebar collapse CSS", () => {
     ).toBe("@media (min-width: 1024px)");
   });
 });
+
+describe("responsive rendering containment", () => {
+  it("defers off-screen item detail sections during viewport changes", () => {
+    const supporting = ruleBody(".detail-supporting-content > * {");
+    expect(supporting).toContain("content-visibility: auto");
+    expect(supporting).toContain("contain-intrinsic-size: auto 24rem");
+  });
+
+  it("keeps shared card and button hover feedback off CSS filters", () => {
+    expect(css).not.toMatch(/\.media-card:hover\s*\{[^}]*filter:/s);
+    expect(ruleBody(".pill-primary:hover {")).not.toContain("filter:");
+  });
+});

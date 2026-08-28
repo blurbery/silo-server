@@ -370,7 +370,7 @@ export default function MangaContent({
         }
       />
 
-      <div className="page-shell space-y-4 py-10">
+      <div className="page-shell detail-supporting-content space-y-4 py-10">
         {resume && flattenMangaList(entries).length > 10 && (
           <div className="flex justify-end">
             <Button

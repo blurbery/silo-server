@@ -1242,29 +1242,29 @@
   }
 
   /* ── Media Card ──────────────────────────────────────────── */
-  /* Hover effect for poster/backdrop cards.
-     Scale is applied to the image inside the overflow-hidden
-     .media-card-image container so it stays visually contained
-     and doesn't overlap adjacent carousels.
+  /* Hover effect for poster/backdrop cards. Keep feedback on the image-only
+     transform below: animating a filter and a second transform on every card
+     briefly keeps several rasterized card surfaces alive when the pointer is
+     swept across a row.
      Usage: <div class="media-card">
               <div class="media-card-image"><img … /></div>
               <div>Title</div>
             </div>                                              */
-  .media-card {
-    transition:
-      transform var(--duration-normal) var(--ease-gentle),
-      filter var(--duration-fast) var(--ease-default);
-  }
-  .media-card:hover {
-    filter: brightness(1.1);
-    transform: translateY(-4px);
-  }
 
   /* Home/library pages can contain hundreds of cards across off-screen rows.
      Let supporting engines skip layout and paint for those rows until they
      approach the viewport. Browsers without content-visibility ignore this
      and keep the existing rendering path. */
   .media-carousel {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 24rem;
+  }
+
+  /* Detail pages can contain several image-heavy rails below the fold. Match
+     the home carousel strategy so a viewport resize only lays out and paints
+     the supporting sections near the user. The remembered intrinsic size
+     prevents already-visited sections from shifting the scroll position. */
+  .detail-supporting-content > * {
     content-visibility: auto;
     contain-intrinsic-size: auto 24rem;
   }
@@ -1325,7 +1325,7 @@
   }
   .media-card-image img {
     transition:
-      transform var(--duration-normal) var(--ease-gentle),
+      transform var(--duration-fast) var(--ease-gentle),
       opacity var(--duration-normal) var(--ease-default);
   }
   .media-card:hover .media-card-image img {
@@ -1387,7 +1387,11 @@
     font-size: 0.84rem;
     font-weight: 700;
     letter-spacing: 0.01em;
-    transition: all var(--duration-fast) var(--ease-default);
+    transition:
+      background-color var(--duration-fast) var(--ease-default),
+      color var(--duration-fast) var(--ease-default),
+      transform var(--duration-fast) var(--ease-default),
+      box-shadow var(--duration-fast) var(--ease-default);
   }
   .pill-primary {
     background-color: var(--primary);
@@ -1395,7 +1399,7 @@
     box-shadow: 0 16px 36px -20px color-mix(in srgb, var(--primary) 60%, transparent);
   }
   .pill-primary:hover {
-    filter: brightness(0.96);
+    background-color: color-mix(in srgb, var(--primary) 94%, black);
     transform: translateY(-1px);
   }
   .pill-secondary {
