@@ -8,6 +8,7 @@ const (
 	QuirkAndroidMobileEAC3BluetoothV3 = "android.mobile.eac3_bluetooth_hls_audio_adapt_v1"
 	QuirkFireTVDV8HDR10PlusV3         = "android.fire_tv.dv8_hdr10plus_sei_v1"
 	QuirkFirefoxHEVCOpenGOPV3         = "web.firefox.hevc_open_gop_resume_v1"
+	QuirkFirefoxMatroskaAACTimingV3   = "web.firefox.matroska_aac_timestamps_v1"
 )
 
 func high10DecodeOverrideV3(source SourceDescriptorV3, request StartRequestV3) (*AppliedQuirkV3, bool) {
@@ -92,12 +93,7 @@ func dv8HDR10PlusRuntimeCorrectionV3(source SourceDescriptorV3, request StartReq
 // for a non-zero seek, but the plan freezes the quirk from the first start so a
 // later seek reanchor cannot lose the byte recipe.
 func firefoxHEVCOpenGOPQuirkV3(source SourceDescriptorV3, request StartRequestV3) (*AppliedQuirkV3, bool) {
-	device := request.ClientPlaybackContext.Device
-	if !strings.EqualFold(device.Platform, "web") || !strings.EqualFold(source.VideoCodec, "hevc") {
-		return nil, false
-	}
-	userAgent := strings.ToLower(strings.TrimSpace(device.PlatformDetails["user_agent"]))
-	if !strings.Contains(userAgent, "firefox/") || strings.Contains(userAgent, "seamonkey/") {
+	if !isFirefoxWebV3(request) || !strings.EqualFold(source.VideoCodec, "hevc") {
 		return nil, false
 	}
 	quirk := AppliedQuirkV3{
@@ -107,6 +103,35 @@ func firefoxHEVCOpenGOPQuirkV3(source SourceDescriptorV3, request StartRequestV3
 		Reason:           "Firefox HEVC resume requires initial open-GOP leading pictures to be removed after a server-side seek.",
 	}
 	return &quirk, true
+}
+
+// firefoxMatroskaAACTimingQuirkV3 prevents millisecond-rounded Matroska AAC
+// packet timestamps from being copied into MP4/fMP4. Firefox treats those
+// sub-frame gaps as missing audio and inserts silence, which is heard as
+// crackling. Other clients keep codec-copy remuxing, and Firefox direct play
+// remains available when its native container claim is valid.
+func firefoxMatroskaAACTimingQuirkV3(source SourceDescriptorV3, request StartRequestV3) (*AppliedQuirkV3, bool) {
+	container := strings.ToLower(strings.TrimSpace(source.Container))
+	if !isFirefoxWebV3(request) || (container != containerMKVV3 && container != "matroska") ||
+		!strings.EqualFold(strings.TrimSpace(source.AudioCodec), audioCodecAACV3) {
+		return nil, false
+	}
+	quirk := AppliedQuirkV3{
+		ID:               QuirkFirefoxMatroskaAACTimingV3,
+		RegistryRevision: DeviceQuirkRegistryRevisionV3,
+		Action:           "audio_only_transcode",
+		Reason:           "Firefox requires Matroska AAC timestamps to be normalized before MP4 or HLS packaging.",
+	}
+	return &quirk, true
+}
+
+func isFirefoxWebV3(request StartRequestV3) bool {
+	device := request.ClientPlaybackContext.Device
+	if !strings.EqualFold(device.Platform, "web") {
+		return false
+	}
+	userAgent := strings.ToLower(strings.TrimSpace(device.PlatformDetails["user_agent"]))
+	return strings.Contains(userAgent, "firefox/") && !strings.Contains(userAgent, "seamonkey/")
 }
 
 func applyFirefoxHEVCOpenGOPQuirkV3(plan *PlanV3, source SourceDescriptorV3, request StartRequestV3) bool {
