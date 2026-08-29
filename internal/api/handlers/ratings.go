@@ -82,6 +82,7 @@ type communityRatingListItem struct {
 	DisplayName    string `json:"display_name"`
 	AvatarURL      string `json:"avatar_url,omitempty"`
 	Rating         int    `json:"rating"`
+	RatedAt        string `json:"rated_at"`
 	UpCount        int    `json:"up_count"`
 	DownCount      int    `json:"down_count"`
 	ViewerReaction string `json:"viewer_reaction,omitempty"`
@@ -264,6 +265,7 @@ func (h *RatingsHandler) HandleListCommunityRatings(w http.ResponseWriter, r *ht
 			DisplayName:    abbreviateProfileName(rating.ProfileName),
 			AvatarURL:      avatarURL,
 			Rating:         rating.Rating,
+			RatedAt:        rating.RatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 			UpCount:        rating.UpCount,
 			DownCount:      rating.DownCount,
 			ViewerReaction: communityReactionName(rating.ViewerReaction),
@@ -333,10 +335,6 @@ func (h *RatingsHandler) HandleSetCommunityRatingReaction(w http.ResponseWriter,
 	}
 	userID := apimw.GetUserID(r.Context())
 	profileID := apimw.GetProfileID(r.Context())
-	if target.UserID == userID && target.ProfileID == profileID {
-		writeError(w, http.StatusBadRequest, "bad_request", "You cannot react to your own rating")
-		return
-	}
 
 	inserted, err := h.ratingsRepo.SetCommunityReaction(
 		r.Context(),
@@ -367,10 +365,6 @@ func (h *RatingsHandler) HandleDeleteCommunityRatingReaction(w http.ResponseWrit
 	}
 	userID := apimw.GetUserID(r.Context())
 	profileID := apimw.GetProfileID(r.Context())
-	if target.UserID == userID && target.ProfileID == profileID {
-		writeError(w, http.StatusBadRequest, "bad_request", "You cannot react to your own rating")
-		return
-	}
 	if err := h.ratingsRepo.DeleteCommunityReaction(
 		r.Context(),
 		userID,
@@ -424,10 +418,7 @@ func abbreviateProfileName(name string) string {
 	if len(runes) == 0 {
 		return "User***"
 	}
-	if len(runes) > 3 {
-		runes = runes[:3]
-	}
-	return string(runes) + "***"
+	return string(runes[0]) + strings.Repeat("*", len(runes)-1)
 }
 
 func communityReactionName(reaction int) string {

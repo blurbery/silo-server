@@ -111,8 +111,9 @@ func TestCommunityRatingsResponseMasksIdentityAndUsesCurrentAvatar(t *testing.T)
 		t.Fatalf("response leaked profile identity: %s", body)
 	}
 	for _, want := range []string{
-		`"display_name":"Sam***"`,
+		`"display_name":"S*******"`,
 		`"avatar_url":"/profile-avatars/avatar-1.svg"`,
+		`"rated_at":"2026-08-29T08:00:00Z"`,
 		`"viewer_reaction":"up"`,
 		`"average_rating":4.5`,
 		`"vote_count":2`,
@@ -201,7 +202,7 @@ func TestCommunityUploadedAvatarUsesOpaqueProxyCapability(t *testing.T) {
 	}
 }
 
-func TestSetCommunityRatingReactionRejectsOwnCard(t *testing.T) {
+func TestSetCommunityRatingReactionAllowsOwnCard(t *testing.T) {
 	target := catalog.CommunityRating{
 		UserID:      7,
 		ProfileID:   "viewer-profile",
@@ -225,16 +226,48 @@ func TestSetCommunityRatingReactionRejectsOwnCard(t *testing.T) {
 
 	handler.HandleSetCommunityRatingReaction(recorder, req)
 
-	if recorder.Code != http.StatusBadRequest {
+	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
-	if repo.setReaction != 0 {
-		t.Fatal("own-card reaction reached repository")
+	if repo.setTargetUser != target.UserID || repo.setTargetID != target.ProfileID || repo.setReaction != 1 {
+		t.Fatalf("set target = (%d, %q, %d)", repo.setTargetUser, repo.setTargetID, repo.setReaction)
+	}
+}
+
+func TestDeleteCommunityRatingReactionAllowsOwnCard(t *testing.T) {
+	target := catalog.CommunityRating{
+		UserID:      7,
+		ProfileID:   "viewer-profile",
+		ProfileName: "Viewer",
+		Rating:      4,
+		RatedAt:     time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC),
+	}
+	repo := &communityRatingsRepoStub{community: []catalog.CommunityRating{target}}
+	handler := NewRatingsHandler(repo, communityRatingsItemRepoStub{})
+	req := communityRatingsRequest(
+		http.MethodDelete,
+		"/ratings/movie-1/community/key/reaction",
+		"movie-1",
+		communityRatingKey(target),
+		nil,
+	)
+	recorder := httptest.NewRecorder()
+
+	handler.HandleDeleteCommunityRatingReaction(recorder, req)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if !repo.deleteReaction {
+		t.Fatal("own-card reaction delete did not reach repository")
 	}
 }
 
 func TestAbbreviateProfileNameUsesRunes(t *testing.T) {
-	if got := abbreviateProfileName("Åsa-Marie"); got != "Åsa***" {
+	if got := abbreviateProfileName("Åsa-Marie"); got != "Å********" {
+		t.Fatalf("abbreviated name = %q", got)
+	}
+	if got := abbreviateProfileName("Mohommad"); got != "M*******" {
 		t.Fatalf("abbreviated name = %q", got)
 	}
 }

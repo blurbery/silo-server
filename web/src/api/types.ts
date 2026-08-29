@@ -1144,6 +1144,7 @@ export interface CommunityRatingEntry {
   display_name: string;
   avatar_url?: string;
   rating: number;
+  rated_at: string;
   up_count: number;
   down_count: number;
   viewer_reaction?: CommunityRatingReaction;
