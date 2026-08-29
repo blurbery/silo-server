@@ -374,6 +374,7 @@ export function GlobalSearch({
                   variant="dialog"
                   query={tmdbDebouncedQuery}
                   libraryHadHits={items.length > 0}
+                  libraryResultsKnown={!previewQuery.isFetching && !previewQuery.isError}
                 />
               )}
             </div>

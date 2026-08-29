@@ -53,13 +53,15 @@ vi.mock("@/components/RequestToAddSection", () => ({
     variant,
     query,
     libraryHadHits,
+    libraryResultsKnown,
   }: {
     variant: string;
     query: string;
     libraryHadHits: boolean;
+    libraryResultsKnown?: boolean;
   }) => (
     <div data-testid="request-section">
-      {`variant="${variant}" query="${query}" libraryHadHits="${String(libraryHadHits)}"`}
+      {`variant="${variant}" query="${query}" libraryHadHits="${String(libraryHadHits)}" libraryResultsKnown="${String(libraryResultsKnown)}"`}
     </div>
   ),
 }));
@@ -388,6 +390,7 @@ describe("Catalog page", () => {
     expect(markup).toContain('data-testid="request-section"');
     expect(markup).toContain("variant=&quot;grid&quot;");
     expect(markup).toContain("libraryHadHits=&quot;true&quot;");
+    expect(markup).toContain("libraryResultsKnown=&quot;true&quot;");
   });
 
   it("renders the request grid variant with libraryHadHits=false when library has 0 hits", () => {
@@ -426,6 +429,31 @@ describe("Catalog page", () => {
     );
 
     expect(markup).toContain("libraryHadHits=&quot;false&quot;");
+    expect(markup).toContain("libraryResultsKnown=&quot;true&quot;");
+  });
+
+  it("marks library results unknown when the local search failed", () => {
+    mockUseCanRequest.mockReturnValue({
+      discoveryEnabled: true,
+      isResolving: false,
+      submitDisabledReason: null,
+    });
+    mockUseCatalogWindow.mockReturnValue({
+      data: { title: 'Results for "heat"', totalItems: 0, pages: new Map() },
+      isLoading: false,
+      isError: true,
+      isPlaceholderData: false,
+      refetch: vi.fn(),
+    });
+
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain("libraryHadHits=&quot;false&quot;");
+    expect(markup).toContain("libraryResultsKnown=&quot;false&quot;");
   });
 
   it("does not render the request section when source is not query", () => {
