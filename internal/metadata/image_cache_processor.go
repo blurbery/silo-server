@@ -34,11 +34,21 @@ const (
 	imageCacheDiscoveryBatchSize = 1000
 	// Waiting for a background worker to release a job polls with backoff and
 	// gives up after immediateImageCacheIdleTimeout without progress. The
-	// worker's own lease runs for imageCacheLeaseDuration, and its pod can die
+	// worker's own lease runs for ImageCacheLeaseDuration, and its pod can die
 	// while holding it, so an interactive refresh must not wait that long.
 	immediateImageCacheMinPoll     = 100 * time.Millisecond
 	immediateImageCacheMaxPoll     = 2 * time.Second
 	immediateImageCacheIdleTimeout = 30 * time.Second
+
+	// ImageCacheJobTimeout bounds one job end to end: source check, download
+	// (which also has its own 30-second cap in imagecache), variant encode, and
+	// uploads. Only the download had a deadline before; a hung upload or encode
+	// could hold a job past its claim lease, letting another worker reclaim and
+	// duplicate it. Two minutes is generous for the slowest realistic job, and
+	// worker/claim-page sizing (internal/taskmanager/tasks) relies on it to
+	// prove a claimed page always drains inside ImageCacheLeaseDuration. A job
+	// that hits it is marked failed and retried on the normal backoff.
+	ImageCacheJobTimeout = 2 * time.Minute
 )
 
 // ErrTargetArtworkPending reports that some of a refreshed target's artwork was
@@ -452,7 +462,9 @@ loop:
 		go func(job *models.MetadataImageCacheJob) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			result := p.processOne(ctx, job)
+			jobCtx, cancelJob := context.WithTimeout(ctx, ImageCacheJobTimeout)
+			result := p.processOne(jobCtx, job)
+			cancelJob()
 			mu.Lock()
 			switch result.outcome {
 			case "succeeded":
@@ -628,6 +640,8 @@ func (p *ImageCacheProcessor) runUntilIdle(ctx context.Context, workerID string,
 	}
 	var discoveryCursor imageCacheDiscoveryCursor
 	discoveredThisSweep := false
+	enqueuedThisSweep := false
+	confirmationSweep := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return total, err
@@ -689,6 +703,7 @@ func (p *ImageCacheProcessor) runUntilIdle(ctx context.Context, workerID string,
 			total.EnqueuedExisting += page.Enqueued
 			reportImageCacheRunProgress(reportProgress, total)
 			if page.Enqueued > 0 {
+				enqueuedThisSweep = true
 				break
 			}
 			if !page.Complete {
@@ -697,11 +712,20 @@ func (p *ImageCacheProcessor) runUntilIdle(ctx context.Context, workerID string,
 			if !discoveredThisSweep {
 				return total, nil
 			}
+			if confirmationSweep && !enqueuedThisSweep {
+				// A second complete sweep reported candidates but could not enqueue
+				// any of them. Repeating the same non-actionable catalog state cannot
+				// make progress; a later explicit backfill starts fresh from durable
+				// queue and catalog state.
+				return total, nil
+			}
 			// Queue rows and cached paths now reflect the completed sweep. Resetting
 			// catches concurrent changes that sorted behind the cursor. A retry or
 			// process restart also starts here and safely reuses those durable rows.
 			discoveryCursor = imageCacheDiscoveryCursor{}
 			discoveredThisSweep = false
+			enqueuedThisSweep = false
+			confirmationSweep = true
 		}
 	}
 }

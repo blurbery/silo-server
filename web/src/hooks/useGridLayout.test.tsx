@@ -23,6 +23,7 @@ function Harness() {
     <div>
       <output>{`${layout.columnCount}:${layout.rowHeight}`}</output>
       <div
+        data-testid="grid"
         ref={(element) => {
           containerRef.current = element;
           if (element && !mounted.current) {
@@ -52,20 +53,58 @@ describe("useGridLayout", () => {
     vi.unstubAllGlobals();
   });
 
-  it("reconciles virtual row geometry once a continuous resize settles", () => {
+  it("tracks the first resize frame immediately, then coalesces the rest", () => {
     render(<Harness />);
     expect(screen.getByRole("status")).toHaveTextContent("2:322.5");
 
+    // The virtualizer positions absolute rows from this geometry, so deferring
+    // the first frame would leave rows overlapping the already-reflowed grid
+    // for the whole settle window.
     containerWidth = 360;
+    act(() => notifyResize?.([], {} as ResizeObserver));
+    expect(screen.getByRole("status")).toHaveTextContent("2:292.5");
+  });
+
+  it("measures immediately when a resize crosses a column breakpoint", () => {
+    render(<Harness />);
+    expect(screen.getByRole("status")).toHaveTextContent("2:322.5");
+
+    // Begin a drag. The leading edge measures, so later frames coalesce.
+    containerWidth = 360;
+    act(() => notifyResize?.([], {} as ResizeObserver));
+    expect(screen.getByRole("status")).toHaveTextContent("2:292.5");
+
+    // Mid-drag CSS reflows to three columns. `columnCount` slices the item list
+    // (`startIndex = row * columnCount`), so holding the stale 2 until the drag
+    // stopped would omit or duplicate cards for the rest of the gesture — this
+    // one notification must not be coalesced.
+    containerWidth = 340;
+    act(() => {
+      screen.getByTestId("grid").style.gridTemplateColumns = "100px 100px 100px";
+      notifyResize?.([], {} as ResizeObserver);
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("3:190");
+  });
+
+  it("reconciles once more after a continuous resize settles", () => {
+    render(<Harness />);
+
+    containerWidth = 360;
+    act(() => notifyResize?.([], {} as ResizeObserver));
+    expect(screen.getByRole("status")).toHaveTextContent("2:292.5");
+
+    // Intermediate frames of the same gesture do not each schedule a render;
+    // they collapse into one trailing reconcile at the final width.
+    containerWidth = 300;
     act(() => {
       notifyResize?.([], {} as ResizeObserver);
       vi.advanceTimersByTime(80);
       notifyResize?.([], {} as ResizeObserver);
       vi.advanceTimersByTime(119);
     });
-    expect(screen.getByRole("status")).toHaveTextContent("2:322.5");
+    expect(screen.getByRole("status")).toHaveTextContent("2:292.5");
 
     act(() => vi.advanceTimersByTime(1));
-    expect(screen.getByRole("status")).toHaveTextContent("2:292.5");
+    expect(screen.getByRole("status")).toHaveTextContent("2:247.5");
   });
 });

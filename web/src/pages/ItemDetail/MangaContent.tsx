@@ -10,13 +10,13 @@ import {
   MoreVertical,
   RefreshCw,
 } from "lucide-react";
-import ViewTransitionLink from "@/components/ViewTransitionLink";
 import { toast } from "sonner";
 import type { FileVersion, ItemDetail, MangaChapter } from "@/api/types";
 import DownloadVersionPicker from "@/components/DownloadVersionPicker";
 import MangaFilesDialog from "@/components/MangaFilesDialog";
 import PageBack from "@/components/PageBack";
 import RefreshMetadataDialog from "@/components/RefreshMetadataDialog";
+import ViewTransitionLink from "@/components/ViewTransitionLink";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -348,7 +348,7 @@ export default function MangaContent({
                   <MoreVertical className="size-[18px]" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="detail-overflow-menu w-56">
+              <DropdownMenuContent align="start" className="w-56">
                 <DropdownMenuItem onSelect={() => setFilesOpen(true)}>
                   <FileText className="size-4" />
                   View Details
@@ -373,7 +373,7 @@ export default function MangaContent({
         }
       />
 
-      <div className="page-shell detail-supporting-content space-y-4 py-10">
+      <div className="page-shell space-y-4 py-10">
         {resume && flattenMangaList(entries).length > 10 && (
           <div className="flex justify-end">
             <Button
@@ -461,7 +461,7 @@ function MangaSection({
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
-        className="bg-background hover:bg-muted/40 sticky top-0 z-10 flex w-full items-center justify-between px-4 py-2 transition-colors duration-(--duration-fast)"
+        className="bg-background/95 hover:bg-muted/40 sticky top-0 z-10 flex w-full items-center justify-between px-4 py-2 backdrop-blur transition-colors"
       >
         <span className="text-muted-foreground text-sm font-bold tracking-tight uppercase">
           {entry.label}

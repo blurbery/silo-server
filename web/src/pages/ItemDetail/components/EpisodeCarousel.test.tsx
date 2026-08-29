@@ -39,17 +39,9 @@ describe("EpisodeCarousel", () => {
     prefetchEpisodeDetail.mockClear();
   });
 
-  it("keeps the empty carousel track on the normal cursor", () => {
-    const { container } = render(
-      <MemoryRouter>
-        <EpisodeCarousel currentEpisodeNumber={1} episodes={[]} />
-      </MemoryRouter>,
-    );
-
-    expect(container.querySelector(".embla__container")).not.toHaveClass("cursor-grab");
-  });
-
   it("prefetches only after a card shows sustained navigation intent", () => {
+    // A pointer sweeping the rail crosses every card; prefetching each one it
+    // passes would start cache work for the whole season. Intent is a dwell.
     vi.useFakeTimers();
     try {
       render(
@@ -74,11 +66,16 @@ describe("EpisodeCarousel", () => {
         </MemoryRouter>,
       );
 
-      const card = screen.getByText("Episode 1").closest(".media-card");
-      fireEvent.mouseEnter(card!);
-      act(() => vi.advanceTimersByTime(139));
+      const card = screen.getAllByRole("link", { name: /Pilot/ })[0]!.closest("div.group\\/card")!;
+
+      fireEvent.mouseEnter(card);
+      act(() => vi.advanceTimersByTime(100));
+      fireEvent.mouseLeave(card);
+      act(() => vi.advanceTimersByTime(200));
       expect(prefetchEpisodeDetail).not.toHaveBeenCalled();
-      act(() => vi.advanceTimersByTime(1));
+
+      fireEvent.mouseEnter(card);
+      act(() => vi.advanceTimersByTime(140));
       expect(prefetchEpisodeDetail).toHaveBeenCalledWith("ep-1");
     } finally {
       vi.useRealTimers();

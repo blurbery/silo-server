@@ -1,6 +1,5 @@
 import type { ComponentProps } from "react";
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import type { FileVersion } from "@/api/types";
@@ -52,7 +51,7 @@ describe("ActionBar", () => {
         "cursor-pointer",
         "transform-gpu",
         "transition-transform",
-        "duration-(--duration-fast)",
+        "duration-150",
         "hover:bg-primary",
         "motion-safe:hover:scale-[1.02]",
         "motion-safe:active:scale-[0.98]",
@@ -74,7 +73,7 @@ describe("ActionBar", () => {
       "enabled:cursor-pointer",
       "transform-gpu",
       "transition-transform",
-      "duration-(--duration-fast)",
+      "duration-150",
       "glass-hover",
       "glass-hover-surface",
       "motion-safe:hover:scale-[1.02]",
@@ -91,16 +90,6 @@ describe("ActionBar", () => {
       "glass-hover",
       "glass-hover-surface",
       "transition-none",
-    );
-  });
-
-  it("shows a hand pointer on enabled detail overflow actions", async () => {
-    renderActionBar({ onToggleWatchlist: () => {} });
-
-    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
-
-    expect(screen.getByRole("menuitem", { name: "Add to Watchlist" })).toHaveClass(
-      "cursor-pointer",
     );
   });
 

@@ -208,6 +208,8 @@ export function useCatalogWindow(
 
   const title = page0Result.data?.title ?? state.title;
   const isLoading = page0Result.isLoading;
+  const failedRemainingResults = remainingResults.filter((result) => result.isError);
+  const remainingError = failedRemainingResults[0]?.error;
 
   const pageResults = useMemo(() => {
     const map = new Map<number, CatalogResponse>();
@@ -331,10 +333,18 @@ export function useCatalogWindow(
       effectiveSort: page0Result.data?.effective_sort,
     },
     isLoading,
-    isError: page0Result.isError,
+    isError: page0Result.isError || failedRemainingResults.length > 0,
     isPlaceholderData: page0Result.isPlaceholderData,
-    error: page0Result.error,
-    refetch: page0Result.refetch,
+    error: page0Result.error ?? remainingError,
+    refetch: async () => {
+      // Page 0 owns the snapshot and total, so refresh it together with every
+      // failed visible page. Retrying only page 0 leaves a timed-out later page
+      // missing from the grid and immediately recreates the same partial view.
+      await Promise.all([
+        page0Result.refetch(),
+        ...failedRemainingResults.map((result) => result.refetch()),
+      ]);
+    },
   };
 }
 

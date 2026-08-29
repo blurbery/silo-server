@@ -78,7 +78,7 @@ const mediaSearchTitleVector = `(
 const mediaSearchOverviewVector = `to_tsvector('english', COALESCE(mi.overview, ''))`
 
 const mixedSearchOrder = `exact_title_match DESC, contiguous_title_match DESC, year_match DESC,
-	phrase_rank DESC, title_rank DESC, title_prefix_rank DESC, overview_rank DESC,
+	phrase_rank DESC, title_prefix_rank DESC, overview_rank DESC,
 	LOWER(title) ASC, content_id ASC`
 
 // buildMixedSearchSQLFromParsed builds one ranked candidate set from the two
@@ -382,7 +382,6 @@ func buildMixedSearchAliasScoresCTE(exactIdx int, exactShortTitle, leadingShortT
 			mia.content_id,
 			MAX(CASE WHEN mia.normalized_title = $%d THEN 1 ELSE 0 END) AS exact_title_match,
 			MAX(CASE WHEN mia.normalized_title LIKE '%%' || $%d || '%%' THEN 1 ELSE 0 END) AS contiguous_title_match,
-			0::real AS title_rank,
 			MAX(CASE WHEN $2 <> '' THEN ts_rank_cd(%s, %s) ELSE 0 END) AS title_prefix_rank
 		FROM media_item_aliases mia
 		WHERE %s
@@ -419,7 +418,6 @@ func buildMixedSearchCandidateBranch(
 		contiguousArms = append(contiguousArms, fmt.Sprintf("%s LIKE '%%' || $%d || '%%'", expr, exactIdx))
 	}
 	prefixQuery := `to_tsquery('simple', $2)`
-	titleRankExpr := "0::real"
 	prefixRankExpr := fmt.Sprintf("ts_rank_cd(%s, %s)", titleVector, prefixQuery)
 	if aliasArms != nil {
 		// Alias exact/contiguous arms are hashed subplans in the CASE select
@@ -445,7 +443,6 @@ func buildMixedSearchCandidateBranch(
 			CASE WHEN $%d <> '' AND (%s) THEN 1 ELSE 0 END AS exact_title_match,
 			CASE WHEN $%d <> '' AND (%s) THEN 1 ELSE 0 END AS contiguous_title_match,
 			CASE WHEN $%d::int IS NOT NULL AND (%s) = $%d::int THEN 1 ELSE 0 END AS year_match,
-			%s AS title_rank,
 			CASE WHEN $2 <> '' THEN %s ELSE 0 END AS title_prefix_rank,
 			%s AS overview_rank,
 			CASE WHEN $%d <> '' THEN ts_rank_cd(%s, phraseto_tsquery('simple', public.normalize_search_text($%d))) ELSE 0 END AS phrase_rank
@@ -455,7 +452,6 @@ func buildMixedSearchCandidateBranch(
 		exactIdx, strings.Join(exactArms, " OR "),
 		exactIdx, strings.Join(contiguousArms, " OR "),
 		yearIdx, yearExpr, yearIdx,
-		titleRankExpr,
 		prefixRankExpr,
 		overviewRankExpr,
 		phraseIdx, titleVector, phraseIdx,

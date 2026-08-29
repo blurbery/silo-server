@@ -24,11 +24,6 @@ export interface EpisodeNavigationState {
   parentSeasonLabel?: string;
 }
 
-export interface SeasonNavigationState {
-  /** Existing series history entry that a season should return to. */
-  parentSeriesHref?: string;
-}
-
 interface ResolveSeriesPrimaryActionInput {
   seriesId: string;
   seasons: Season[];

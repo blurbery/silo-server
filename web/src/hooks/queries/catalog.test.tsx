@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -146,6 +147,42 @@ describe("useCatalogWindow", () => {
     expect(pageQueries?.every((query) => query.gcTime === 30_000 && query.retry === false)).toBe(
       true,
     );
+  });
+
+  it("surfaces and retries a failed visible follow-on page", async () => {
+    const state = createCatalogSearchState("query", { q: "star" });
+    const limit = 60;
+    const pageError = new Error("search_timeout");
+    const page0Refetch = vi.fn().mockResolvedValue(undefined);
+    const failedPageRefetch = vi.fn().mockResolvedValue(undefined);
+
+    mocks.useQuery.mockReturnValue({
+      data: { ...makePage(0, limit), snapshot: "2026-01-01T00:00:00Z" },
+      isLoading: false,
+      isError: false,
+      isPlaceholderData: false,
+      error: null,
+      refetch: page0Refetch,
+    });
+    mocks.useQueries.mockReturnValue([
+      {
+        data: undefined,
+        isLoading: false,
+        isError: true,
+        error: pageError,
+        refetch: failedPageRefetch,
+      },
+    ]);
+
+    const { result } = renderHook(() =>
+      useCatalogWindow(state, { limit, visibleRange: [60, 119] }),
+    );
+    expect(result.current.isError).toBe(true);
+    expect(result.current.error).toBe(pageError);
+
+    await result.current.refetch();
+    expect(page0Refetch).toHaveBeenCalledOnce();
+    expect(failedPageRefetch).toHaveBeenCalledOnce();
   });
 
   it("estimates window size from has_more when total is omitted", () => {

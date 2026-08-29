@@ -240,8 +240,6 @@ export default function EpisodeContent({ item }: { item: ItemDetail & { type: "e
   const seasonHref =
     navigationState?.parentSeasonHref ??
     (currentSeason ? `/item/${currentSeason.content_id}` : undefined);
-  const enteredFromParentSeason =
-    navigationState?.parentSeasonHref != null && navigationState.parentSeasonHref === seasonHref;
   const episodeLinkState =
     seasonHref || seasonLabel
       ? {
@@ -268,13 +266,7 @@ export default function EpisodeContent({ item }: { item: ItemDetail & { type: "e
     <div>
       <DetailHero
         title={title}
-        topNav={
-          enteredFromParentSeason && seasonHref ? (
-            <PageBack to={seasonHref} preferHistory viewTransition replace />
-          ) : (
-            <PageBack />
-          )
-        }
+        topNav={<PageBack />}
         context={
           <div className="space-y-3">
             <DetailBreadcrumb segments={breadcrumbSegments} />

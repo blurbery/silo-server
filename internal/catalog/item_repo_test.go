@@ -491,6 +491,9 @@ func TestItemRepo_Search_AliasScoresUseOneUncorrelatedPass(t *testing.T) {
 		if strings.Contains(sql, "FROM media_item_aliases mia WHERE mia.content_id = mi.content_id") {
 			t.Fatalf("search must not rescan every alias row per media candidate; got:\n%s", sql)
 		}
+		if strings.Contains(sql, "title_rank") {
+			t.Fatalf("search must not retain the removed constant title_rank sort key; got:\n%s", sql)
+		}
 	}
 }
 

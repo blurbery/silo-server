@@ -37,6 +37,18 @@ interface HeroBannerProps {
   libraryId?: number;
 }
 
+/**
+ * Alternating slow pan/zoom for consecutive hero slides.
+ *
+ * These must be written out literally. Tailwind only keeps a theme variable
+ * whose name it can find in the scanned source, and assembling the name from a
+ * template literal hid both from it — so the real values were tree-shaken out
+ * of the bundle and `var(--animate-ken-burns-a)` resolved to nothing at
+ * runtime. app.css still overrides both to `none` under
+ * `prefers-reduced-motion`, which is what keeps this accessible.
+ */
+const KEN_BURNS_ANIMATIONS = ["var(--animate-ken-burns-a)", "var(--animate-ken-burns-b)"] as const;
+
 function heroPlayLabel(item: SectionItem, activeAudiobookPlaying?: boolean | null): string {
   if (item.type === "ebook") {
     return "Read";
@@ -185,8 +197,9 @@ export default function HeroBanner({
               <img
                 src={slide.backdrop_url}
                 alt=""
-                className={`h-full w-full object-cover object-[center_20%] transition-opacity duration-(--duration-slow) ${loaded[i] ? "opacity-100" : "opacity-0"}`}
+                className={`h-full w-full object-cover object-[center_20%] transition-opacity duration-(--duration-slow) will-change-transform ${loaded[i] ? "opacity-100" : "opacity-0"}`}
                 style={{
+                  animation: KEN_BURNS_ANIMATIONS[i % KEN_BURNS_ANIMATIONS.length],
                   filter: `brightness(var(--hero-backdrop-brightness, 0.78)) saturate(var(--hero-backdrop-saturate, 0.95))`,
                 }}
                 onLoad={() => setLoaded((prev) => ({ ...prev, [i]: true }))}

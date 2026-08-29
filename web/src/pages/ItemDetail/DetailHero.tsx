@@ -1,6 +1,5 @@
 import { type ReactNode } from "react";
 import { Languages } from "lucide-react";
-import ViewTransitionLink from "@/components/ViewTransitionLink";
 import { decodeThumbhash } from "@/lib/thumbhash";
 import { useImageLoaded } from "@/hooks/useImageLoaded";
 
@@ -137,9 +136,9 @@ export default function DetailHero({
       <div
         className={`page-shell-wide relative flex flex-col justify-end pb-8 ${
           isCompact
-            ? // Keep this flexible at every breakpoint: long season summaries
-              // must grow the hero downward instead of overflowing above its
-              // clipped backdrop and hiding the breadcrumb/title.
+            ? // min-height (not fixed height) below lg: bottom-justified content
+              // taller than the hero would otherwise overflow out the top, under
+              // the floating back button.
               "min-h-[max(35vh,300px)] pt-20 lg:min-h-[42vh]"
             : "min-h-[60dvh] pt-28 lg:min-h-[72dvh]"
         }`}
@@ -278,13 +277,13 @@ export default function DetailHero({
                 <div className="mt-4 flex flex-wrap gap-2">
                   {genres.map((genre) =>
                     genreHref ? (
-                      <ViewTransitionLink
+                      <a
                         key={genre}
-                        to={genreHref(genre)}
+                        href={genreHref(genre)}
                         className="metadata-badge hover:bg-foreground/10 transition-colors"
                       >
                         {genre}
-                      </ViewTransitionLink>
+                      </a>
                     ) : (
                       <span key={genre} className="metadata-badge">
                         {genre}

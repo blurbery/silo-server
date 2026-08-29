@@ -43,6 +43,16 @@ CREATE TRIGGER trg_episode_catalog_entries_search_fields
 BEFORE INSERT OR UPDATE OF episode_id, title ON public.episode_catalog_entries
 FOR EACH ROW EXECUTE FUNCTION public.set_episode_catalog_entry_search_fields();
 
+-- Migration 142 refreshes episode_catalog_entries when searchable episode
+-- metadata changes. Include overview in that existing trigger so editing an
+-- episode description rewrites the stored overview vector as well; without
+-- this, overview search stays stale until another episode field changes.
+DROP TRIGGER IF EXISTS trg_episode_catalog_entries_episodes ON public.episodes;
+CREATE TRIGGER trg_episode_catalog_entries_episodes
+AFTER INSERT OR UPDATE OF content_id, series_id, title, episode_number, air_date, runtime, rating_imdb, rating_tmdb, still_path, still_thumbhash, overview, created_at OR DELETE
+ON public.episodes
+FOR EACH ROW EXECUTE FUNCTION public.episode_catalog_entries_episodes_trigger();
+
 UPDATE public.episode_catalog_entries ece
 SET
     search_title_normalized = public.normalize_search_text(ece.title),
@@ -110,6 +120,14 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_episode_catalog_entries_search_episo
     ON public.episode_catalog_entries (episode_id, media_folder_id);
 
 -- +goose Down
+-- Restore migration 142's original refresh set when the stored overview search
+-- document is removed.
+DROP TRIGGER IF EXISTS trg_episode_catalog_entries_episodes ON public.episodes;
+CREATE TRIGGER trg_episode_catalog_entries_episodes
+AFTER INSERT OR UPDATE OF content_id, series_id, title, episode_number, air_date, runtime, rating_imdb, rating_tmdb, still_path, still_thumbhash, created_at OR DELETE
+ON public.episodes
+FOR EACH ROW EXECUTE FUNCTION public.episode_catalog_entries_episodes_trigger();
+
 DROP INDEX CONCURRENTLY IF EXISTS public.idx_episode_catalog_entries_search_episode;
 DROP INDEX CONCURRENTLY IF EXISTS public.idx_episode_catalog_entries_search_overview;
 DROP INDEX CONCURRENTLY IF EXISTS public.idx_episode_catalog_entries_search_title;

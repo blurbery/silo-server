@@ -1,4 +1,5 @@
 import { ChevronRight } from "lucide-react";
+
 import ViewTransitionLink from "@/components/ViewTransitionLink";
 
 interface BreadcrumbSegment {
@@ -22,11 +23,11 @@ export default function DetailBreadcrumb({ segments }: DetailBreadcrumbProps) {
             <span key={i} className="flex items-center gap-1.5">
               {i > 0 && <ChevronRight className="text-muted-foreground/40 size-4" />}
               {segment.href && !isLast ? (
+                // Every crumb is an ancestor of this page, so the motion should
+                // read as going up rather than as another descent.
                 <ViewTransitionLink
                   to={segment.href}
-                  replace
-                  preferHistory
-                  transitionDirection="back"
+                  up
                   className="text-muted-foreground hover:text-foreground text-[13px] transition-colors"
                 >
                   {segment.label}

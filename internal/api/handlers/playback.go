@@ -246,14 +246,30 @@ type PlaybackHandler struct {
 	tm *playback.TranscodeManager
 	// PlanStoreV3 owns the short-lived protocol-v3 control-plane state. Router
 	// wiring replaces the in-memory default with PostgreSQL in integrated mode.
-	PlanStoreV3             playback.PlanStoreV3
-	v3RegistryMu            sync.Mutex
-	v3Registry              *playback.TransformationRegistryV3
-	v3RegistryProbe         func(context.Context, string, tonemap.Capabilities) (*playback.TransformationRegistryV3, error)
-	v3ToneMapProbe          func(context.Context, string, string, string) (tonemap.Capabilities, error)
-	v3NodeCapabilitiesMu    sync.Mutex
-	v3NodeCapabilities      map[string]v3NodeCapabilityCache
-	v3NodeCapabilityRefresh sync.Map
+	PlanStoreV3          playback.PlanStoreV3
+	v3RegistryMu         sync.Mutex
+	v3Registry           *playback.TransformationRegistryV3
+	v3RegistryProbe      func(context.Context, string, tonemap.Capabilities) (*playback.TransformationRegistryV3, error)
+	v3ToneMapProbe       func(context.Context, string, string, string) (tonemap.Capabilities, error)
+	v3NodeCapabilitiesMu sync.Mutex
+	v3NodeCapabilities   map[string]v3NodeCapabilityCache
+	// v3NodeProbeBudgets holds what each node last said a capability read of it
+	// costs, guarded by v3NodeCapabilitiesMu. It is kept apart from the
+	// inventory above because the two are invalidated for different reasons: an
+	// acceleration change makes the inventory wrong and the next read slow,
+	// while how long that node takes to answer is unchanged. See
+	// remoteToneMapProbeTimeoutV3.
+	v3NodeProbeBudgets map[string]time.Duration
+	// v3NodeCapabilityInvalidations counts invalidations per node URL, guarded
+	// by v3NodeCapabilitiesMu. A probe that started before the count moved
+	// describes hardware the health sweep has already reported as changed, so
+	// its result must not be installed. See RefreshNodeCapabilitiesV3.
+	v3NodeCapabilityInvalidations map[string]uint64
+	// v3NodeCapabilityRefresh holds the nodes with a background refresh in
+	// flight, one at a time each. Guarded by v3NodeCapabilitiesMu, the same
+	// lock as the invalidation counter, so a refresh cannot release its slot in
+	// between an invalidation and that invalidation's claim on it.
+	v3NodeCapabilityRefresh map[string]struct{}
 	v3EventOnce             sync.Once
 	v3EventQueue            chan playback.RouteEventRecordV3
 	v3StartEffectsOnce      sync.Once
@@ -1842,7 +1858,7 @@ func (h *PlaybackHandler) buildProxyManifestURL(card playback.RecipeCard, proxyN
 	if proxyNode == nil || token == "" {
 		return appendStreamToken(localURL, token)
 	}
-	return proxyNode.URL + "/stream/transcode/" + token + "/master.m3u8"
+	return nodepool.NodeEndpoint(proxyNode.ClientURL(), "/stream/transcode/"+token+"/master.m3u8")
 }
 
 // proxyToTranscodeNode forwards a request to the remote transcode node.

@@ -1,5 +1,5 @@
-import type { CrewMember } from "@/api/types";
 import ViewTransitionLink from "@/components/ViewTransitionLink";
+import type { CrewMember } from "@/api/types";
 import { buildPersonCatalogHref } from "@/pages/catalogSearchParams";
 
 interface HeroCrewLineProps {

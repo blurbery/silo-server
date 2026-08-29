@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useLocation, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 import type { ItemDetail } from "@/api/types";
 import { useItemEpisodes } from "@/hooks/queries/episodes";
 import { useRefreshItemMetadata } from "@/hooks/queries/items";
@@ -18,7 +18,7 @@ import MetadataBadges from "./components/MetadataBadges";
 import WatchedActionBar from "./components/WatchedActionBar";
 import DetailBreadcrumb from "./components/DetailBreadcrumb";
 import SeasonEpisodeGrid from "./components/SeasonEpisodeGrid";
-import type { EpisodeNavigationState, SeasonNavigationState } from "./itemDetailLayout";
+import type { EpisodeNavigationState } from "./itemDetailLayout";
 import { canCurateMetadata as canCurateMetadataForUser } from "@/lib/permissions";
 
 function seasonLabel(seasonNumber: number, title?: string) {
@@ -31,7 +31,6 @@ export default function SeasonContent({ item }: { item: ItemDetail & { type: "se
   const { translating: overviewTranslating, onTranslate: onTranslateOverview } =
     useOnViewTranslation(item);
   const navigate = useNavigate();
-  const location = useLocation();
   useAmbientColor(item.backdrop_thumbhash);
   const { user } = useAuth();
   const isAdmin = useIsActingAdmin();
@@ -51,9 +50,6 @@ export default function SeasonContent({ item }: { item: ItemDetail & { type: "se
   const label = item.is_specials ? "Specials" : seasonLabel(seasonNumber, item.title);
   const seriesTitle = item.series_title ?? "Series";
   const seriesId = item.series_id;
-  const seriesHref = seriesId ? `/item/${seriesId}` : "/";
-  const navigationState = location.state as SeasonNavigationState | null;
-  const enteredFromParentSeries = navigationState?.parentSeriesHref === seriesHref;
   const firstEpisode = episodes[0];
   const episodeLinkState: EpisodeNavigationState = {
     parentSeasonHref: `/item/${item.content_id}`,
@@ -77,10 +73,8 @@ export default function SeasonContent({ item }: { item: ItemDetail & { type: "se
     return (
       <div className="px-4 py-6 sm:px-6 sm:py-10 lg:px-12">
         <ViewTransitionLink
-          to={seriesHref}
-          preferHistory={enteredFromParentSeries}
-          replace
-          transitionDirection="back"
+          to={seriesId ? `/item/${seriesId}` : "/"}
+          up
           className="text-muted-foreground hover:text-foreground text-sm"
         >
           &larr; Back to {seriesTitle}
@@ -97,14 +91,7 @@ export default function SeasonContent({ item }: { item: ItemDetail & { type: "se
       <DetailHero
         variant="compact"
         title={displayTitle}
-        topNav={
-          <PageBack
-            to={seriesHref}
-            preferHistory={enteredFromParentSeries}
-            viewTransition
-            replace
-          />
-        }
+        topNav={<PageBack />}
         context={breadcrumb}
         backdropUrl={item.backdrop_url}
         backdropThumbhash={item.backdrop_thumbhash}

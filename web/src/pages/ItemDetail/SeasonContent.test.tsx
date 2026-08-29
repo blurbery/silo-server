@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +8,6 @@ import SeasonContent from "./SeasonContent";
 const mocks = vi.hoisted(() => {
   let capturedActionBarProps: Record<string, unknown> | null = null;
   let capturedDetailHeroProps: Record<string, unknown> | null = null;
-  let capturedViewTransitionLinkProps: Record<string, unknown> | null = null;
   const capturedMediaMenuProps: Record<string, unknown>[] = [];
 
   return {
@@ -26,14 +25,6 @@ const mocks = vi.hoisted(() => {
       },
       set value(value: Record<string, unknown> | null) {
         capturedDetailHeroProps = value;
-      },
-    },
-    capturedViewTransitionLinkProps: {
-      get value() {
-        return capturedViewTransitionLinkProps;
-      },
-      set value(value: Record<string, unknown> | null) {
-        capturedViewTransitionLinkProps = value;
       },
     },
     capturedMediaMenuProps,
@@ -101,13 +92,6 @@ vi.mock("@/components/CrewList", () => ({
 
 vi.mock("@/components/ui/skeleton", () => ({
   Skeleton: () => <div />,
-}));
-
-vi.mock("@/components/ViewTransitionLink", () => ({
-  default: (props: { children?: ReactNode; to?: unknown } & Record<string, unknown>) => {
-    mocks.capturedViewTransitionLinkProps.value = props;
-    return <a href={typeof props.to === "string" ? props.to : undefined}>{props.children}</a>;
-  },
 }));
 
 vi.mock("./DetailHero", () => ({
@@ -180,7 +164,6 @@ describe("SeasonContent", () => {
   beforeEach(() => {
     mocks.capturedActionBarProps.value = null;
     mocks.capturedDetailHeroProps.value = null;
-    mocks.capturedViewTransitionLinkProps.value = null;
     mocks.capturedMediaMenuProps.length = 0;
     mocks.useAuth.mockReturnValue({ user: null });
     mocks.useOnViewTranslation.mockReturnValue({ translating: false, onTranslate: undefined });
@@ -273,97 +256,6 @@ describe("SeasonContent", () => {
     expect(mocks.capturedDetailHeroProps.value).toMatchObject({
       overviewTranslating: true,
       onTranslateOverview: onTranslate,
-    });
-  });
-
-  it("returns through history when the season was opened from its series", () => {
-    renderToStaticMarkup(
-      <MemoryRouter
-        initialEntries={[
-          {
-            pathname: "/item/season-1",
-            state: { parentSeriesHref: "/item/series-1" },
-          },
-        ]}
-      >
-        <SeasonContent item={makeSeasonItem()} />
-      </MemoryRouter>,
-    );
-
-    const topNav = mocks.capturedDetailHeroProps.value?.topNav as ReactElement<{
-      preferHistory: boolean;
-      replace: boolean;
-      to: string;
-      viewTransition: boolean;
-    }>;
-    expect(topNav.props).toMatchObject({
-      to: "/item/series-1",
-      preferHistory: true,
-      replace: true,
-      viewTransition: true,
-    });
-  });
-
-  it("replaces a directly opened season with its parent series", () => {
-    renderToStaticMarkup(
-      <MemoryRouter initialEntries={["/item/season-1"]}>
-        <SeasonContent item={makeSeasonItem()} />
-      </MemoryRouter>,
-    );
-
-    const topNav = mocks.capturedDetailHeroProps.value?.topNav as ReactElement<{
-      preferHistory: boolean;
-      replace: boolean;
-    }>;
-    expect(topNav.props).toMatchObject({ preferHistory: false, replace: true });
-  });
-
-  it("returns through history from the error state when the season came from its series", () => {
-    mocks.useItemEpisodes.mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      error: new Error("Episodes unavailable"),
-    });
-
-    renderToStaticMarkup(
-      <MemoryRouter
-        initialEntries={[
-          {
-            pathname: "/item/season-1",
-            state: { parentSeriesHref: "/item/series-1" },
-          },
-        ]}
-      >
-        <SeasonContent item={makeSeasonItem()} />
-      </MemoryRouter>,
-    );
-
-    expect(mocks.capturedViewTransitionLinkProps.value).toMatchObject({
-      to: "/item/series-1",
-      preferHistory: true,
-      replace: true,
-      transitionDirection: "back",
-    });
-  });
-
-  it("replaces a directly opened error state with its parent series", () => {
-    mocks.useItemEpisodes.mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      error: new Error("Episodes unavailable"),
-    });
-
-    renderToStaticMarkup(
-      <MemoryRouter initialEntries={["/item/season-1"]}>
-        <SeasonContent item={makeSeasonItem()} />
-      </MemoryRouter>,
-    );
-
-    expect(mocks.capturedViewTransitionLinkProps.value).toMatchObject({
-      to: "/item/series-1",
-      preferHistory: false,
-      replace: true,
-      transitionDirection: "back",
     });
   });
 });

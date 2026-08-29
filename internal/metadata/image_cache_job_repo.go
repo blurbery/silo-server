@@ -33,7 +33,10 @@ const (
 	ImageCacheStatusSucceeded = "succeeded"
 	ImageCacheStatusFailed    = "failed"
 
-	imageCacheLeaseDuration = 15 * time.Minute
+	// ImageCacheLeaseDuration is stamped on every claimed row up front.
+	// Exported so worker/claim-page sizing can assert a claimed page always
+	// drains inside it (see internal/taskmanager/tasks).
+	ImageCacheLeaseDuration = 15 * time.Minute
 	imageCacheMaxAttempts   = 8
 	imageCacheDeferredRetry = 7 * 24 * time.Hour
 
@@ -427,7 +430,7 @@ func (r *ImageCacheJobRepository) recoverExpiredRunning(ctx context.Context, tar
 		  AND locked_at < NOW() - $1::interval
 	`
 	args := []any{
-		intervalLiteral(imageCacheLeaseDuration),
+		intervalLiteral(ImageCacheLeaseDuration),
 		imageCacheMaxAttempts,
 		intervalLiteral(imageCacheFailedCooldown),
 	}
@@ -831,7 +834,11 @@ func (r *ImageCacheJobRepository) EnqueueExistingProviderArtwork(ctx context.Con
 			in.ProviderID = imageCacheProviderIDFromSource(in.SourcePath, fallbackProvider)
 			in.ProviderContentID = imageCacheProviderContentID(in.ProviderID, tmdbID, tvdbID, imdbID, firstNonEmpty(in.SeriesID, in.TargetContentID))
 			in.ContentType = imageCacheContentType(in.ContentType)
-			inputs = append(inputs, in)
+			normalized, ok := normalizeImageCacheJobInput(in)
+			if !ok {
+				continue
+			}
+			inputs = append(inputs, normalized)
 			page.Discovered++
 		}
 	}

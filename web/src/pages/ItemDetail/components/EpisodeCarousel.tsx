@@ -10,8 +10,8 @@ import ViewTransitionLink from "@/components/ViewTransitionLink";
 import type { EpisodeNavigationState } from "../itemDetailLayout";
 import { useCarouselEmbla } from "@/hooks/useCarouselEmbla";
 import { usePrefetchCatalogItemDetail } from "@/hooks/queries/catalogRead";
-import { useOverlayPrefs } from "@/hooks/useOverlayPrefs";
 import { useDwellPrefetch } from "@/hooks/useDwellPrefetch";
+import { useOverlayPrefs } from "@/hooks/useOverlayPrefs";
 import type { CardQuickActionMode } from "@/lib/cardQuickActions";
 
 interface EpisodeCarouselProps {
@@ -50,7 +50,7 @@ export default function EpisodeCarousel({
           <button
             type="button"
             onClick={scrollPrev}
-            className="from-background/90 absolute top-0 bottom-0 left-0 z-10 flex h-11 w-11 items-center justify-center self-center bg-gradient-to-r to-transparent opacity-0 transition-opacity duration-(--duration-fast) group-hover/carousel:opacity-100 focus-visible:opacity-100"
+            className="from-background/90 absolute top-0 bottom-0 left-0 z-10 flex h-11 w-11 items-center justify-center self-center bg-gradient-to-r to-transparent opacity-0 transition-opacity duration-200 group-hover/carousel:opacity-100 focus-visible:opacity-100"
             aria-label="Scroll left"
           >
             <ChevronLeft className="text-foreground h-6 w-6" />
@@ -58,7 +58,7 @@ export default function EpisodeCarousel({
         )}
 
         <div ref={emblaRef} className="embla__viewport overflow-hidden py-4 pl-4">
-          <ul role="list" className="embla__container flex list-none gap-3">
+          <ul role="list" className="embla__container flex cursor-grab list-none gap-3">
             {episodes.map((ep) => (
               <EpisodeCarouselCard
                 key={ep.content_id}
@@ -76,7 +76,7 @@ export default function EpisodeCarousel({
           <button
             type="button"
             onClick={scrollNext}
-            className="from-background/90 absolute top-0 right-0 bottom-0 z-10 flex h-11 w-11 items-center justify-center self-center bg-gradient-to-l to-transparent opacity-0 transition-opacity duration-(--duration-fast) group-hover/carousel:opacity-100 focus-visible:opacity-100"
+            className="from-background/90 absolute top-0 right-0 bottom-0 z-10 flex h-11 w-11 items-center justify-center self-center bg-gradient-to-l to-transparent opacity-0 transition-opacity duration-200 group-hover/carousel:opacity-100 focus-visible:opacity-100"
             aria-label="Scroll right"
           >
             <ChevronRight className="text-foreground h-6 w-6" />
@@ -121,7 +121,7 @@ function EpisodeCarouselCard({
     <li data-episode={ep.episode_number} className="embla__slide shrink-0">
       <div
         ref={cardRef}
-        className="media-card media-card-longpress group/card w-[240px]"
+        className="media-card-longpress group/card w-[240px]"
         {...prefetchHandlers}
       >
         <div className="relative">
@@ -133,7 +133,7 @@ function EpisodeCarouselCard({
           >
             <div
               className={cn(
-                "media-card-image surface-panel-subtle relative aspect-video overflow-hidden rounded-[1.1rem] border transition-[border-color,box-shadow] duration-(--duration-fast)",
+                "surface-panel-subtle relative aspect-video overflow-hidden rounded-[1.1rem] border transition-[border-color,box-shadow] duration-200",
                 isCurrent
                   ? "border-transparent shadow-[0_0_0_2px_var(--primary)]"
                   : "border-border/30",

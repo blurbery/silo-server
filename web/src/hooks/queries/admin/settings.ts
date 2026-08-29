@@ -39,6 +39,8 @@ function affectsOverlayConfig(key: string) {
 export interface CatalogSearchStatus {
   configured_provider: string;
   active_provider: string;
+  degraded: boolean;
+  degraded_reason?: string;
   meilisearch: {
     configured: boolean;
     healthy: boolean;
@@ -58,6 +60,7 @@ export interface CatalogSearchStatus {
     active_index_uid: string;
     schema_version: number;
     expected_schema_version: number;
+    rebuild_required: boolean;
     document_count: number;
     vector_document_count: number;
     pending_events: number;
@@ -97,6 +100,27 @@ export function useAdminServerSettings() {
     queryKey: adminKeys.serverSettings(),
     queryFn: () => api<ServerSettings>("/admin/settings/effective").then((d) => d ?? {}),
     staleTime: 30_000,
+  });
+}
+
+/** Shape of `GET /admin/settings/restart-keys`. */
+export interface RestartKeysResponse {
+  keys: string[];
+  prefixes: string[];
+}
+
+/**
+ * The compiled restart-required registry (`internal/config/restart_keys.go`).
+ * It only changes across deploys, so it is cached aggressively and never
+ * retried: an older server without the endpoint degrades to "nothing needs a
+ * restart" rather than to a broken settings page.
+ */
+export function useAdminRestartKeys() {
+  return useQuery({
+    queryKey: adminKeys.restartKeys(),
+    queryFn: () => api<RestartKeysResponse>("/admin/settings/restart-keys"),
+    staleTime: 5 * 60_000,
+    retry: false,
   });
 }
 
@@ -224,11 +248,13 @@ export function useCheckAdminSettingsConnection() {
   });
 }
 
-export function useCatalogSearchStatus() {
+export function useCatalogSearchStatus(enabled = true) {
   return useQuery({
     queryKey: adminKeys.catalogSearchStatus(),
     queryFn: () => api<CatalogSearchStatus>("/admin/catalog/search/status"),
+    enabled,
     staleTime: 15_000,
+    refetchInterval: (query) => (query.state.data?.index.rebuild_required ? 2_000 : false),
   });
 }
 
