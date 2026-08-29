@@ -102,7 +102,7 @@ export function useSetCommunityRatingReaction(itemId: string) {
         return {
           ...current,
           ratings: current.ratings.map((entry) => {
-            if (entry.key !== ratingKey || entry.is_viewer) return entry;
+            if (entry.key !== ratingKey) return entry;
             return {
               ...entry,
               up_count: Math.max(

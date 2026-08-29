@@ -117,4 +117,46 @@ describe("rating mutations", () => {
       viewer_reaction: "down",
     });
   });
+
+  it("optimistically removes the viewer's selected reaction from their own card", async () => {
+    let cached = {
+      average_rating: 5,
+      vote_count: 1,
+      ratings: [
+        {
+          key: "rating-viewer",
+          display_name: "B***",
+          rated_at: "2026-08-29T08:00:00Z",
+          rating: 5,
+          up_count: 1,
+          down_count: 0,
+          viewer_reaction: "up" as const,
+          is_viewer: true,
+        },
+      ],
+    };
+    mocks.getQueryData.mockReturnValue(cached);
+    mocks.setQueryData.mockImplementation((_key: unknown, update: unknown) => {
+      if (typeof update === "function") {
+        cached = update(cached);
+      }
+    });
+
+    useSetCommunityRatingReaction("item-1");
+    const options = mocks.useMutation.mock.calls[0]?.[0] as {
+      onMutate: (variables: {
+        ratingKey: string;
+        reaction: "up" | "down" | null;
+      }) => Promise<unknown>;
+    };
+
+    await options.onMutate({ ratingKey: "rating-viewer", reaction: null });
+
+    expect(cached.ratings[0]).toMatchObject({
+      up_count: 0,
+      down_count: 0,
+      viewer_reaction: undefined,
+      is_viewer: true,
+    });
+  });
 });

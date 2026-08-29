@@ -35,19 +35,22 @@ describe("RatingsSection", () => {
         ratings: [
           {
             key: "rating-other",
-            display_name: "Sam***",
+            display_name: "S*******",
             avatar_url: "/profile-avatars/avatar-1.svg",
             rating: 5,
+            rated_at: "2026-08-29T08:00:00Z",
             up_count: 3,
             down_count: 1,
             is_viewer: false,
           },
           {
             key: "rating-viewer",
-            display_name: "Blu***",
+            display_name: "B***",
             rating: 4,
+            rated_at: "2026-07-22T08:00:00Z",
             up_count: 1,
             down_count: 0,
+            viewer_reaction: "up",
             is_viewer: true,
           },
         ],
@@ -59,21 +62,46 @@ describe("RatingsSection", () => {
     render(<RatingsSection itemId="movie-1" />);
 
     expect(screen.getByRole("heading", { name: "Ratings" })).toBeInTheDocument();
-    expect(screen.getByText("4.5 average from 2 watched profiles")).toBeInTheDocument();
-    expect(screen.getByText("Sam***")).toBeInTheDocument();
+    expect(screen.getByText("4.5 average from 2 ratings")).toBeInTheDocument();
+    expect(screen.getByText("S*******")).toBeInTheDocument();
+    expect(screen.getByText("August 29, 2026")).toBeInTheDocument();
     expect(screen.getByLabelText("5 out of 5 stars")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Helpful: 3" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Not helpful: 1" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Helpful: 3" })).toHaveClass(
+      "enabled:cursor-pointer",
+    );
+    expect(screen.getByRole("list")).not.toHaveClass("cursor-grab");
+    expect(screen.getByLabelText("Ratings carousel")).toBeInTheDocument();
     expect(screen.getAllByRole("article")[0]).toHaveClass("household-rating-card");
   });
 
-  it("toggles another profile's reaction and disables reactions on your own card", () => {
+  it("toggles reactions on other and own cards, including removing a selected reaction", () => {
     render(<RatingsSection itemId="movie-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Helpful: 3" }));
     expect(mocks.mutate).toHaveBeenCalledWith({ ratingKey: "rating-other", reaction: "up" });
 
     const ownHelpful = screen.getByRole("button", { name: "Helpful: 1" });
-    expect(ownHelpful).toBeDisabled();
+    expect(ownHelpful).toBeEnabled();
+    fireEvent.click(ownHelpful);
+    expect(mocks.mutate).toHaveBeenLastCalledWith({
+      ratingKey: "rating-viewer",
+      reaction: null,
+    });
+  });
+
+  it("keeps the section visible when no one has rated the item", () => {
+    mocks.useCommunityRatings.mockReturnValue({
+      data: { average_rating: null, vote_count: 0, ratings: [] },
+      isLoading: false,
+      isError: false,
+    });
+
+    render(<RatingsSection itemId="movie-1" />);
+
+    expect(screen.getByRole("heading", { name: "Ratings" })).toBeInTheDocument();
+    expect(screen.getByText("No ratings yet")).toBeInTheDocument();
+    expect(screen.queryByRole("article")).not.toBeInTheDocument();
   });
 });

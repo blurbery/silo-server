@@ -19,7 +19,7 @@ type UserRating struct {
 	RatedAt     time.Time `json:"rated_at"`
 }
 
-// CommunityRating is a watched profile's rating plus its server-local reaction
+// CommunityRating is a profile's explicit rating plus its server-local reaction
 // totals. User and profile IDs stay internal; handlers expose only an opaque
 // per-rating key and an abbreviated display name.
 type CommunityRating struct {
@@ -144,10 +144,8 @@ func (r *RatingsRepo) ListForItems(ctx context.Context, userID int, profileID st
 	return result, rows.Err()
 }
 
-// ListCommunity returns ratings only from profiles that have watched the item.
-// A movie counts directly; episode progress rolls up to its parent series. The
-// watched threshold and hidden-history handling mirror recommendation signals,
-// but the returned average is display-only and never feeds those signals.
+// ListCommunity returns explicit profile ratings for an item. The returned
+// average is display-only and never feeds personal recommendation signals.
 func (r *RatingsRepo) ListCommunity(
 	ctx context.Context,
 	viewerUserID int,
@@ -157,43 +155,7 @@ func (r *RatingsRepo) ListCommunity(
 	offset int,
 ) ([]CommunityRating, error) {
 	rows, err := r.pool.Query(ctx, `
-		WITH eligible AS (
-			SELECT ur.user_id,
-			       ur.profile_id,
-			       up.name AS profile_name,
-			       up.avatar,
-			       up.updated_at AS profile_updated_at,
-			       ur.rating,
-			       ur.rated_at
-			FROM user_ratings ur
-			JOIN user_profiles up
-			  ON up.user_id = ur.user_id
-			 AND up.id = ur.profile_id
-			WHERE ur.media_item_id = $1
-			  AND EXISTS (
-				SELECT 1
-				FROM user_watch_progress wp
-				LEFT JOIN episodes e ON e.content_id = wp.media_item_id
-				WHERE wp.user_id = ur.user_id
-				  AND wp.profile_id = ur.profile_id
-				  AND COALESCE(e.series_id, wp.media_item_id) = ur.media_item_id
-				  AND (
-					wp.completed = true
-					OR (
-						wp.duration_seconds > 0
-						AND wp.position_seconds / wp.duration_seconds >= 0.5
-					)
-				  )
-				  AND NOT EXISTS (
-					SELECT 1
-					FROM user_history_hidden_items hhi
-					WHERE hhi.user_id = wp.user_id
-					  AND hhi.profile_id = wp.profile_id
-					  AND hhi.media_item_id = wp.media_item_id
-					  AND wp.updated_at <= hhi.hidden_before
-				  )
-			  )
-		), reaction_counts AS (
+		WITH reaction_counts AS (
 			SELECT target_user_id,
 			       target_profile_id,
 			       COUNT(*) FILTER (WHERE reaction = 1)::integer AS up_count,
@@ -208,26 +170,30 @@ func (r *RatingsRepo) ListCommunity(
 			WHERE media_item_id = $1
 			GROUP BY target_user_id, target_profile_id
 		)
-		SELECT e.user_id,
-		       e.profile_id,
-		       e.profile_name,
-		       e.avatar,
-		       e.profile_updated_at,
-		       e.rating,
-		       e.rated_at,
+		SELECT ur.user_id,
+		       ur.profile_id,
+		       up.name AS profile_name,
+		       up.avatar,
+		       up.updated_at AS profile_updated_at,
+		       ur.rating,
+		       ur.rated_at,
 		       COALESCE(rc.up_count, 0),
 		       COALESCE(rc.down_count, 0),
 		       COALESCE(rc.viewer_reaction, 0),
-		       AVG(e.rating) OVER ()::double precision AS average_rating,
+		       AVG(ur.rating) OVER ()::double precision AS average_rating,
 		       COUNT(*) OVER ()::integer AS total_vote_count
-		FROM eligible e
+		FROM user_ratings ur
+		JOIN user_profiles up
+		  ON up.user_id = ur.user_id
+		 AND up.id = ur.profile_id
 		LEFT JOIN reaction_counts rc
-		  ON rc.target_user_id = e.user_id
-		 AND rc.target_profile_id = e.profile_id
-		ORDER BY (e.user_id = $2 AND e.profile_id = $3) DESC,
-		         e.rated_at DESC,
-		         e.user_id,
-		         e.profile_id
+		  ON rc.target_user_id = ur.user_id
+		 AND rc.target_profile_id = ur.profile_id
+		WHERE ur.media_item_id = $1
+		ORDER BY (ur.user_id = $2 AND ur.profile_id = $3) DESC,
+		         ur.rated_at DESC,
+		         ur.user_id,
+		         ur.profile_id
 		LIMIT $4 OFFSET $5`,
 		mediaItemID, viewerUserID, viewerProfileID, limit, offset,
 	)
@@ -263,9 +229,9 @@ func (r *RatingsRepo) ListCommunity(
 	return ratings, nil
 }
 
-// SetCommunityReaction records one profile-scoped reaction for a watched
-// profile's rating. The INSERT rechecks watched eligibility so an unwatch or
-// history-hide racing the request cannot leave a reaction on an ineligible row.
+// SetCommunityReaction records one profile-scoped reaction for an existing
+// rating. Selecting from user_ratings keeps a delete racing the request from
+// leaving an orphaned reaction.
 func (r *RatingsRepo) SetCommunityReaction(
 	ctx context.Context,
 	viewerUserID int,
@@ -291,30 +257,6 @@ func (r *RatingsRepo) SetCommunityReaction(
 		WHERE ur.media_item_id = $1
 		  AND ur.user_id = $2
 		  AND ur.profile_id = $3
-		  AND (ur.user_id <> $4 OR ur.profile_id <> $5)
-		  AND EXISTS (
-			SELECT 1
-			FROM user_watch_progress wp
-			LEFT JOIN episodes e ON e.content_id = wp.media_item_id
-			WHERE wp.user_id = ur.user_id
-			  AND wp.profile_id = ur.profile_id
-			  AND COALESCE(e.series_id, wp.media_item_id) = ur.media_item_id
-			  AND (
-				wp.completed = true
-				OR (
-					wp.duration_seconds > 0
-					AND wp.position_seconds / wp.duration_seconds >= 0.5
-				)
-			  )
-			  AND NOT EXISTS (
-				SELECT 1
-				FROM user_history_hidden_items hhi
-				WHERE hhi.user_id = wp.user_id
-				  AND hhi.profile_id = wp.profile_id
-				  AND hhi.media_item_id = wp.media_item_id
-				  AND wp.updated_at <= hhi.hidden_before
-			  )
-		  )
 		ON CONFLICT (
 			media_item_id,
 			target_user_id,
