@@ -29,6 +29,7 @@ function nonRequestableLabel(item: RequestMediaResult): string {
 
 const DIALOG_LIMIT = 4;
 const GRID_LIMIT = 20;
+const INTERACTIVE_SEARCH_GC_TIME_MS = 30_000;
 
 export type RequestToAddSectionProps = {
   variant: "dialog" | "grid";
@@ -43,6 +44,8 @@ export function RequestToAddSection({ variant, query, libraryHadHits }: RequestT
     enabled: discoveryEnabled,
     requireProfile: true,
     staleTime: 5 * 60 * 1000,
+    gcTime: INTERACTIVE_SEARCH_GC_TIME_MS,
+    retry: false,
   });
 
   if (!discoveryEnabled) return null;

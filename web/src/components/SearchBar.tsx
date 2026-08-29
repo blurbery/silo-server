@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 import { useViewTransitionNavigate } from "@/hooks/useViewTransition";
 import { useDebounce } from "@/hooks/useDebounce";
 import { Input } from "@/components/ui/input";
@@ -6,7 +7,7 @@ import { buildQueryCatalogHref } from "@/pages/catalogSearchParams";
 import { Search, X } from "lucide-react";
 import type { FormEvent } from "react";
 
-const SEARCH_NAVIGATION_DEBOUNCE_MS = 100;
+const SEARCH_NAVIGATION_DEBOUNCE_MS = 200;
 
 interface SearchBarProps {
   initialQuery?: string;
@@ -23,6 +24,7 @@ export default function SearchBar({
 }: SearchBarProps) {
   const [query, setQuery] = useState(initialQuery);
   const navigate = useViewTransitionNavigate();
+  const navigateWithoutTransition = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const isInitialMount = useRef(true);
   const buildSearchHrefRef = useRef(buildSearchHref);
@@ -31,6 +33,13 @@ export default function SearchBar({
   useEffect(() => {
     buildSearchHrefRef.current = buildSearchHref;
   }, [buildSearchHref]);
+
+  // Browser history, scope changes, and external navigation can update the
+  // canonical query without remounting this component. Keep the input in sync
+  // instead of leaving it attached to a stale request key.
+  useEffect(() => {
+    setQuery(initialQuery);
+  }, [initialQuery]);
 
   useEffect(() => {
     if (autoFocus && inputRef.current) {
@@ -45,15 +54,24 @@ export default function SearchBar({
       isInitialMount.current = false;
       return;
     }
-    if (debouncedQuery.trim()) {
-      navigate(buildSearchHrefRef.current(debouncedQuery.trim()), { replace: true });
-    }
-  }, [debouncedQuery, prominent, navigate]);
+    // Updating only the query string is not a page transition. Animating a
+    // full route snapshot for every debounced keystroke makes the search page
+    // visibly wobble and adds compositor work to its hottest interaction.
+    // Navigate an empty value as well so clearing the field aborts and removes
+    // the previous results instead of leaving an invisible stale search alive.
+    navigateWithoutTransition(buildSearchHrefRef.current(debouncedQuery.trim()), {
+      replace: true,
+    });
+  }, [debouncedQuery, prominent, navigateWithoutTransition]);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (query.trim()) {
-      navigate(buildSearchHref(query.trim()));
+      if (prominent) {
+        navigateWithoutTransition(buildSearchHref(query.trim()));
+      } else {
+        navigate(buildSearchHref(query.trim()));
+      }
     }
   }
 
@@ -66,7 +84,7 @@ export default function SearchBar({
           placeholder="Search movies, series..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="surface-panel h-14 rounded-[1.4rem] border-0 pr-10 pl-12 text-base shadow-none"
+          className="search-paint-surface h-14 rounded-[1.4rem] border pr-10 pl-12 text-base shadow-none"
         />
         {query && (
           <button

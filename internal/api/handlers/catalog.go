@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -152,12 +153,32 @@ func (h *CatalogHandler) HandleGetCatalog(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusNotFound, "not_found", "Catalog source not found")
 			return
 		}
+		if handleCatalogSearchContextError(w, r, err) {
+			return
+		}
 		slog.ErrorContext(r.Context(), "catalog: resolve failed", "component", "api", "err_msg", err.Error())
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve catalog")
 		return
 	}
 	items := h.catalogItemResponses(r, result.Items, catalogSortMetricField(req, result), playableTargetLibraryIDs(req), accessFilter)
 	h.writeCatalogResponse(w, result, items, groupedByWork)
+}
+
+// handleCatalogSearchContextError translates bounded-search termination without
+// treating it as an ordinary server fault. Superseded live queries cancel their
+// request context, so there is no client left to receive a response. A server
+// deadline is different: the client is still present and gets a retryable 504
+// instead of a misleading 500 while the database work is already stopped.
+func handleCatalogSearchContextError(w http.ResponseWriter, r *http.Request, err error) bool {
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		slog.WarnContext(r.Context(), "catalog: search deadline exceeded", "component", "api")
+		writeError(w, http.StatusGatewayTimeout, "search_timeout", "Search took too long and was stopped")
+		return true
+	}
+	return false
 }
 
 // catalogSortMetricField is the field the returned items are actually ordered

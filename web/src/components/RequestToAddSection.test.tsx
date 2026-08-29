@@ -99,6 +99,8 @@ describe("RequestToAddSection (dialog variant)", () => {
       enabled: false,
       requireProfile: true,
       staleTime: 5 * 60 * 1000,
+      gcTime: 30_000,
+      retry: false,
     });
   });
 
@@ -121,6 +123,8 @@ describe("RequestToAddSection (dialog variant)", () => {
       enabled: true,
       requireProfile: true,
       staleTime: 5 * 60 * 1000,
+      gcTime: 30_000,
+      retry: false,
     });
   });
 
