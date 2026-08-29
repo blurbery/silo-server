@@ -276,6 +276,16 @@ func (r *ItemRepository) buildMixedSearchSQLFromParsed(
 	}
 	scoredCTE := "WITH scored AS (\n" + scoredBody + "\n)"
 	postFilter := `FROM scored`
+	if narrowTitleLookup {
+		// Narrow title searches intentionally skip the overview branch. That
+		// branch is normally what gives $1 (searchText) its PostgreSQL type;
+		// without it, queries such as "Breaking Bad" reference $2 and later
+		// placeholders but fail at parse time with SQLSTATE 42P18 because $1 is
+		// untyped. This parameter-only guard is always true for a built search
+		// (empty input returned above), types $1 explicitly, and is planned as a
+		// one-time filter without widening either indexed title lookup.
+		postFilter += ` WHERE $1::text IS NOT NULL`
+	}
 
 	pageTotalColumn := ""
 	finalTotalColumn := ""

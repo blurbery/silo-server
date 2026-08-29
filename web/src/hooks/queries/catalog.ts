@@ -332,6 +332,7 @@ export function useCatalogWindow(
     },
     isLoading,
     isError: page0Result.isError,
+    isPlaceholderData: page0Result.isPlaceholderData,
     error: page0Result.error,
     refetch: page0Result.refetch,
   };

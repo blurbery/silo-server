@@ -238,8 +238,10 @@ function CatalogResults({
   });
   const tmdbMissingCount =
     tmdbQuery.data?.results?.filter((result) => result.availability !== "available").length ?? 0;
-  const libraryHasResults = (catalogQuery.data?.totalItems ?? 0) > 0;
-  const libraryEmpty = !catalogQuery.isLoading && !libraryHasResults;
+  const libraryResultsKnown =
+    !catalogQuery.isLoading && !catalogQuery.isPlaceholderData && !catalogQuery.isError;
+  const libraryHasResults = libraryResultsKnown && (catalogQuery.data?.totalItems ?? 0) > 0;
+  const libraryEmpty = libraryResultsKnown && !libraryHasResults;
   // When the library is empty and the request section will (or might) render,
   // hide ItemGrid entirely. The previous approach pinned ItemGrid's `loading`
   // prop to true, which renders 24 skeleton tiles forever above the section.
@@ -453,6 +455,7 @@ function CatalogResults({
           variant="grid"
           query={tmdbDebouncedQ}
           libraryHadHits={libraryHasResults}
+          libraryResultsKnown={libraryResultsKnown}
         />
       ) : null}
 

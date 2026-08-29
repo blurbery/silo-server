@@ -152,6 +152,24 @@ describe("RequestToAddSection (dialog variant)", () => {
     expect(markup).not.toContain("Request to Add");
   });
 
+  it("does not claim media is absent while the local lookup is unresolved or failed", () => {
+    mocks.useRequestSearch.mockReturnValue({
+      data: { page: 1, total_pages: 1, total_results: 1, results: [missingResult()] },
+      isLoading: false,
+      isError: false,
+    });
+    const markup = render(
+      <RequestToAddSection
+        variant="dialog"
+        query="breaking bad"
+        libraryHadHits={false}
+        libraryResultsKnown={false}
+      />,
+    );
+    expect(markup).toContain("Discovery matches:");
+    expect(markup).not.toContain("Not in your library");
+  });
+
   it("filters out results already available in the library", () => {
     // missingResult has tmdb_id 1, availableResult has tmdb_id 2. The DialogRow
     // renders item.title only as text content (never as a `title=` attribute), so
@@ -237,8 +255,8 @@ describe("RequestToAddSection (dialog variant)", () => {
 
     expect(markup).toContain("Quota Capped Movie");
     expect(markup).not.toContain("bg-amber-400/15");
-    expect(markup).toContain("Limit reached");
-    expect(markup).toContain('title="Limit reached"');
+    expect(markup).toContain("Request limit reached");
+    expect(markup).toContain('title="Request limit reached"');
   });
 
   it("prefers request status over reason when a row is already requested", () => {

@@ -527,6 +527,38 @@ func TestItemRepo_Search_ShortFinalTokenUsesLeadingTitleIndexes(t *testing.T) {
 	}
 }
 
+// TestItemRepo_Search_NarrowTitlePathTypesSearchTextParameter guards a
+// prepare-time failure that only appeared after the user finished a short
+// final token: "breaking" used the regular FTS path, while "Breaking Bad"
+// suppressed the overview arm and therefore left the still-bound $1 without a
+// PostgreSQL type (SQLSTATE 42P18). Every physical source and both page/count
+// statements must carry the explicit, parameter-only type guard.
+func TestItemRepo_Search_NarrowTitlePathTypesSearchTextParameter(t *testing.T) {
+	repo := &ItemRepository{}
+	for _, test := range []struct {
+		name      string
+		query     string
+		itemTypes []string
+	}{
+		{name: "mixed multiword", query: "Breaking Bad"},
+		{name: "media multiword", query: "Breaking Bad", itemTypes: []string{"movie", "series"}},
+		{name: "episode multiword", query: "Who Are You?", itemTypes: []string{"episode"}},
+		{name: "mixed short title", query: "Up"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dataSQL, countSQL, args := repo.buildSearchSQLWithTotal(test.query, test.itemTypes, 20, 0, AccessFilter{}, true)
+			if len(args) < 2 || args[0] != test.query {
+				t.Fatalf("unexpected fixed search arguments: %#v", args)
+			}
+			for _, sql := range []string{dataSQL, countSQL} {
+				if !strings.Contains(sql, "$1::text IS NOT NULL") {
+					t.Fatalf("narrow search must type bound $1 in both statements; got:\n%s", sql)
+				}
+			}
+		})
+	}
+}
+
 // TestItemRepo_BuildFuzzySearchSQL asserts that the fuzzy fallback query scores
 // only on indexed normalized title/alias columns (no title tsvector rebuild),
 // matches via strict word similarity so long titles stay reachable, ranks by
