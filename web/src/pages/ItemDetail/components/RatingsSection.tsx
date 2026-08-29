@@ -119,8 +119,15 @@ function RatingCard({
             {fallback}
           </AvatarFallback>
         </Avatar>
-        <div className="text-foreground max-w-full truncate text-sm font-semibold">
-          {entry.display_name}
+        <div className="flex max-w-full items-center justify-center gap-1.5">
+          <span className="text-foreground min-w-0 truncate text-sm font-semibold">
+            {entry.display_name}
+          </span>
+          {entry.is_viewer ? (
+            <span className="border-primary/35 bg-primary/12 text-primary shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] leading-none font-semibold">
+              You
+            </span>
+          ) : null}
         </div>
         <time className="text-muted-foreground mt-0.5 text-xs" dateTime={entry.rated_at}>
           {formatRatingDate(entry.rated_at)}

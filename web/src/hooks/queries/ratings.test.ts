@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { catalogKeys, itemKeys } from "./keys";
+import { catalogKeys, itemKeys, ratingKeys } from "./keys";
 
 const mocks = vi.hoisted(() => ({
   cancelItemDetailQueries: vi.fn(),
@@ -66,17 +66,117 @@ describe("rating mutations", () => {
     async (_label, useRating, value) => {
       useRating();
       const options = mocks.useMutation.mock.calls[0]?.[0] as {
+        scope: { id: string };
         onMutate: (rating?: number) => Promise<unknown>;
       };
 
       await options.onMutate(value);
 
+      expect(options.scope).toEqual({ id: "rating:item-1" });
       const filters = mocks.getQueriesData.mock.calls[0]?.[0];
       expect(filters.predicate({ queryKey: catalogKeys.itemDetail("item-1") })).toBe(true);
       expect(filters.predicate({ queryKey: itemKeys.detail("item-1") })).toBe(true);
       expect(filters.predicate({ queryKey: catalogKeys.itemDetail("item-2") })).toBe(false);
     },
   );
+
+  it("optimistically edits the viewer's existing card without changing its identity", async () => {
+    let cached = {
+      average_rating: 4.5,
+      vote_count: 2,
+      ratings: [
+        {
+          key: "stable-viewer-card",
+          display_name: "b***",
+          rating: 5,
+          rated_at: "2026-08-13T08:00:00Z",
+          up_count: 1,
+          down_count: 0,
+          is_viewer: true,
+        },
+        {
+          key: "other-card",
+          display_name: "b***",
+          rating: 4,
+          rated_at: "2026-08-12T08:00:00Z",
+          up_count: 0,
+          down_count: 0,
+          is_viewer: false,
+        },
+      ],
+    };
+    mocks.getQueryData.mockReturnValue(cached);
+    mocks.setQueryData.mockImplementation((_key: unknown, update: unknown) => {
+      if (typeof update === "function") {
+        cached = update(cached);
+      }
+    });
+
+    useSetRating("item-1");
+    const options = mocks.useMutation.mock.calls[0]?.[0] as {
+      onMutate: (rating: number) => Promise<unknown>;
+    };
+
+    await options.onMutate(2);
+
+    expect(mocks.cancelQueries).toHaveBeenCalledWith({
+      queryKey: ratingKeys.community("item-1"),
+    });
+    expect(cached.average_rating).toBe(3);
+    expect(cached.vote_count).toBe(2);
+    expect(cached.ratings[0]).toMatchObject({
+      key: "stable-viewer-card",
+      rating: 2,
+      is_viewer: true,
+    });
+    expect(cached.ratings[1]).toMatchObject({ key: "other-card", rating: 4 });
+  });
+
+  it("optimistically removes only the viewer's card when their rating is cleared", async () => {
+    let cached = {
+      average_rating: 4.5,
+      vote_count: 2,
+      ratings: [
+        {
+          key: "stable-viewer-card",
+          display_name: "b***",
+          rating: 5,
+          rated_at: "2026-08-13T08:00:00Z",
+          up_count: 1,
+          down_count: 0,
+          is_viewer: true,
+        },
+        {
+          key: "other-card",
+          display_name: "b***",
+          rating: 4,
+          rated_at: "2026-08-12T08:00:00Z",
+          up_count: 0,
+          down_count: 0,
+          is_viewer: false,
+        },
+      ],
+    };
+    mocks.getQueryData.mockReturnValue(cached);
+    mocks.setQueryData.mockImplementation((_key: unknown, update: unknown) => {
+      if (typeof update === "function") {
+        cached = update(cached);
+      }
+    });
+
+    useDeleteRating("item-1");
+    const options = mocks.useMutation.mock.calls[0]?.[0] as {
+      onMutate: () => Promise<unknown>;
+    };
+
+    await options.onMutate();
+
+    expect(cached).toMatchObject({
+      average_rating: 4,
+      vote_count: 1,
+      ratings: [{ key: "other-card", rating: 4, is_viewer: false }],
+    });
+  });
 
   it("optimistically moves a community reaction between separate tallies", async () => {
     let cached = {

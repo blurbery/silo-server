@@ -52,7 +52,7 @@ func (r *RatingsRepo) Set(ctx context.Context, userID int, profileID, mediaItemI
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO user_ratings (user_id, profile_id, media_item_id, rating, rated_at)
 		VALUES ($1, $2, $3, $4, NOW())
-		ON CONFLICT (user_id, profile_id, media_item_id)
+		ON CONFLICT ON CONSTRAINT user_ratings_pkey
 		DO UPDATE SET rating = EXCLUDED.rating, rated_at = EXCLUDED.rated_at`,
 		userID, profileID, mediaItemID, rating,
 	)
