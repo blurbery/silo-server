@@ -3,16 +3,13 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { catalogKeys } from "@/hooks/queries/keys";
-import {
-  DETAIL_MAIN_STAGE_MOTION_ATTRIBUTE,
-  DETAIL_MAIN_STAGE_MOTION_END_EVENT,
-  SIDEBAR_DETAILS_REVEAL_DEADLINE_MS,
-} from "./sidebarItemNavigation";
+import { SIDEBAR_DETAILS_REVEAL_DEADLINE_MS } from "./sidebarItemNavigation";
 
 const mocks = vi.hoisted(() => ({
   location: { pathname: "/", search: "", key: "home" },
   navigate: vi.fn(),
   prefetchQuery: vi.fn(),
+  getQueryData: vi.fn(),
   renderSurface: true,
   beginResult: undefined as boolean | undefined,
   profile: {
@@ -33,7 +30,13 @@ vi.mock("react-router", async () => {
 vi.mock("@tanstack/react-query", async () => {
   const actual =
     await vi.importActual<typeof import("@tanstack/react-query")>("@tanstack/react-query");
-  return { ...actual, useQueryClient: () => ({ prefetchQuery: mocks.prefetchQuery }) };
+  return {
+    ...actual,
+    useQueryClient: () => ({
+      prefetchQuery: mocks.prefetchQuery,
+      getQueryData: mocks.getQueryData,
+    }),
+  };
 });
 
 vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: { username: "Admin" } }) }));
@@ -132,6 +135,7 @@ beforeEach(() => {
   mocks.location = { pathname: "/", search: "", key: "home" };
   mocks.navigate.mockReset();
   mocks.prefetchQuery.mockReset();
+  mocks.getQueryData.mockReset();
   mocks.renderSurface = true;
   mocks.beginResult = undefined;
   mocks.profile = {
@@ -155,7 +159,6 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-  document.documentElement.removeAttribute(DETAIL_MAIN_STAGE_MOTION_ATTRIBUTE);
 });
 
 describe("Layout mobile profile", () => {
@@ -186,9 +189,6 @@ describe("Layout item navigation", () => {
     fireEvent.click(begin);
     expect(mocks.beginResult).toBe(false);
     expect(mocks.navigate).not.toHaveBeenCalled();
-    expect(mocks.prefetchQuery).toHaveBeenCalledWith(
-      expect.objectContaining({ queryKey: catalogKeys.itemDetail("movie-1", 2) }),
-    );
 
     setRoute("/", "home-2");
     view.rerender(
@@ -242,31 +242,6 @@ describe("Layout item navigation", () => {
 });
 
 describe("Layout detail reveal", () => {
-  it("holds nested item details until the shared main-stage motion finishes", () => {
-    setRoute("/item/series-1", "series");
-    const view = renderLayout();
-    expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("true");
-
-    document.documentElement.setAttribute(DETAIL_MAIN_STAGE_MOTION_ATTRIBUTE, "2");
-    setRoute("/item/season-1", "season");
-    act(() =>
-      view.rerender(
-        <MemoryRouter>
-          <Layout>
-            <Harness />
-          </Layout>
-        </MemoryRouter>,
-      ),
-    );
-
-    expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("false");
-
-    document.documentElement.removeAttribute(DETAIL_MAIN_STAGE_MOTION_ATTRIBUTE);
-    act(() => window.dispatchEvent(new Event(DETAIL_MAIN_STAGE_MOTION_END_EVENT)));
-
-    expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("true");
-  });
-
   it("reveals immediately when the sidebar surface is absent", () => {
     mocks.renderSurface = false;
     const view = renderLayout();
@@ -283,6 +258,29 @@ describe("Layout detail reveal", () => {
     );
 
     expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("true");
+  });
+
+  it("reveals immediately when the item detail is already cached", () => {
+    mocks.getQueryData.mockImplementation((queryKey: unknown) =>
+      JSON.stringify(queryKey) === JSON.stringify(catalogKeys.itemDetail("movie-1", undefined))
+        ? { content_id: "movie-1" }
+        : undefined,
+    );
+    const view = renderLayout();
+    setRoute("/item/movie-1", "item");
+
+    act(() =>
+      view.rerender(
+        <MemoryRouter>
+          <Layout>
+            <Harness />
+          </Layout>
+        </MemoryRouter>,
+      ),
+    );
+
+    expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("true");
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("reveals as soon as the surface settles", () => {

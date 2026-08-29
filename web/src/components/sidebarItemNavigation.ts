@@ -1,10 +1,12 @@
 export const SIDEBAR_COLLAPSE_DURATION_MS = 300;
-export const SIDEBAR_TRANSITION_FALLBACK_MS = SIDEBAR_COLLAPSE_DURATION_MS + 80;
-export const DETAIL_MAIN_STAGE_MOTION_ATTRIBUTE = "data-detail-main-stage-motion";
-export const DETAIL_MAIN_STAGE_MOTION_END_EVENT = "silo:detail-main-stage-motion-end";
+// How long a caller waits for the collapse when it cannot observe the
+// transition itself. Kept well under the collapse duration: the gate exists to
+// hide a detail skeleton, and holding a ready page longer than this reads as
+// lag rather than motion.
+export const SIDEBAR_TRANSITION_FALLBACK_MS = 150;
 // Hover expansion and hidden-tab rAF suspension must never hold the detail
 // shell indefinitely. Settling is preferred, but this is the absolute cap.
-export const SIDEBAR_DETAILS_REVEAL_DEADLINE_MS = SIDEBAR_TRANSITION_FALLBACK_MS * 2;
+export const SIDEBAR_DETAILS_REVEAL_DEADLINE_MS = 760;
 
 export function sidebarDetailsRevealDelay(reduceMotion: boolean): number {
   return reduceMotion ? 0 : SIDEBAR_TRANSITION_FALLBACK_MS;

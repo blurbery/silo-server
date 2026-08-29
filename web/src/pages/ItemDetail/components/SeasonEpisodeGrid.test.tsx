@@ -1,10 +1,9 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SeasonEpisodeGrid from "./SeasonEpisodeGrid";
 
 const capturedMenuProps: Record<string, unknown>[] = [];
-const prefetchDetail = vi.hoisted(() => vi.fn());
 
 vi.mock("@/components/MediaItemMenu", () => ({
   default: (props: Record<string, unknown>) => {
@@ -18,23 +17,12 @@ vi.mock("@/hooks/useOverlayPrefs", () => ({
 }));
 
 vi.mock("@/hooks/queries/catalogRead", () => ({
-  usePrefetchCatalogItemDetail: () => prefetchDetail,
-}));
-
-vi.mock("@/hooks/useCarouselEmbla", () => ({
-  useCarouselEmbla: () => ({
-    emblaRef: vi.fn(),
-    canScrollPrev: false,
-    canScrollNext: false,
-    scrollPrev: vi.fn(),
-    scrollNext: vi.fn(),
-  }),
+  usePrefetchCatalogItemDetail: () => vi.fn(),
 }));
 
 describe("SeasonEpisodeGrid", () => {
   beforeEach(() => {
     capturedMenuProps.length = 0;
-    prefetchDetail.mockClear();
   });
 
   it("enables the watched shortcut on episode cards", () => {
@@ -130,8 +118,7 @@ describe("SeasonEpisodeGrid", () => {
     expect(screen.getByText("Episode 2").parentElement).not.toContainElement(watchedIndicator);
     expect(screen.getAllByLabelText("Watched")).toHaveLength(1);
   });
-
-  it("renders the season in the shared horizontal media carousel", () => {
+  it("caps the grid at four rows and scrolls the rest", () => {
     render(
       <MemoryRouter>
         <SeasonEpisodeGrid
@@ -142,7 +129,7 @@ describe("SeasonEpisodeGrid", () => {
               season_number: 1,
               episode_number: 1,
               title: "Pilot",
-              overview: "A beginning.",
+              overview: "An episode.",
               air_date: null,
               runtime: 42,
               still_url: "",
@@ -153,10 +140,10 @@ describe("SeasonEpisodeGrid", () => {
               content_id: "ep-2",
               season_number: 1,
               episode_number: 2,
-              title: "Next",
-              overview: "Another episode.",
+              title: "Second",
+              overview: "An episode.",
               air_date: null,
-              runtime: 43,
+              runtime: 42,
               still_url: "",
               still_thumbhash: "",
               files: [],
@@ -166,53 +153,15 @@ describe("SeasonEpisodeGrid", () => {
       </MemoryRouter>,
     );
 
-    const viewport = screen.getByLabelText("Media carousel");
-    expect(viewport).toHaveClass("embla__viewport");
-    expect(viewport.querySelectorAll(".embla__slide")).toHaveLength(2);
-    expect(viewport.querySelector(".grid")).toBeNull();
-    expect(viewport.querySelector(".embla__container")).not.toHaveClass("cursor-grab");
-    expect(viewport.querySelectorAll(".season-episode-card")).toHaveLength(2);
-  });
-
-  it("does not prefetch episodes during a fast pointer sweep", () => {
-    vi.useFakeTimers();
-    try {
-      render(
-        <MemoryRouter>
-          <SeasonEpisodeGrid
-            isLoading={false}
-            episodes={[
-              {
-                content_id: "ep-1",
-                season_number: 1,
-                episode_number: 1,
-                title: "Pilot",
-                overview: "A beginning.",
-                air_date: null,
-                runtime: 42,
-                still_url: "/pilot.jpg",
-                still_thumbhash: "",
-                files: [],
-              },
-            ]}
-          />
-        </MemoryRouter>,
-      );
-
-      const card = screen.getByText("Episode 1").closest(".media-card");
-      expect(card).not.toBeNull();
-      fireEvent.mouseEnter(card!);
-      act(() => vi.advanceTimersByTime(100));
-      fireEvent.mouseLeave(card!);
-      act(() => vi.advanceTimersByTime(100));
-      expect(prefetchDetail).not.toHaveBeenCalled();
-
-      fireEvent.mouseEnter(card!);
-      act(() => vi.advanceTimersByTime(140));
-      expect(prefetchDetail).toHaveBeenCalledOnce();
-      expect(prefetchDetail).toHaveBeenCalledWith("ep-1");
-    } finally {
-      vi.useRealTimers();
-    }
+    const grid = screen.getByText("Pilot").closest(".grid");
+    expect(grid).not.toBeNull();
+    // Two columns is the narrowest layout. A single column made the capped
+    // section over two viewports tall on a phone, so it scrolled inside a
+    // region the reader could not see the extent of.
+    expect(grid).toHaveClass("grid-cols-2", "sm:grid-cols-3", "lg:grid-cols-5");
+    expect(grid).toHaveClass("overflow-y-auto");
+    // Two episodes is under the cap, so nothing is clipped and the section
+    // keeps its natural height rather than showing an inert scrollport.
+    expect((grid as HTMLElement).style.maxHeight).toBe("");
   });
 });

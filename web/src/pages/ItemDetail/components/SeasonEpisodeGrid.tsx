@@ -3,17 +3,28 @@ import { Play } from "lucide-react";
 import type { EpisodeListItem } from "@/api/types";
 import { WatchedCheckIndicator } from "@/components/CardWatchedBadge";
 import { toEpisodeUserState } from "@/components/episodeUserState";
-import MediaCarousel from "@/components/MediaCarousel";
 import MediaItemMenu from "@/components/MediaItemMenu";
-import ViewTransitionLink from "@/components/ViewTransitionLink";
 import CardOverlays from "@/components/overlays/CardOverlays";
-import { Skeleton } from "@/components/ui/skeleton";
+import ViewTransitionLink from "@/components/ViewTransitionLink";
 import { useOverlayPrefs } from "@/hooks/useOverlayPrefs";
 import { usePrefetchCatalogItemDetail } from "@/hooks/queries/catalogRead";
 import { useDwellPrefetch } from "@/hooks/useDwellPrefetch";
+import { useGridRowCap } from "@/hooks/useGridRowCap";
 import type { CardQuickActionMode } from "@/lib/cardQuickActions";
 import { overlayDataFromEpisodeListItem, type CardOverlayPrefs } from "@/lib/overlays";
+import { EpisodeGridSkeleton } from "./SectionSkeletons";
 import type { EpisodeNavigationState } from "../itemDetailLayout";
+
+/**
+ * How much of a season stays visible before the section scrolls, so a long one
+ * cannot push the cast and crew off the page.
+ *
+ * Flat across breakpoints rather than scaled by column count: the cap is
+ * really a height budget, and four rows is already about one screen tall on a
+ * phone. Trading rows for columns there would only produce a nested scroll
+ * region taller than the viewport it sits in.
+ */
+const VISIBLE_EPISODE_ROWS = 4;
 
 interface SeasonEpisodeGridProps {
   episodes: EpisodeListItem[];
@@ -28,20 +39,10 @@ export default function SeasonEpisodeGrid({
 }: SeasonEpisodeGridProps) {
   const { prefs: overlayPrefs, quickActionMode } = useOverlayPrefs();
   const prefetchEpisodeDetail = usePrefetchCatalogItemDetail();
+  const setGridRef = useGridRowCap<HTMLDivElement>(VISIBLE_EPISODE_ROWS, episodes.length);
 
   if (isLoading) {
-    return (
-      <MediaCarousel title="Episodes" edgePadding={false} showHeader={false}>
-        {Array.from({ length: 5 }, (_, index) => (
-          <div key={index} className="w-[260px] shrink-0 sm:w-[315px]">
-            <Skeleton className="aspect-video w-full rounded-lg" />
-            <Skeleton className="mt-2 h-3 w-16" />
-            <Skeleton className="mt-1 h-4 w-24" />
-            <Skeleton className="mt-1.5 h-3 w-20" />
-          </div>
-        ))}
-      </MediaCarousel>
-    );
+    return <EpisodeGridSkeleton />;
   }
 
   if (episodes.length === 0) {
@@ -53,7 +54,12 @@ export default function SeasonEpisodeGrid({
   }
 
   return (
-    <MediaCarousel title="Episodes" edgePadding={false} showHeader={false}>
+    <div
+      ref={setGridRef}
+      // `pt-1 -mt-1` gives the top row's 4px hover lift somewhere to go: the
+      // scrollport clips both axes, and the cap adds this padding back.
+      className="overlay-scroll -mt-1 grid grid-cols-2 gap-4 overflow-y-auto pt-1 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5"
+    >
       {episodes.map((episode) => (
         <SeasonEpisodeCard
           key={episode.content_id}
@@ -64,7 +70,7 @@ export default function SeasonEpisodeGrid({
           onPrefetch={() => prefetchEpisodeDetail(episode.content_id)}
         />
       ))}
-    </MediaCarousel>
+    </div>
   );
 }
 
@@ -90,11 +96,7 @@ function SeasonEpisodeCard({
   const episodeTitle = episode.title || `Episode ${episode.episode_number}`;
 
   return (
-    <div
-      ref={cardRef}
-      className="season-episode-card group/card media-card media-card-longpress w-[260px] shrink-0 sm:w-[315px]"
-      {...prefetchHandlers}
-    >
+    <div ref={cardRef} className="group/card media-card media-card-longpress" {...prefetchHandlers}>
       <div className="relative">
         <ViewTransitionLink
           to={`/item/${episode.content_id}`}
@@ -106,9 +108,9 @@ function SeasonEpisodeCard({
               <img
                 src={episode.still_url}
                 alt={episodeTitle}
-                className="h-full w-full object-cover"
-                loading="lazy"
                 decoding="async"
+                className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+                loading="lazy"
               />
             ) : (
               <div className="flex h-full w-full items-center justify-center">

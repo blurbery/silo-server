@@ -169,6 +169,62 @@ export function changedCollectionLibraryIDs(
     : currentLibraryIDs;
 }
 
+export function buildAdminCollectionPartialUpdate({
+  collection,
+  initialLibraryIds,
+  libraryIds,
+  title,
+  description,
+  featured,
+  visibility,
+  sourceDirty,
+  sourceUrl,
+  sourceConfig,
+  syncSchedule,
+  initialDefaultSort,
+  defaultSort,
+  posterSourceUrl,
+  backdropSourceUrl,
+}: {
+  collection: LibraryCollection;
+  initialLibraryIds: number[];
+  libraryIds: number[];
+  title: string;
+  description: string;
+  featured: boolean;
+  visibility: "visible" | "hidden";
+  sourceDirty: boolean;
+  sourceUrl?: string;
+  sourceConfig?: Record<string, unknown>;
+  syncSchedule: string;
+  initialDefaultSort: string;
+  defaultSort: string;
+  posterSourceUrl: string;
+  backdropSourceUrl: string;
+}): UpdateLibraryCollectionRequest {
+  const body: UpdateLibraryCollectionRequest = {};
+  const nextLibraryIDs = changedCollectionLibraryIDs(initialLibraryIds, libraryIds);
+  if (nextLibraryIDs !== undefined) body.library_ids = nextLibraryIDs;
+  if (title !== collection.title) body.title = title;
+  if (description !== (collection.description ?? "")) body.description = description;
+  if (featured !== collection.featured) body.featured = featured;
+  if (visibility !== collection.visibility) body.visibility = visibility;
+  if (sourceDirty) {
+    body.source_url = sourceUrl;
+    body.source_config = sourceConfig;
+  }
+  if (syncSchedule.trim() !== (collection.sync_schedule ?? "")) {
+    body.sync_schedule = syncSchedule.trim();
+  }
+  const nextSortConfig = changedSortConfig(initialDefaultSort, defaultSort);
+  if (nextSortConfig !== undefined) body.sort_config = nextSortConfig;
+  const nextPosterSourceURL = posterSourceUrl.trim();
+  if (nextPosterSourceURL) body.poster_source_url = nextPosterSourceURL;
+  const nextBackdropSourceURL = backdropSourceUrl.trim();
+  if (nextBackdropSourceURL) body.backdrop_source_url = nextBackdropSourceURL;
+  return body;
+}
+
 function getTMDBPresetLabel(preset: TMDBPreset): string {
   switch (preset) {
     case "trending":
@@ -1544,26 +1600,23 @@ export function CollectionEditForm({
       }
     }
 
-    const body: UpdateLibraryCollectionRequest = {};
-    const nextLibraryIDs = changedCollectionLibraryIDs(initialLibraryIds, libraryIds);
-    if (nextLibraryIDs !== undefined) body.library_ids = nextLibraryIDs;
-    if (title !== collection.title) body.title = title;
-    if (description !== (collection.description ?? "")) body.description = description;
-    if (featured !== collection.featured) body.featured = featured;
-    if (visibility !== collection.visibility) body.visibility = visibility;
-    if (sourceDirty) {
-      body.source_url = sourceUrlValue;
-      body.source_config = sourceConfig;
-    }
-    if (editSyncSchedule.trim() !== (collection.sync_schedule ?? "")) {
-      body.sync_schedule = editSyncSchedule.trim();
-    }
-    const nextSortConfig = changedSortConfig(initialDefaultSort, defaultSort);
-    if (nextSortConfig !== undefined) body.sort_config = nextSortConfig;
-    const nextPosterSourceURL = posterSourceUrl.trim();
-    if (nextPosterSourceURL) body.poster_source_url = nextPosterSourceURL;
-    const nextBackdropSourceURL = backdropSourceUrl.trim();
-    if (nextBackdropSourceURL) body.backdrop_source_url = nextBackdropSourceURL;
+    const body = buildAdminCollectionPartialUpdate({
+      collection,
+      initialLibraryIds,
+      libraryIds,
+      title,
+      description,
+      featured,
+      visibility,
+      sourceDirty,
+      sourceUrl: sourceUrlValue,
+      sourceConfig,
+      syncSchedule: editSyncSchedule,
+      initialDefaultSort,
+      defaultSort,
+      posterSourceUrl,
+      backdropSourceUrl,
+    });
 
     updateMutation.mutate(
       { id: collection.id, body, poster: posterFile, backdrop: backdropFile },

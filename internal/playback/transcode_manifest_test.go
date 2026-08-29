@@ -1164,7 +1164,17 @@ func TestTranscodeThrottlerIgnoresOutputFromAnEarlierGeneration(t *testing.T) {
 	}
 
 	// Once this generation writes its own manifest, throttling works normally.
+	//
+	// The mtime is set rather than inherited from the write. Staleness is
+	// decided by ManifestModTime.Before(GenerationStartedAt), and a filesystem
+	// with coarse mtime granularity — which a CI runner's overlay can have and a
+	// developer's APFS does not — truncates a write made at `now` back below it,
+	// so the fresh manifest reads as older than the generation that produced it.
+	fresh := now.Add(time.Second)
 	writeManifestRange(t, tempDir, 225, 293, ".ts")
+	if err := os.Chtimes(filepath.Join(tempDir, "stream.m3u8"), fresh, fresh); err != nil {
+		t.Fatalf("chtimes manifest: %v", err)
+	}
 	throttler.CheckOnce()
 	if !throttler.paused {
 		t.Fatal("expected throttler to pause on this generation's own produced head")

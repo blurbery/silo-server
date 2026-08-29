@@ -89,8 +89,29 @@ describe("SearchBar", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
-    act(() => vi.advanceTimersByTime(201));
 
+    const location = new URL(`http://example.test${screen.getByLabelText("location").textContent}`);
+    expect(location.pathname).toBe("/catalog");
+    expect(location.searchParams.get("source")).toBe("query");
+    expect(location.searchParams.has("q")).toBe(false);
+    expect(mocks.transitionNavigate).not.toHaveBeenCalled();
+  });
+
+  it("keeps a pending non-empty debounce from restoring the route after clear", () => {
+    vi.useFakeTimers();
+
+    render(
+      <MemoryRouter initialEntries={["/catalog?source=query&q=lanterns"]}>
+        <SearchBar prominent initialQuery="lanterns" />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "lantern" } });
+    act(() => vi.advanceTimersByTime(100));
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+
+    act(() => vi.advanceTimersByTime(500));
     const location = new URL(`http://example.test${screen.getByLabelText("location").textContent}`);
     expect(location.pathname).toBe("/catalog");
     expect(location.searchParams.get("source")).toBe("query");

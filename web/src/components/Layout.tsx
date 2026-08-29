@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Menu, Search } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -22,8 +22,6 @@ import {
 } from "@/hooks/useImmediateSidebarCollapse";
 import SidebarItemNavigationProvider from "@/components/SidebarItemNavigationProvider";
 import {
-  DETAIL_MAIN_STAGE_MOTION_ATTRIBUTE,
-  DETAIL_MAIN_STAGE_MOTION_END_EVENT,
   hasRunningSidebarTransition,
   isCollapsedSidebarSurface,
   parseItemNavigationHref,
@@ -31,9 +29,9 @@ import {
   type SidebarItemNavigationRequest,
 } from "@/components/sidebarItemNavigation";
 import { useSidebarItemDetailsGate } from "@/hooks/useSidebarItemDetailsGate";
+import { useViewTransitionNavigate } from "@/hooks/useViewTransition";
 import { catalogKeys } from "@/hooks/queries/keys";
 import { fetchCatalogItemDetail } from "@/hooks/queries/catalogRead";
-import { useViewTransitionNavigate } from "@/hooks/useViewTransition";
 
 interface LayoutProps {
   children: ReactNode;
@@ -58,6 +56,7 @@ export default function Layout({ children }: LayoutProps) {
   const isHomePath = location.pathname === "/";
   const isLibraryRoute = location.pathname.startsWith("/library/");
   const isItemRoute = location.pathname.startsWith("/item/");
+  const itemRouteLocation = `${location.pathname}${location.search}`;
   // Breakpoint changes naturally cause other layout renders; navigation only
   // needs the viewport value at the moment it is attempted.
   const hasDesktopSidebar = window.matchMedia("(min-width: 64rem)").matches;
@@ -94,7 +93,7 @@ export default function Layout({ children }: LayoutProps) {
   const beginItemNavigation = useCallback(
     (request: SidebarItemNavigationRequest) => {
       const itemTarget = parseItemNavigationHref(request.href, window.location.origin);
-      if (!itemTarget) {
+      if (isItemRoute || !itemTarget || !hasDesktopSidebar) {
         return false;
       }
 
@@ -102,9 +101,6 @@ export default function Layout({ children }: LayoutProps) {
         queryKey: catalogKeys.itemDetail(itemTarget.contentId, itemTarget.libraryId),
         queryFn: () => fetchCatalogItemDetail(itemTarget.contentId, itemTarget.libraryId),
       });
-      if (isItemRoute || !hasDesktopSidebar) {
-        return false;
-      }
       navigate(request.href, {
         replace: request.replace,
         state: request.state,
@@ -119,6 +115,15 @@ export default function Layout({ children }: LayoutProps) {
   // can never leave the item route on its lightweight shell indefinitely.
   useEffect(() => {
     if (!isItemRoute || !pendingLocationKey) return;
+
+    // The gate stages the collapse so the detail skeleton is not what animates
+    // into view. A prefetched detail has no skeleton to hide, so waiting for
+    // the sidebar would only delay a page that is already ready to paint.
+    if (hasCachedItemDetail(queryClient, itemRouteLocation)) {
+      revealItemDetails(pendingLocationKey);
+      return;
+    }
+
     const startedAt = Date.now();
     let timer: number;
     let cancelled = false;
@@ -126,16 +131,12 @@ export default function Layout({ children }: LayoutProps) {
     const revealWhenSettled = () => {
       if (cancelled) return;
       const surface = document.querySelector<HTMLElement>(".sidebar-surface");
-      const nestedDetailMotionPending = document.documentElement.hasAttribute(
-        DETAIL_MAIN_STAGE_MOTION_ATTRIBUTE,
-      );
       const deadlineReached =
         prefersReducedMotion() || Date.now() - startedAt >= SIDEBAR_DETAILS_REVEAL_DEADLINE_MS;
       if (
         !deadlineReached &&
-        (nestedDetailMotionPending ||
-          (surface &&
-            (!isCollapsedSidebarSurface(surface) || hasRunningSidebarTransition(surface))))
+        surface &&
+        (!isCollapsedSidebarSurface(surface) || hasRunningSidebarTransition(surface))
       ) {
         const remaining = SIDEBAR_DETAILS_REVEAL_DEADLINE_MS - (Date.now() - startedAt);
         timer = window.setTimeout(revealWhenSettled, Math.min(50, Math.max(0, remaining)));
@@ -144,14 +145,12 @@ export default function Layout({ children }: LayoutProps) {
       revealItemDetails(pendingLocationKey);
     };
 
-    window.addEventListener(DETAIL_MAIN_STAGE_MOTION_END_EVENT, revealWhenSettled);
     revealWhenSettled();
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
-      window.removeEventListener(DETAIL_MAIN_STAGE_MOTION_END_EVENT, revealWhenSettled);
     };
-  }, [isItemRoute, pendingLocationKey, revealItemDetails]);
+  }, [isItemRoute, itemRouteLocation, pendingLocationKey, queryClient, revealItemDetails]);
 
   const handleSidebarTransitionEnd = useCallback(
     (event: ReactTransitionEvent<HTMLDivElement>) => {
@@ -173,6 +172,12 @@ export default function Layout({ children }: LayoutProps) {
   // a frame late and it would trail the sidebar by ~23px at peak velocity.
   useLayoutEffect(() => {
     const root = document.documentElement;
+    // Marks that this shell is mounted, and with it the only element named
+    // `main-content`. app.css holds the root view-transition group still while
+    // it is set, so the frozen sidebar snapshot cannot cross-fade over the live
+    // collapse — and the routes rendered outside this shell keep the default
+    // root transition, which is the only thing they have to animate.
+    root.dataset.appShell = "true";
     if (targetDetailImmersion) {
       root.dataset.sidebarCollapsed = "true";
     } else {
@@ -184,6 +189,7 @@ export default function Layout({ children }: LayoutProps) {
       delete root.dataset.sidebarVisualCollapsed;
     }
     return () => {
+      delete root.dataset.appShell;
       delete root.dataset.sidebarCollapsed;
       delete root.dataset.sidebarVisualCollapsed;
     };
@@ -260,7 +266,7 @@ export default function Layout({ children }: LayoutProps) {
           <div className="flex items-center gap-3">
             <button
               onClick={() => setMobileOpen(true)}
-              className="text-muted-foreground hover:text-foreground hover:bg-accent/60 flex h-10 w-10 items-center justify-center rounded-xl transition-colors active:scale-[0.98]"
+              className="text-muted-foreground hover:text-foreground hover:bg-accent/60 flex h-10 w-10 items-center justify-center rounded-xl transition-all active:scale-[0.98]"
               aria-label="Open menu"
             >
               <Menu className="h-5 w-5" />
@@ -272,7 +278,7 @@ export default function Layout({ children }: LayoutProps) {
           <div className="flex items-center gap-2">
             <ViewTransitionLink
               to={buildQueryCatalogHref()}
-              className="text-muted-foreground hover:text-foreground hover:bg-accent/60 flex h-10 w-10 items-center justify-center rounded-xl transition-colors active:scale-[0.98]"
+              className="text-muted-foreground hover:text-foreground hover:bg-accent/60 flex h-10 w-10 items-center justify-center rounded-xl transition-all active:scale-[0.98]"
             >
               <Search className="h-5 w-5" />
             </ViewTransitionLink>
@@ -321,6 +327,7 @@ export default function Layout({ children }: LayoutProps) {
           className={`sidebar-main-stage relative min-h-screen ${
             targetDetailImmersion ? "lg:ml-16" : "lg:ml-[260px]"
           } ${hasBackgroundBar ? "pb-32 sm:pb-36" : ""}`}
+          style={{ viewTransitionName: "main-content" }}
         >
           {needsNoPadding ? (
             children
@@ -332,5 +339,19 @@ export default function Layout({ children }: LayoutProps) {
         </main>
       </div>
     </SidebarItemNavigationProvider>
+  );
+}
+
+/**
+ * Reports whether the detail for the item route currently being entered is
+ * already in the query cache — either prefetched by `beginItemNavigation` or
+ * left behind by an earlier visit.
+ */
+function hasCachedItemDetail(queryClient: QueryClient, itemRouteLocation: string): boolean {
+  const target = parseItemNavigationHref(itemRouteLocation, window.location.origin);
+  if (!target) return false;
+  return (
+    queryClient.getQueryData(catalogKeys.itemDetail(target.contentId, target.libraryId)) !==
+    undefined
   );
 }

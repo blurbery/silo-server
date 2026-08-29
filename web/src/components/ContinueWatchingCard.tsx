@@ -1,6 +1,6 @@
 import ViewTransitionLink from "@/components/ViewTransitionLink";
 import { BookOpen, Play } from "lucide-react";
-import { useRef } from "react";
+import { useCallback, useRef } from "react";
 import { useLocation } from "react-router";
 import type { ItemDetail, SectionItem } from "@/api/types";
 import type { ProgressEntry } from "@/api/types";
@@ -116,6 +116,8 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
   const progressPercent =
     card.durationSeconds > 0 ? (card.positionSeconds / card.durationSeconds) * 100 : 0;
   const hasPartialProgress = progressPercent > 0 && progressPercent < 100;
+  // Drives both the bar itself and the overlay row's clearance above it.
+  const showProgressBar = !isNextUp && progressPercent > 0;
   const hasEpisodeMeta = card.seasonNumber != null && card.episodeNumber != null;
   // A manga chapter is an ebook item that carries its owning series; the card
   // presents the series (heading, links) since the chapter's own item detail
@@ -133,7 +135,6 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
   // Detail-page link target for the card's image and meta lines: manga
   // chapters head to the series page like the heading does.
   const detailHref = isMangaChapter ? headingHref : card.itemHref;
-  const watchHref = card.watchHref;
   const episodeLabel = hasEpisodeMeta
     ? `Season ${card.seasonNumber} Episode ${card.episodeNumber}`
     : null;
@@ -159,36 +160,39 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
           ? formatListeningTimeLeft(card.positionSeconds, card.durationSeconds)
           : `${Math.round((card.durationSeconds - card.positionSeconds) / 60)} min left`
         : "\u00A0";
-  function handleWatchClick(event: React.MouseEvent<HTMLAnchorElement>) {
-    if (
-      event.defaultPrevented ||
-      event.button !== 0 ||
-      event.metaKey ||
-      event.altKey ||
-      event.ctrlKey ||
-      event.shiftKey
-    ) {
-      return;
-    }
+  const handleWatchClick = useCallback(
+    (event: React.MouseEvent<HTMLAnchorElement>) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
 
-    if (!isVideoWatchHref(watchHref)) {
-      return;
-    }
+      if (!isVideoWatchHref(card.watchHref)) {
+        return;
+      }
 
-    const parsed = parseWatchHref(watchHref);
-    if (!parsed) {
-      return;
-    }
+      const parsed = parseWatchHref(card.watchHref);
+      if (!parsed) {
+        return;
+      }
 
-    event.preventDefault();
-    playbackController.startPlayback({
-      contentId: parsed.contentId,
-      fileId: parsed.fileId,
-      libraryId: parsed.libraryId,
-      restart: parsed.restart,
-      returnHref: `${location.pathname}${location.search}`,
-    });
-  }
+      event.preventDefault();
+      playbackController.startPlayback({
+        contentId: parsed.contentId,
+        fileId: parsed.fileId,
+        libraryId: parsed.libraryId,
+        restart: parsed.restart,
+        returnHref: `${location.pathname}${location.search}`,
+      });
+    },
+    [card.watchHref, location.pathname, location.search, playbackController],
+  );
 
   const variant = props.variant ?? "wide";
   const isPoster = variant === "poster";
@@ -228,7 +232,7 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
   const imageSrc = imagePrimary || imageFallback;
 
   return (
-    <div ref={cardRef} className={`media-card media-card-longpress group/card ${containerWidth}`}>
+    <div ref={cardRef} className={`media-card-longpress group/card ${containerWidth}`}>
       <div className="group/media relative">
         <ViewTransitionLink to={detailHref} className="block">
           <div className={`media-card-image relative ${imageAspect} overflow-hidden rounded-xl`}>
@@ -236,7 +240,7 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
               <img
                 src={imageSrc}
                 alt={heading}
-                className="h-full w-full object-cover"
+                className="h-full w-full object-cover transition-transform duration-300 group-hover/media:scale-105"
                 loading="lazy"
                 decoding="async"
               />
@@ -251,18 +255,19 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
                 data={overlayDataFromSectionItem(props.sectionItem)}
                 prefs={props.overlayPrefs}
                 variant={variant}
+                hasProgressBar={showProgressBar}
               />
             )}
 
             {/* Hover dim behind the play button */}
-            <div className="media-card-hover-dim absolute inset-0" />
+            <div className="media-card-hover-dim absolute inset-0 bg-black/0 transition-colors duration-150" />
 
             {/* Progress bar — inset pill so a full bar doesn't read as a
                 stray edge along the artwork */}
-            {!isNextUp && progressPercent > 0 && (
+            {showProgressBar && (
               <div className="absolute inset-x-2.5 bottom-2 h-[3px] overflow-hidden rounded-full bg-black/40">
                 <div
-                  className="h-full rounded-full transition-[width] duration-(--duration-fast)"
+                  className="h-full rounded-full transition-all duration-300"
                   style={{
                     width: `${Math.min(progressPercent, 100)}%`,
                     background: "var(--primary)",
@@ -272,7 +277,7 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
             )}
           </div>
         </ViewTransitionLink>
-        {isPoster && playableContentId && isVideoWatchHref(watchHref) ? (
+        {isPoster && playableContentId && isVideoWatchHref(card.watchHref) ? (
           <CardPlayOverlay
             contentId={playableContentId}
             title={playTitle}
@@ -281,10 +286,10 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
           />
         ) : (
           <ViewTransitionLink
-            to={watchHref}
+            to={card.watchHref}
             onClick={handleWatchClick}
             aria-label={`${card.type === "ebook" ? "Read" : "Play"} ${heading}`}
-            className="media-card-play-trigger bg-primary text-primary-foreground hover:bg-primary/90 absolute top-1/2 left-1/2 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow-lg transition-[transform,background-color] duration-(--duration-fast) hover:scale-110 active:scale-95"
+            className="media-card-play-trigger bg-primary text-primary-foreground absolute top-1/2 left-1/2 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow-lg transition-all duration-200 hover:scale-110 hover:shadow-xl hover:brightness-110 active:scale-95"
           >
             {card.type === "ebook" ? (
               <BookOpen className="h-5 w-5" />
@@ -339,7 +344,7 @@ export default function ContinueWatchingCard(props: ContinueWatchingCardProps) {
           {showMetadata && premiereBadge && (
             <div className="mt-1">
               <span
-                className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] leading-none font-semibold tracking-wide uppercase ${upcomingBadgeClass(
+                className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] leading-none font-semibold tracking-wide uppercase backdrop-blur-sm ${upcomingBadgeClass(
                   premiereBadge,
                 )}`}
               >

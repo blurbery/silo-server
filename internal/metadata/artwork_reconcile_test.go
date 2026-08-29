@@ -24,6 +24,14 @@ type fakeObjectChecker struct {
 	checked  map[string]int
 }
 
+type failingCollectionPosterMutationLocker struct {
+	err error
+}
+
+func (f failingCollectionPosterMutationLocker) AcquirePosterMutationLock(context.Context, string) (func(), error) {
+	return nil, f.err
+}
+
 func (f *fakeObjectChecker) Bucket() string { return "test-bucket" }
 
 func (f *fakeObjectChecker) ObjectExists(_ context.Context, _ string, key string) (bool, error) {
@@ -92,6 +100,40 @@ func TestCollectionPosterSurfaceUsesCoordinatedRevalidation(t *testing.T) {
 	}
 	if collectionPoster.pathCol != "poster_url" {
 		t.Fatalf("collection poster path guard = %q, want poster_url", collectionPoster.pathCol)
+	}
+}
+
+func TestVerifyAndResetContinuesAfterCollectionPosterLockFailure(t *testing.T) {
+	var surface artworkSweepSurface
+	for _, candidate := range artworkSweepSurfaces() {
+		if candidate.name == artworkCollectionPostersName {
+			surface = candidate
+			break
+		}
+	}
+	if surface.name == "" {
+		t.Fatal("collection poster surface is missing")
+	}
+
+	const posterPath = "collection-images/collection-1/poster/original.webp"
+	const presentPath = "collection-images/collection-2/poster/original.webp"
+	lockErr := errors.New("simulated lock failure")
+	reconciler := &ArtworkCacheReconciler{
+		s3: &fakeObjectChecker{missing: map[string]bool{posterPath: true}},
+		collectionRepo: failingCollectionPosterMutationLocker{
+			err: lockErr,
+		},
+	}
+	stats := ArtworkReconcileStats{}
+	err := reconciler.verifyAndReset(context.Background(), surface, []sweptRow{
+		{keys: []string{"collection-1"}, path: posterPath},
+		{keys: []string{"collection-2"}, path: presentPath},
+	}, &stats)
+	if err != nil {
+		t.Fatalf("verifyAndReset returned a batch error: %v", err)
+	}
+	if stats.Checked != 2 || stats.Verified != 1 || stats.Errors != 1 || stats.SweepErrors != 1 {
+		t.Fatalf("stats = %+v, want one verified row and one row-level sweep error", stats)
 	}
 }
 

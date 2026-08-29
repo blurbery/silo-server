@@ -153,3 +153,24 @@ func TestHandleCatalogSearchContextError_CanceledRequestWritesNothing(t *testing
 		t.Fatalf("canceled request wrote a response body: %q", rec.Body.String())
 	}
 }
+
+func TestHandleCatalogResolveError_GroupedDeadlineReturnsRetryableTimeout(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/catalog?source=query&q=slow&group=work", nil)
+	handleCatalogResolveError(
+		rec,
+		req,
+		errors.Join(errors.New("grouped search failed"), context.DeadlineExceeded),
+		true,
+	)
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusGatewayTimeout, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode grouped timeout body: %v; body=%s", err, rec.Body.String())
+	}
+	if body["error"] != "search_timeout" {
+		t.Fatalf("error = %v, want search_timeout; body=%v", body["error"], body)
+	}
+}

@@ -1669,8 +1669,8 @@ func TestAppendAudioArgsNormalizesEveryAACEncodeAndBoostsOnlySurroundToStereo(t 
 // builder's encoder probe must succeed on Linux CI as well as macOS.
 func videoToolboxTestFFmpeg(t *testing.T) string {
 	t.Helper()
-	resetNVENCProbeCacheForTest()
-	t.Cleanup(resetNVENCProbeCacheForTest)
+	resetHWProbeCacheForTest()
+	t.Cleanup(resetHWProbeCacheForTest)
 	return writeFakeFFmpeg(t, successfulVideoToolboxProbe()).path
 }
 

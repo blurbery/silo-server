@@ -25,8 +25,6 @@ interface MediaCarouselProps {
    * box instead of picking up a second layer of padding.
    */
   edgePadding?: boolean;
-  /** Hide the built-in heading when the parent section already renders it. */
-  showHeader?: boolean;
 }
 
 export default function MediaCarousel({
@@ -39,7 +37,6 @@ export default function MediaCarousel({
   onViewAll,
   headerActions,
   edgePadding = true,
-  showHeader = true,
 }: MediaCarouselProps) {
   const { emblaRef, canScrollPrev, canScrollNext, scrollPrev, scrollNext } = useCarouselEmbla();
   const { cardPresentation } = useUICustomization();
@@ -67,33 +64,31 @@ export default function MediaCarousel({
         } as CSSProperties
       }
     >
-      {showHeader && (
-        <div className={`mb-5 flex items-end justify-between gap-4${headerPadX}`}>
-          <div className="flex items-center gap-2">
-            {titleHref ? (
-              <Link to={titleHref} className="group/title hover:text-primary transition-colors">
-                <h2 className="text-foreground text-xl font-semibold tracking-tight">
-                  {title}
-                  <span className="text-muted-foreground group-hover/title:text-primary ml-2 text-sm transition-colors">
-                    View
-                  </span>
-                </h2>
-              </Link>
-            ) : (
-              <h2 className="text-foreground text-xl font-semibold tracking-tight">{title}</h2>
-            )}
-            {headerActions}
-          </div>
-          {onViewAll && (
-            <button
-              onClick={onViewAll}
-              className="text-muted-foreground hover:text-primary text-[12px] font-semibold tracking-[0.16em] uppercase transition-colors active:scale-[0.98]"
-            >
-              Explore all
-            </button>
+      <div className={`mb-5 flex items-end justify-between gap-4${headerPadX}`}>
+        <div className="flex items-center gap-2">
+          {titleHref ? (
+            <Link to={titleHref} className="group/title hover:text-primary transition-colors">
+              <h2 className="text-foreground text-xl font-semibold tracking-tight">
+                {title}
+                <span className="text-muted-foreground group-hover/title:text-primary ml-2 text-sm transition-colors">
+                  View
+                </span>
+              </h2>
+            </Link>
+          ) : (
+            <h2 className="text-foreground text-xl font-semibold tracking-tight">{title}</h2>
           )}
+          {headerActions}
         </div>
-      )}
+        {onViewAll && (
+          <button
+            onClick={onViewAll}
+            className="text-muted-foreground hover:text-primary text-[12px] font-semibold tracking-[0.16em] uppercase transition-all active:scale-[0.98]"
+          >
+            Explore all
+          </button>
+        )}
+      </div>
 
       <div className="relative">
         {/* Left edge gradient */}
@@ -128,7 +123,7 @@ export default function MediaCarousel({
         >
           <ul
             role="list"
-            className={`embla__container flex list-none gap-4 lg:gap-5${containerPadX}`}
+            className={`embla__container flex cursor-grab list-none gap-4 lg:gap-5${containerPadX}`}
           >
             {slideChildren.map((child, index) => (
               <li key={index} className="embla__slide shrink-0">

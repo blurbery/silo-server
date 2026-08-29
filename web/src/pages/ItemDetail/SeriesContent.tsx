@@ -185,9 +185,7 @@ export default function SeriesContent({ item }: { item: ItemDetail & { type: "se
             />
           </section>
         ) : (
-          seasons.length > 0 && (
-            <SeasonCarousel seasons={seasons} parentSeriesHref={`/item/${item.content_id}`} />
-          )
+          seasons.length > 0 && <SeasonCarousel seasons={seasons} />
         )}
         {item.videos && item.videos.length > 0 && <TrailersSection videos={item.videos} />}
 
