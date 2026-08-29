@@ -1683,7 +1683,7 @@ func (r *ItemRepository) buildFuzzySearchFromParsed(parsed parsedSearchQuery, it
 	// to keep long-title typo recovery useful (for example "Hary Poter" still
 	// prefers a Harry Potter title over "Miss Potter"). The whole-title score
 	// remains the deterministic first tie-break. Both signals are computed only
-	// over the indexed candidate set, never the full catalogue.
+	// over the indexed candidate set, never the full catalog.
 	scoredCTE := fmt.Sprintf(`
 		WITH alias_candidates AS MATERIALIZED (
 			SELECT

@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -939,7 +940,7 @@ func TestRerankFuzzyItemsHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	items := []*models.MediaItem{{ContentID: "one", Title: "One"}, {ContentID: "two", Title: "Two"}}
-	if err := rerankFuzzyItems(ctx, "three", items, nil); err != context.Canceled {
+	if err := rerankFuzzyItems(ctx, "three", items, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("rerank error = %v, want context.Canceled", err)
 	}
 }
