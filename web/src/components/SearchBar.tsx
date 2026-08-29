@@ -34,6 +34,13 @@ export default function SearchBar({
     buildSearchHrefRef.current = buildSearchHref;
   }, [buildSearchHref]);
 
+  // Browser history, scope changes, and external navigation can update the
+  // canonical query without remounting this component. Keep the input in sync
+  // instead of leaving it attached to a stale request key.
+  useEffect(() => {
+    setQuery(initialQuery);
+  }, [initialQuery]);
+
   useEffect(() => {
     if (autoFocus && inputRef.current) {
       inputRef.current.focus();
@@ -47,20 +54,24 @@ export default function SearchBar({
       isInitialMount.current = false;
       return;
     }
-    if (debouncedQuery.trim()) {
-      // Updating only the query string is not a page transition. Animating a
-      // full route snapshot for every debounced keystroke makes the search page
-      // visibly wobble and adds compositor work to its hottest interaction.
-      navigateWithoutTransition(buildSearchHrefRef.current(debouncedQuery.trim()), {
-        replace: true,
-      });
-    }
+    // Updating only the query string is not a page transition. Animating a
+    // full route snapshot for every debounced keystroke makes the search page
+    // visibly wobble and adds compositor work to its hottest interaction.
+    // Navigate an empty value as well so clearing the field aborts and removes
+    // the previous results instead of leaving an invisible stale search alive.
+    navigateWithoutTransition(buildSearchHrefRef.current(debouncedQuery.trim()), {
+      replace: true,
+    });
   }, [debouncedQuery, prominent, navigateWithoutTransition]);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (query.trim()) {
-      navigate(buildSearchHref(query.trim()));
+      if (prominent) {
+        navigateWithoutTransition(buildSearchHref(query.trim()));
+      } else {
+        navigate(buildSearchHref(query.trim()));
+      }
     }
   }
 
@@ -73,7 +84,7 @@ export default function SearchBar({
           placeholder="Search movies, series..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="surface-panel h-14 rounded-[1.4rem] border-0 pr-10 pl-12 text-base shadow-none"
+          className="search-paint-surface h-14 rounded-[1.4rem] border pr-10 pl-12 text-base shadow-none"
         />
         {query && (
           <button

@@ -478,6 +478,8 @@ describe("GlobalSearch + RequestToAddSection wiring", () => {
       enabled: false,
       requireProfile: true,
       staleTime: 5 * 60 * 1000,
+      gcTime: 30_000,
+      retry: false,
     });
   });
 

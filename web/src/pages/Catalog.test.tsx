@@ -204,6 +204,8 @@ describe("Catalog page", () => {
         pages: new Map([[0, [{ content_id: "movie-1", title: "Heat", type: "movie" }]]]),
       },
       isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
     });
     mockUseCatalogFilters.mockReturnValue({
       data: { genres: ["Drama"], content_ratings: ["R"] },
@@ -469,6 +471,8 @@ describe("Catalog page", () => {
       enabled: false,
       requireProfile: true,
       staleTime: 5 * 60 * 1000,
+      gcTime: 30_000,
+      retry: false,
     });
   });
 
@@ -580,6 +584,30 @@ describe("Catalog page", () => {
 
     expect(markup).toContain('data-loading="false"');
     expect(markup).toContain('data-total="0"');
+  });
+
+  it("hides stale results and explains a bounded search failure", () => {
+    mockUseCatalogWindow.mockReturnValue({
+      data: {
+        title: "Old Search",
+        totalItems: 1,
+        pages: new Map([[0, [{ content_id: "old", title: "Stale Result", type: "movie" }]]]),
+      },
+      isLoading: false,
+      isError: true,
+      refetch: vi.fn(),
+    });
+
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain("Search stopped before it could finish.");
+    expect(markup).toContain("Retry search");
+    expect(markup).not.toContain('data-kind="item-grid"');
+    expect(markup).not.toContain("Stale Result");
   });
 
   it("applies the preferred media scope (default: video) when the URL has no type param", () => {

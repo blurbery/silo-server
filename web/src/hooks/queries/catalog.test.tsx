@@ -111,9 +111,13 @@ describe("useCatalogWindow", () => {
     const state = createCatalogSearchState("query", { q: "heater" });
     const limit = 60;
     let page0Query:
-      | { placeholderData?: (previous: CatalogResponse) => CatalogResponse }
+      | {
+          placeholderData?: (previous: CatalogResponse) => CatalogResponse;
+          gcTime?: number;
+          retry?: boolean;
+        }
       | undefined;
-    let pageQueries: Array<{ enabled?: boolean }> | undefined;
+    let pageQueries: Array<{ enabled?: boolean; gcTime?: number; retry?: boolean }> | undefined;
 
     mocks.useQuery.mockImplementation((query) => {
       page0Query = query;
@@ -137,7 +141,11 @@ describe("useCatalogWindow", () => {
 
     const previous = makePage(0, limit);
     expect(page0Query?.placeholderData?.(previous)).toBe(previous);
+    expect(page0Query).toMatchObject({ gcTime: 30_000, retry: false });
     expect(pageQueries?.every((query) => query.enabled === false)).toBe(true);
+    expect(pageQueries?.every((query) => query.gcTime === 30_000 && query.retry === false)).toBe(
+      true,
+    );
   });
 
   it("estimates window size from has_more when total is omitted", () => {

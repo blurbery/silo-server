@@ -12,6 +12,12 @@ import {
   type CatalogSearchState,
 } from "@/pages/catalogSearchParams";
 
+// Search-as-you-type creates a distinct query key for every settled input.
+// Keep enough history for a quick correction/backspace without retaining ten
+// minutes of poster-heavy responses, and never automatically replay a timed
+// out interactive search against PostgreSQL.
+const INTERACTIVE_SEARCH_GC_TIME_MS = 30_000;
+
 function catalogParamsForKey(
   state: CatalogSearchState,
   limit: number,
@@ -142,6 +148,7 @@ export function useCatalogWindow(
   const limit = options.limit ?? 60;
   const includeTotal = options.includeTotal ?? true;
   const enabled = options.enabled ?? true;
+  const isInteractiveSearch = state.source === "query" && Boolean(state.q);
   const page0Params = catalogParamsForKey(state, limit, includeTotal);
   const remainingPageParams = catalogParamsForKey(state, limit, false);
   const visibleRange = options.visibleRange ?? [0, limit - 1];
@@ -157,9 +164,11 @@ export function useCatalogWindow(
     queryFn: ({ signal }: { signal: AbortSignal }) =>
       fetchCatalogPage(state, limit, 0, { signal }, includeTotal),
     staleTime: 10 * 60 * 1000,
+    ...(isInteractiveSearch
+      ? { gcTime: INTERACTIVE_SEARCH_GC_TIME_MS, retry: false as const }
+      : {}),
     enabled,
-    placeholderData:
-      state.source === "query" && state.q ? (previousData) => previousData : undefined,
+    placeholderData: isInteractiveSearch ? (previousData) => previousData : undefined,
   });
 
   const snapshot = page0Result.data?.snapshot;
@@ -189,6 +198,9 @@ export function useCatalogWindow(
         queryFn: ({ signal }: { signal: AbortSignal }) =>
           fetchCatalogPage(state, limit, offset, { signal }, false, snapshot),
         staleTime: 10 * 60 * 1000,
+        ...(isInteractiveSearch
+          ? { gcTime: INTERACTIVE_SEARCH_GC_TIME_MS, retry: false as const }
+          : {}),
         enabled: canFetchRemainingPages,
       };
     }),
@@ -319,6 +331,9 @@ export function useCatalogWindow(
       effectiveSort: page0Result.data?.effective_sort,
     },
     isLoading,
+    isError: page0Result.isError,
+    error: page0Result.error,
+    refetch: page0Result.refetch,
   };
 }
 
