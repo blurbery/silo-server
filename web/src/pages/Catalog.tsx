@@ -426,8 +426,8 @@ function CatalogResults({
         >
           <p className="font-medium">Search stopped before it could finish.</p>
           <p className="text-muted-foreground max-w-md text-sm">
-            The server ended the lookup so it could not keep using CPU in the background. Try a
-            more specific title or retry once.
+            The server ended the lookup so it could not keep using CPU in the background. Try a more
+            specific title or retry once.
           </p>
           <Button variant="outline" size="sm" onClick={() => void catalogQuery.refetch()}>
             <RefreshCw className="size-4" />
