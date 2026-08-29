@@ -141,7 +141,7 @@ func TestSetCommunityRatingReactionResolvesOpaqueCardKey(t *testing.T) {
 		http.MethodPut,
 		"/ratings/movie-1/community/key/reaction",
 		"movie-1",
-		communityRatingKey(target),
+		communityRatingKey("movie-1", target),
 		strings.NewReader(`{"reaction":"down"}`),
 	)
 	recorder := httptest.NewRecorder()
@@ -153,6 +153,35 @@ func TestSetCommunityRatingReactionResolvesOpaqueCardKey(t *testing.T) {
 	}
 	if repo.setTargetUser != target.UserID || repo.setTargetID != target.ProfileID || repo.setReaction != -1 {
 		t.Fatalf("set target = (%d, %q, %d)", repo.setTargetUser, repo.setTargetID, repo.setReaction)
+	}
+}
+
+func TestSetCommunityRatingReactionAcceptsLegacyKeyDuringRollingDeploy(t *testing.T) {
+	target := catalog.CommunityRating{
+		UserID:      9,
+		ProfileID:   "profile-secret",
+		ProfileName: "Samantha",
+		Rating:      5,
+		RatedAt:     time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC),
+	}
+	repo := &communityRatingsRepoStub{
+		community:     []catalog.CommunityRating{target},
+		setReactionOK: true,
+	}
+	handler := NewRatingsHandler(repo, communityRatingsItemRepoStub{})
+	req := communityRatingsRequest(
+		http.MethodPut,
+		"/ratings/movie-1/community/key/reaction",
+		"movie-1",
+		legacyCommunityRatingKey(target),
+		strings.NewReader(`{"reaction":"up"}`),
+	)
+	recorder := httptest.NewRecorder()
+
+	handler.HandleSetCommunityRatingReaction(recorder, req)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -219,7 +248,7 @@ func TestSetCommunityRatingReactionAllowsOwnCard(t *testing.T) {
 		http.MethodPut,
 		"/ratings/movie-1/community/key/reaction",
 		"movie-1",
-		communityRatingKey(target),
+		communityRatingKey("movie-1", target),
 		strings.NewReader(`{"reaction":"up"}`),
 	)
 	recorder := httptest.NewRecorder()
@@ -248,7 +277,7 @@ func TestDeleteCommunityRatingReactionAllowsOwnCard(t *testing.T) {
 		http.MethodDelete,
 		"/ratings/movie-1/community/key/reaction",
 		"movie-1",
-		communityRatingKey(target),
+		communityRatingKey("movie-1", target),
 		nil,
 	)
 	recorder := httptest.NewRecorder()
@@ -269,6 +298,31 @@ func TestAbbreviateProfileNameUsesRunes(t *testing.T) {
 	}
 	if got := abbreviateProfileName("Mohommad"); got != "M*******" {
 		t.Fatalf("abbreviated name = %q", got)
+	}
+}
+
+func TestCommunityRatingKeyIsStableAcrossEditsAndScopedToOneCard(t *testing.T) {
+	rating := catalog.CommunityRating{
+		UserID:    7,
+		ProfileID: "viewer-profile",
+		Rating:    2,
+		RatedAt:   time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC),
+	}
+	original := communityRatingKey("movie-1", rating)
+
+	rating.Rating = 5
+	rating.RatedAt = time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
+	if edited := communityRatingKey("movie-1", rating); edited != original {
+		t.Fatalf("edited rating key = %q, want stable key %q", edited, original)
+	}
+
+	otherAccount := rating
+	otherAccount.UserID = 8
+	if got := communityRatingKey("movie-1", otherAccount); got == original {
+		t.Fatal("different account produced the same card key")
+	}
+	if got := communityRatingKey("movie-2", rating); got == original {
+		t.Fatal("different item produced the same card key")
 	}
 }
 

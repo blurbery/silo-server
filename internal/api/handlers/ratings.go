@@ -261,7 +261,7 @@ func (h *RatingsHandler) HandleListCommunityRatings(w http.ResponseWriter, r *ht
 	for _, rating := range ratings {
 		avatarURL := h.communityAvatarURL(r.Context(), rating)
 		items = append(items, communityRatingListItem{
-			Key:            communityRatingKey(rating),
+			Key:            communityRatingKey(itemID, rating),
 			DisplayName:    abbreviateProfileName(rating.ProfileName),
 			AvatarURL:      avatarURL,
 			Rating:         rating.Rating,
@@ -399,7 +399,7 @@ func (h *RatingsHandler) communityReactionTarget(w http.ResponseWriter, r *http.
 		return catalog.CommunityRating{}, false
 	}
 	for _, rating := range ratings {
-		if communityRatingKey(rating) == ratingKey {
+		if communityRatingKey(itemID, rating) == ratingKey || legacyCommunityRatingKey(rating) == ratingKey {
 			return rating, true
 		}
 	}
@@ -407,7 +407,18 @@ func (h *RatingsHandler) communityReactionTarget(w http.ResponseWriter, r *http.
 	return catalog.CommunityRating{}, false
 }
 
-func communityRatingKey(rating catalog.CommunityRating) string {
+func communityRatingKey(mediaItemID string, rating catalog.CommunityRating) string {
+	// A card represents one profile's rating of one item. Keep its opaque key
+	// stable when the stars or rated_at value change so clients update the
+	// existing card instead of treating an edit as a new card.
+	raw := mediaItemID + "\x00" + strconv.Itoa(rating.UserID) + "\x00" + rating.ProfileID
+	digest := sha256.Sum256([]byte(raw))
+	return base64.RawURLEncoding.EncodeToString(digest[:16])
+}
+
+// legacyCommunityRatingKey keeps reactions from an already-open page working
+// during a rolling deployment from the timestamp-scoped key format.
+func legacyCommunityRatingKey(rating catalog.CommunityRating) string {
 	raw := strconv.Itoa(rating.UserID) + "\x00" + rating.ProfileID + "\x00" + rating.RatedAt.UTC().Format(time.RFC3339Nano)
 	digest := sha256.Sum256([]byte(raw))
 	return base64.RawURLEncoding.EncodeToString(digest[:16])

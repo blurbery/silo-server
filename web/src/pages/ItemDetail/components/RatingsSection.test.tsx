@@ -64,6 +64,7 @@ describe("RatingsSection", () => {
     expect(screen.getByRole("heading", { name: "Ratings" })).toBeInTheDocument();
     expect(screen.getByText("4.5 average from 2 ratings")).toBeInTheDocument();
     expect(screen.getByText("S*******")).toBeInTheDocument();
+    expect(screen.getByText("You")).toBeInTheDocument();
     expect(screen.getByText("August 29, 2026")).toBeInTheDocument();
     expect(screen.getByLabelText("5 out of 5 stars")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Helpful: 3" })).toBeEnabled();
@@ -103,5 +104,40 @@ describe("RatingsSection", () => {
     expect(screen.getByRole("heading", { name: "Ratings" })).toBeInTheDocument();
     expect(screen.getByText("No ratings yet")).toBeInTheDocument();
     expect(screen.queryByRole("article")).not.toBeInTheDocument();
+  });
+
+  it("distinguishes the viewer when two private display names look identical", () => {
+    mocks.useCommunityRatings.mockReturnValue({
+      data: {
+        average_rating: 5,
+        vote_count: 2,
+        ratings: [
+          {
+            key: "rating-viewer",
+            display_name: "b***",
+            avatar_url: "/viewer.webp",
+            rating: 5,
+            rated_at: "2026-08-29T08:00:00Z",
+            up_count: 1,
+            down_count: 0,
+            is_viewer: true,
+          },
+          {
+            key: "rating-other",
+            display_name: "b***",
+            rating: 5,
+            rated_at: "2026-08-13T08:00:00Z",
+            up_count: 1,
+            down_count: 0,
+            is_viewer: false,
+          },
+        ],
+      },
+    });
+
+    render(<RatingsSection itemId="movie-1" />);
+
+    expect(screen.getAllByText("b***")).toHaveLength(2);
+    expect(screen.getByText("You")).toBeInTheDocument();
   });
 });
