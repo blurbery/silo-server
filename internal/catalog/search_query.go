@@ -55,6 +55,13 @@ func parseSearchQuery(raw string) parsedSearchQuery {
 // short token ("a vengers") is judged on "vengers", not "a".
 const fuzzyMinTokenLen = 4
 
+// Single-token inputs shorter than this stay on the exact whole-title path.
+// Even a non-prefix FTS lexeme such as "la" or "the" can match a large share
+// of a multilingual catalog; ranking that set while the user is still typing
+// is both wasteful and visibly slow. Multi-word input with a short final token
+// uses the separate leading-title B-tree transition path below.
+const searchPrefixMinTokenLen = 4
+
 // eligibleForFuzzy reports whether a parsed query clears the min-token gate for
 // the trigram fuzzy title fallback.
 func eligibleForFuzzy(parsed parsedSearchQuery) bool {
@@ -65,6 +72,21 @@ func eligibleForFuzzy(parsed parsedSearchQuery) bool {
 		}
 	}
 	return longest >= fuzzyMinTokenLen
+}
+
+func useExactShortTitleSearch(parsed parsedSearchQuery) bool {
+	fields := strings.Fields(parsed.NormalizedText)
+	return len(fields) == 1 && len([]rune(fields[0])) < searchPrefixMinTokenLen
+}
+
+// useLeadingShortTitleSearch handles the brief typeahead state where the user
+// has completed at least one word but the final word is still too short for a
+// selective catalog-wide lexeme expansion (for example, "the m"). A normalized
+// leading-title B-tree lookup is deterministic and cheap during those few
+// keystrokes; regular word-prefix FTS resumes at searchPrefixMinTokenLen.
+func useLeadingShortTitleSearch(parsed parsedSearchQuery) bool {
+	fields := strings.Fields(parsed.NormalizedText)
+	return len(fields) > 1 && len([]rune(fields[len(fields)-1])) < searchPrefixMinTokenLen
 }
 
 func extractBalancedPhrase(input string) (string, string) {
@@ -132,6 +154,15 @@ func buildTitlePrefixTsQuery(input string) string {
 
 	fields := strings.Fields(normalized)
 	if len(fields) == 0 {
+		return ""
+	}
+	// A one- to three-character prefix over the whole catalog is not selective:
+	// it can expand to a large fraction of episode titles and aliases while the
+	// user is still typing. Keep exact FTS available for genuinely short titles,
+	// but wait for four characters before enabling an unconstrained prefix.
+	// Multi-word queries remain safe because their completed terms constrain the
+	// final partial token (for example, "star w:*").
+	if len(fields) == 1 && len([]rune(fields[0])) < searchPrefixMinTokenLen {
 		return ""
 	}
 

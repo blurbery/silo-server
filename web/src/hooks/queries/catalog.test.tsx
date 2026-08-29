@@ -107,6 +107,39 @@ describe("useCatalogWindow", () => {
     expect(markup).toContain('data-page7="missing"');
   });
 
+  it("keeps the previous search grid mounted while page 0 is replacing", () => {
+    const state = createCatalogSearchState("query", { q: "heater" });
+    const limit = 60;
+    let page0Query:
+      | { placeholderData?: (previous: CatalogResponse) => CatalogResponse }
+      | undefined;
+    let pageQueries: Array<{ enabled?: boolean }> | undefined;
+
+    mocks.useQuery.mockImplementation((query) => {
+      page0Query = query;
+      return {
+        data: makePage(0, limit),
+        isLoading: true,
+        isPlaceholderData: true,
+      };
+    });
+    mocks.useQueries.mockImplementation(({ queries }) => {
+      pageQueries = queries;
+      return queries.map(() => ({ data: undefined, isLoading: false }));
+    });
+
+    function Harness() {
+      useCatalogWindow(state, { limit, visibleRange: [60, 119] });
+      return null;
+    }
+
+    renderToStaticMarkup(<Harness />);
+
+    const previous = makePage(0, limit);
+    expect(page0Query?.placeholderData?.(previous)).toBe(previous);
+    expect(pageQueries?.every((query) => query.enabled === false)).toBe(true);
+  });
+
   it("estimates window size from has_more when total is omitted", () => {
     const state = createCatalogSearchState("query", { library_id: 7 });
     const limit = 60;

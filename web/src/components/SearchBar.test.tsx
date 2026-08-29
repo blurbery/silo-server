@@ -35,7 +35,7 @@ describe("SearchBar", () => {
 
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "heater" } });
     act(() => {
-      vi.advanceTimersByTime(101);
+      vi.advanceTimersByTime(201);
     });
 
     const location = new URL(`http://example.test${screen.getByLabelText("location").textContent}`);

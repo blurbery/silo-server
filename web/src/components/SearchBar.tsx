@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 import { useViewTransitionNavigate } from "@/hooks/useViewTransition";
 import { useDebounce } from "@/hooks/useDebounce";
 import { Input } from "@/components/ui/input";
@@ -6,7 +7,7 @@ import { buildQueryCatalogHref } from "@/pages/catalogSearchParams";
 import { Search, X } from "lucide-react";
 import type { FormEvent } from "react";
 
-const SEARCH_NAVIGATION_DEBOUNCE_MS = 100;
+const SEARCH_NAVIGATION_DEBOUNCE_MS = 200;
 
 interface SearchBarProps {
   initialQuery?: string;
@@ -23,6 +24,7 @@ export default function SearchBar({
 }: SearchBarProps) {
   const [query, setQuery] = useState(initialQuery);
   const navigate = useViewTransitionNavigate();
+  const navigateWithoutTransition = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const isInitialMount = useRef(true);
   const buildSearchHrefRef = useRef(buildSearchHref);
@@ -46,9 +48,14 @@ export default function SearchBar({
       return;
     }
     if (debouncedQuery.trim()) {
-      navigate(buildSearchHrefRef.current(debouncedQuery.trim()), { replace: true });
+      // Updating only the query string is not a page transition. Animating a
+      // full route snapshot for every debounced keystroke makes the search page
+      // visibly wobble and adds compositor work to its hottest interaction.
+      navigateWithoutTransition(buildSearchHrefRef.current(debouncedQuery.trim()), {
+        replace: true,
+      });
     }
-  }, [debouncedQuery, prominent, navigate]);
+  }, [debouncedQuery, prominent, navigateWithoutTransition]);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();

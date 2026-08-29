@@ -133,6 +133,11 @@ func (r *ItemRepository) GetPosterPath(ctx context.Context, contentID string) (s
 // incidental one-mention hits that flooded results before.
 const overviewMatchFloor = 0.15
 
+// A catalog search is interactive work. Bound the complete PostgreSQL FTS +
+// fuzzy path independently of client cancellation so a pathological query can
+// never consume a connection and CPU for minutes after the user has moved on.
+const postgresSearchTimeout = 3 * time.Second
+
 // fuzzyFallbackThreshold is the FTS result count below which SearchPage reaches
 // for the trigram fuzzy fallback (buildFuzzySearchSQL). At or above it the FTS
 // result set is considered rich enough that a "did you mean" pass would only add
@@ -920,6 +925,8 @@ func (r *ItemRepository) SearchPage(
 	if filter.AllowedLibraryIDs != nil && len(filter.AllowedLibraryIDs) == 0 {
 		return []*models.MediaItem{}, 0, false, includeTotal, nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, postgresSearchTimeout)
+	defer cancel()
 
 	parsed := parseSearchQuery(query)
 

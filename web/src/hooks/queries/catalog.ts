@@ -158,10 +158,13 @@ export function useCatalogWindow(
       fetchCatalogPage(state, limit, 0, { signal }, includeTotal),
     staleTime: 10 * 60 * 1000,
     enabled,
+    placeholderData:
+      state.source === "query" && state.q ? (previousData) => previousData : undefined,
   });
 
   const snapshot = page0Result.data?.snapshot;
-  const canFetchRemainingPages = enabled && page0Result.data !== undefined;
+  const canFetchRemainingPages =
+    enabled && page0Result.data !== undefined && !page0Result.isPlaceholderData;
 
   const remainingPageIndices = useMemo(() => {
     const indices = new Set<number>();
