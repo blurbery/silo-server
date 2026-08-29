@@ -316,7 +316,7 @@ func (h *RatingsHandler) HandleSetCommunityRatingReaction(w http.ResponseWriter,
 		return
 	}
 
-	reaction := 0
+	var reaction int
 	switch strings.ToLower(strings.TrimSpace(req.Reaction)) {
 	case "up":
 		reaction = 1
