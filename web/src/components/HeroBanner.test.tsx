@@ -278,14 +278,14 @@ describe("HeroBanner", () => {
 
     for (let cycle = 0; cycle < 24; cycle++) {
       act(() => next.click());
-      const images = Array.from(container.querySelectorAll(".home-hero img"));
+      const images = Array.from(container.querySelectorAll<HTMLImageElement>(".home-hero img"));
       expect(images.filter((image) => image.style.animation !== "none")).toHaveLength(2);
       expect(container.querySelectorAll(".home-hero img.will-change-transform")).toHaveLength(1);
     }
 
     act(() => vi.advanceTimersByTime(1000));
     expect(
-      Array.from(container.querySelectorAll(".home-hero img")).filter(
+      Array.from(container.querySelectorAll<HTMLImageElement>(".home-hero img")).filter(
         (image) => image.style.animation !== "none",
       ),
     ).toHaveLength(1);
