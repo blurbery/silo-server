@@ -2,8 +2,10 @@ import { useCallback, useState } from "react";
 
 interface ItemDetailsGateState {
   locationKey: string;
+  pathname: string;
   gatesItemDetails: boolean;
   pendingLocationKey: string | null;
+  enteredItemFromHome: boolean;
 }
 
 /**
@@ -12,19 +14,32 @@ interface ItemDetailsGateState {
  * click handlers, so POP and programmatic navigation receive the same
  * treatment and abandoned navigation cannot leave a stale global lock.
  */
-export function useSidebarItemDetailsGate(locationKey: string, gatesItemDetails: boolean) {
+export function useSidebarItemDetailsGate(
+  locationKey: string,
+  pathname: string,
+  gatesItemDetails: boolean,
+) {
   const [state, setState] = useState<ItemDetailsGateState>({
     locationKey,
+    pathname,
     gatesItemDetails,
     pendingLocationKey: null,
+    enteredItemFromHome: false,
   });
 
   let currentState = state;
-  if (state.locationKey !== locationKey || state.gatesItemDetails !== gatesItemDetails) {
+  if (
+    state.locationKey !== locationKey ||
+    state.pathname !== pathname ||
+    state.gatesItemDetails !== gatesItemDetails
+  ) {
+    const enteringItem = gatesItemDetails && !state.gatesItemDetails;
     currentState = {
       locationKey,
+      pathname,
       gatesItemDetails,
-      pendingLocationKey: gatesItemDetails && !state.gatesItemDetails ? locationKey : null,
+      pendingLocationKey: enteringItem ? locationKey : null,
+      enteredItemFromHome: enteringItem && state.pathname === "/",
     };
     // React discards this render and retries before rendering children, so the
     // item route never briefly receives `itemDetailsReady=true` on entry.
@@ -42,6 +57,7 @@ export function useSidebarItemDetailsGate(locationKey: string, gatesItemDetails:
   return {
     itemDetailsReady: !gatesItemDetails || currentState.pendingLocationKey === null,
     pendingLocationKey: currentState.pendingLocationKey,
+    enteredItemFromHome: currentState.enteredItemFromHome,
     reveal,
   };
 }

@@ -1,13 +1,13 @@
 /* eslint-disable react-hooks/set-state-in-effect */
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { startTransition, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { LayoutDashboard } from "lucide-react";
 import HeroBanner from "@/components/HeroBanner";
 import SectionRow from "@/components/SectionRow";
 import TasteSeedBanner from "@/components/TasteSeedBanner";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { HomeSectionItemsResponse, ResolvedSection } from "@/api/types";
+import type { HomeSectionItemsResponse, ResolvedSection, ResolvedSectionLayout } from "@/api/types";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { HERO_BANNER_SIZE } from "@/lib/design-system";
 import { sectionKeys } from "@/hooks/queries/keys";
@@ -21,19 +21,22 @@ import { planNextHomeSectionBatch } from "./homeSectionQueue";
 import { buildHomeSectionViewModel, type HomeSectionSlot } from "./homeSectionState";
 import { collectCachedHomeSections } from "./homeSectionCache";
 import { useSectionRefreshSignal } from "./homeSurfaceRefresh";
+import { useUICustomization } from "@/hooks/useUICustomization";
+import { carouselIntrinsicHeight } from "@/lib/uiCustomization";
+import { prefersReducedMotion } from "@/hooks/useImmediateSidebarCollapse";
 
 const MAX_CONCURRENT_SECTION_REQUESTS = 5;
 const SKELETON_CARD_COUNT = 7;
+const EAGER_HOME_ROW_COUNT = 2;
+const HOME_ROW_RENDER_MARGIN = "100% 0px";
+const HOME_ROW_RESTORE_DELAY_MS = 360;
+const HOME_ROW_RESTORE_STAGGER_MS = 70;
 
 export default function Home() {
   const queryClient = useQueryClient();
   const { data, isLoading, isError, refetch } = useHomeLayout();
   const { data: homeRefreshSignal = 0 } = useSectionRefreshSignal();
-  const [loadedSections, setLoadedSections] = useState<Map<string, ResolvedSection>>(new Map());
-  const [failedIds, setFailedIds] = useState<Set<string>>(new Set());
-  const [inFlightIds, setInFlightIds] = useState<Set<string>>(new Set());
-  const [completedIds, setCompletedIds] = useState<Set<string>>(new Set());
-  const activeSectionIdsRef = useRef<Set<string>>(new Set());
+  const { cardPresentation } = useUICustomization();
 
   useDocumentTitle("Home");
 
@@ -44,18 +47,35 @@ export default function Home() {
         `${section.id}:${section.section_type}:${section.title}:${section.featured ? "featured" : "row"}:${section.item_limit}:${section.is_custom ? "custom" : "default"}:${section.customized ? "customized" : "clean"}`,
     )
     .join("|");
+  const cacheResetKey = `${homeRefreshSignal}:${layoutResetKey}`;
+  const [initialCachedSections] = useState(() => readCachedHomeSections(queryClient, layout));
+  const cacheResetKeyRef = useRef(cacheResetKey);
+
+  const [loadedSections, setLoadedSections] = useState(initialCachedSections);
+  const [failedIds, setFailedIds] = useState<Set<string>>(new Set());
+  const [inFlightIds, setInFlightIds] = useState<Set<string>>(new Set());
+  const [completedIds, setCompletedIds] = useState<Set<string>>(() =>
+    freshCachedHomeSectionIds(queryClient, layout),
+  );
+  const activeSectionIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const activeIds = layout.map((section) => section.id);
+    const cachedSections = readCachedHomeSections(queryClient, layout);
+    const cacheReset = cacheResetKeyRef.current !== cacheResetKey;
+    cacheResetKeyRef.current = cacheResetKey;
     activeSectionIdsRef.current = new Set(activeIds);
-    setLoadedSections(
-      collectCachedHomeSections(layout, (sectionId) =>
-        queryClient.getQueryData<HomeSectionItemsResponse>(sectionKeys.homeItems(sectionId)),
-      ),
+    setLoadedSections((current) =>
+      mapsHaveSameEntries(current, cachedSections) ? current : cachedSections,
     );
-    setFailedIds(new Set());
-    setInFlightIds(new Set());
-    setCompletedIds(new Set());
+    setFailedIds((current) => (current.size === 0 ? current : new Set()));
+    setInFlightIds((current) => (current.size === 0 ? current : new Set()));
+    const nextCompletedIds = cacheReset
+      ? new Set<string>()
+      : freshCachedHomeSectionIds(queryClient, layout);
+    setCompletedIds((current) =>
+      setsHaveSameEntries(current, nextCompletedIds) ? current : nextCompletedIds,
+    );
 
     return () => {
       activeSectionIdsRef.current = new Set();
@@ -63,7 +83,7 @@ export default function Home() {
         void queryClient.cancelQueries({ queryKey: sectionKeys.homeItems(sectionId) });
       });
     };
-  }, [homeRefreshSignal, layout, layoutResetKey, queryClient]);
+  }, [cacheResetKey, layout, queryClient]);
 
   useEffect(() => {
     if (layout.length === 0) return;
@@ -161,6 +181,8 @@ export default function Home() {
   };
   const heroSlot = renderHeroSlot(viewModel.hero, retrySection);
   const hasHeroSlot = heroSlot !== null;
+  const rowPlaceholderHeight = carouselIntrinsicHeight(cardPresentation.poster_size);
+  let readyRowIndex = 0;
 
   if (isLoading && !data) {
     return <HomePageSkeleton />;
@@ -198,7 +220,19 @@ export default function Home() {
             return null;
           }
           if (slot.state === "ready" && slot.section) {
-            return <SectionRow key={slot.layout.id} section={slot.section} />;
+            const rowIndex = readyRowIndex++;
+            return (
+              <DeferredHomeSection
+                key={slot.layout.id}
+                section={slot.section}
+                eager={rowIndex < EAGER_HOME_ROW_COUNT}
+                placeholderHeight={rowPlaceholderHeight}
+                restoreDelayMs={
+                  HOME_ROW_RESTORE_DELAY_MS +
+                  Math.max(0, rowIndex - EAGER_HOME_ROW_COUNT) * HOME_ROW_RESTORE_STAGGER_MS
+                }
+              />
+            );
           }
           if (slot.state === "error") {
             return (
@@ -226,6 +260,116 @@ export default function Home() {
       </div>
     </>
   );
+}
+
+function DeferredHomeSection({
+  section,
+  eager,
+  placeholderHeight,
+  restoreDelayMs,
+}: {
+  section: ResolvedSection;
+  eager: boolean;
+  placeholderHeight: string;
+  restoreDelayMs: number;
+}) {
+  // Even visible rows start as fixed-size opaque space for the first commit.
+  // This keeps a cold Home return small enough for the sidebar handoff to
+  // begin before card trees and cached poster load events are mounted.
+  const [rendered, setRendered] = useState(prefersReducedMotion);
+  const placeholderRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (rendered) return;
+    if (eager) {
+      startTransition(() => setRendered(true));
+      return;
+    }
+    const placeholder = placeholderRef.current;
+    if (!placeholder || typeof IntersectionObserver === "undefined") {
+      setRendered(true);
+      return;
+    }
+
+    let revealed = false;
+    const reveal = () => {
+      if (revealed) return;
+      revealed = true;
+      observer.disconnect();
+      window.clearTimeout(restoreTimer);
+      startTransition(() => setRendered(true));
+    };
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        reveal();
+      },
+      { rootMargin: HOME_ROW_RENDER_MARGIN },
+    );
+    observer.observe(placeholder);
+    // IntersectionObserver keeps the first Home commit and near-viewport work
+    // small. It is not permanent virtualization: every row is restored just
+    // after the sidebar carry so browser Find and assistive technology
+    // can reach the complete page without requiring visual scrolling.
+    const restoreTimer = window.setTimeout(reveal, restoreDelayMs);
+    return () => {
+      revealed = true;
+      observer.disconnect();
+      window.clearTimeout(restoreTimer);
+    };
+  }, [eager, rendered, restoreDelayMs]);
+
+  if (rendered) return <SectionRow section={section} />;
+
+  return (
+    <div
+      ref={placeholderRef}
+      data-home-section-placeholder={section.id}
+      aria-hidden="true"
+      style={{ minHeight: placeholderHeight }}
+    />
+  );
+}
+
+function readCachedHomeSections(queryClient: QueryClient, layout: ResolvedSectionLayout[]) {
+  return collectCachedHomeSections(layout, (sectionId) =>
+    queryClient.getQueryData<HomeSectionItemsResponse>(sectionKeys.homeItems(sectionId)),
+  );
+}
+
+function freshCachedHomeSectionIds(
+  queryClient: QueryClient,
+  layout: ResolvedSectionLayout[],
+): Set<string> {
+  const freshAfter = Date.now() - HOME_SECTION_STALE_TIME;
+  return new Set(
+    layout
+      .filter((section) => {
+        const state = queryClient.getQueryState<HomeSectionItemsResponse>(
+          sectionKeys.homeItems(section.id),
+        );
+        return Boolean(
+          state?.data !== undefined && !state.isInvalidated && state.dataUpdatedAt > freshAfter,
+        );
+      })
+      .map((section) => section.id),
+  );
+}
+
+function mapsHaveSameEntries<K, V>(left: Map<K, V>, right: Map<K, V>): boolean {
+  if (left.size !== right.size) return false;
+  for (const [key, value] of left) {
+    if (right.get(key) !== value) return false;
+  }
+  return true;
+}
+
+function setsHaveSameEntries<T>(left: Set<T>, right: Set<T>): boolean {
+  if (left.size !== right.size) return false;
+  for (const value of left) {
+    if (!right.has(value)) return false;
+  }
+  return true;
 }
 
 function renderHeroSlot(hero: HomeSectionSlot | null, retrySection: (sectionId: string) => void) {

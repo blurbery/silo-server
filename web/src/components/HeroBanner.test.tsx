@@ -1,6 +1,6 @@
 import { MemoryRouter } from "react-router";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SectionItem } from "@/api/types";
@@ -168,7 +168,14 @@ describe("HeroBanner", () => {
   beforeEach(() => {
     playbackMocks.controller = null;
     playbackMocks.toggleActivePlayback.mockClear();
+    vi.stubGlobal("matchMedia", () => ({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
   });
+
+  afterEach(() => vi.unstubAllGlobals());
 
   it("names the ken burns tokens literally so tailwind keeps them", () => {
     // Tailwind drops a theme variable it cannot find referenced by name in the
@@ -184,6 +191,32 @@ describe("HeroBanner", () => {
 
     expect(markup).toContain('src="/backdrop.jpg"');
     expect(markup).toContain("var(--animate-ken-burns-a)");
+  });
+
+  it("runs backdrop motion only on the visible slide", async () => {
+    const { container } = render(
+      <MemoryRouter>
+        <HeroBanner
+          items={[
+            movieSlide({ content_id: "movie-1", backdrop_url: "/first.jpg" }),
+            movieSlide({ content_id: "movie-2", title: "Second", backdrop_url: "/second.jpg" }),
+          ]}
+        />
+      </MemoryRouter>,
+    );
+    const images = Array.from(container.querySelectorAll("img"));
+
+    expect(images[0]?.style.animation).toBe("var(--animate-ken-burns-a)");
+    expect(images[0]).toHaveClass("will-change-transform");
+    expect(images[1]?.style.animation).toBe("none");
+    expect(images[1]).not.toHaveClass("will-change-transform");
+
+    await userEvent.click(screen.getByRole("button", { name: "Next slide" }));
+
+    expect(images[0]?.style.animation).toBe("none");
+    expect(images[0]).not.toHaveClass("will-change-transform");
+    expect(images[1]?.style.animation).toBe("var(--animate-ken-burns-b)");
+    expect(images[1]).toHaveClass("will-change-transform");
   });
 
   it("does not render the desktop spotlighting card", () => {

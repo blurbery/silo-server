@@ -4,6 +4,24 @@ import { describe, expect, it } from "vitest";
 import DetailHero from "./DetailHero";
 
 describe("DetailHero artwork revisions", () => {
+  it("keeps the above-fold primary content on one bounded reveal surface", () => {
+    const { container } = render(<DetailHero title="Blade Runner" />);
+
+    expect(container.querySelector(".detail-hero-primary-content")).not.toBeNull();
+  });
+
+  it("reserves the logo box before the image decodes", () => {
+    const { container } = render(
+      <DetailHero title="Blade Runner" logoUrl="/blade-runner-logo.rev-a.webp" />,
+    );
+
+    const logo = container.querySelector<HTMLImageElement>(
+      'img[src="/blade-runner-logo.rev-a.webp"]',
+    );
+    expect(logo).toHaveClass("h-20", "w-full", "lg:h-28");
+    expect(logo).not.toHaveClass("max-h-20", "lg:max-h-28");
+  });
+
   it("treats a changed poster URL as unloaded until that revision finishes loading", () => {
     const { rerender } = render(<DetailHero title="Blade Runner" posterUrl="/poster.rev-a.webp" />);
 

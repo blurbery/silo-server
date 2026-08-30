@@ -171,6 +171,22 @@ describe("Layout mobile profile", () => {
     expect(settingsLink).toContainElement(avatar);
     expect(avatar).toHaveAttribute("src", "https://example.com/admin-avatar.webp");
   });
+
+  it("marks only Home as the balanced sidebar return destination", () => {
+    const view = renderLayout();
+    expect(document.documentElement).toHaveAttribute("data-home-route", "true");
+
+    setRoute("/library/1", "library");
+    view.rerender(
+      <MemoryRouter>
+        <Layout>
+          <Harness />
+        </Layout>
+      </MemoryRouter>,
+    );
+
+    expect(document.documentElement).not.toHaveAttribute("data-home-route");
+  });
 });
 
 describe("Layout item navigation", () => {
@@ -233,10 +249,13 @@ describe("Layout item navigation", () => {
     expect(mocks.prefetchQuery).toHaveBeenCalledWith(
       expect.objectContaining({ queryKey: catalogKeys.itemDetail("movie-1", 2) }),
     );
+    expect(mocks.prefetchQuery.mock.invocationCallOrder[0]!).toBeLessThan(
+      mocks.navigate.mock.invocationCallOrder[0]!,
+    );
     expect(mocks.navigate).toHaveBeenCalledWith("/item/movie-1?libraryId=2", {
       replace: true,
       state: { source: "home" },
-      viewTransition: true,
+      viewTransition: false,
     });
   });
 });
@@ -260,15 +279,26 @@ describe("Layout detail reveal", () => {
     expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("true");
   });
 
-  it("reveals immediately when the item detail is already cached", () => {
+  it("reveals cached details immediately when the item entry is not from Home", () => {
     mocks.getQueryData.mockImplementation((queryKey: unknown) =>
       JSON.stringify(queryKey) === JSON.stringify(catalogKeys.itemDetail("movie-1", undefined))
         ? { content_id: "movie-1" }
         : undefined,
     );
     const view = renderLayout();
-    setRoute("/item/movie-1", "item");
 
+    setRoute("/library/1", "library");
+    act(() =>
+      view.rerender(
+        <MemoryRouter>
+          <Layout>
+            <Harness />
+          </Layout>
+        </MemoryRouter>,
+      ),
+    );
+
+    setRoute("/item/movie-1", "item");
     act(() =>
       view.rerender(
         <MemoryRouter>
@@ -281,6 +311,59 @@ describe("Layout detail reveal", () => {
 
     expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("true");
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps cached Home item re-entry light until the sidebar carry settles", () => {
+    mocks.getQueryData.mockImplementation((queryKey: unknown) =>
+      JSON.stringify(queryKey) === JSON.stringify(catalogKeys.itemDetail("movie-1", undefined))
+        ? { content_id: "movie-1" }
+        : undefined,
+    );
+    const view = renderLayout();
+
+    const enterCachedItem = (key: string) => {
+      setRoute("/item/movie-1", key);
+      act(() =>
+        view.rerender(
+          <MemoryRouter>
+            <Layout>
+              <Harness />
+            </Layout>
+          </MemoryRouter>,
+        ),
+      );
+    };
+
+    enterCachedItem("item-first");
+    expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("false");
+    expect(document.documentElement).toHaveAttribute("data-home-item-entry", "true");
+
+    const surface = screen.getByTestId("sidebar-surface");
+    surface.setAttribute("data-collapsed", "true");
+    fireEvent.transitionEnd(surface, { propertyName: "transform" });
+    expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("true");
+    expect(document.documentElement).toHaveAttribute("data-home-item-entry", "true");
+    surface.removeAttribute("data-collapsed");
+
+    setRoute("/", "home-again");
+    act(() =>
+      view.rerender(
+        <MemoryRouter>
+          <Layout>
+            <Harness />
+          </Layout>
+        </MemoryRouter>,
+      ),
+    );
+
+    enterCachedItem("item-repeat");
+    expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("false");
+
+    screen.getByTestId("sidebar-surface").setAttribute("data-collapsed", "true");
+    fireEvent.transitionEnd(screen.getByTestId("sidebar-surface"), {
+      propertyName: "transform",
+    });
+    expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("true");
   });
 
   it("reveals as soon as the surface settles", () => {
