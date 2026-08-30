@@ -36,6 +36,7 @@ const EAGER_HOME_ROW_COUNT = 2;
 const HOME_ROW_RENDER_MARGIN = "100% 0px";
 const HOME_ROW_RESTORE_DELAY_MS = 360;
 const HOME_ROW_RESTORE_STAGGER_MS = 70;
+const HOME_ROW_RESTORE_MAX_DELAY_MS = 900;
 const DESKTOP_SIDEBAR_QUERY = "(min-width: 64rem)";
 
 export default function Home() {
@@ -272,10 +273,11 @@ export default function Home() {
                 eager={rowIndex < EAGER_HOME_ROW_COUNT}
                 restorationReady={rowRestorationReady}
                 placeholderHeight={rowPlaceholderHeight}
-                restoreDelayMs={
+                restoreDelayMs={Math.min(
                   HOME_ROW_RESTORE_DELAY_MS +
-                  Math.max(0, rowIndex - EAGER_HOME_ROW_COUNT) * HOME_ROW_RESTORE_STAGGER_MS
-                }
+                    Math.max(0, rowIndex - EAGER_HOME_ROW_COUNT) * HOME_ROW_RESTORE_STAGGER_MS,
+                  HOME_ROW_RESTORE_MAX_DELAY_MS,
+                )}
               />
             );
           }

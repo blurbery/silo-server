@@ -361,8 +361,10 @@ describe("Layout detail reveal", () => {
         </MemoryRouter>,
       ),
     );
+    expect(document.documentElement).toHaveAttribute("data-home-item-return", "true");
 
     enterCachedItem("item-repeat");
+    expect(document.documentElement).not.toHaveAttribute("data-home-item-return");
     expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("false");
 
     screen.getByTestId("sidebar-surface").setAttribute("data-collapsed", "true");

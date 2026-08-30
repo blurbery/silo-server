@@ -6,6 +6,7 @@ interface ItemDetailsGateState {
   gatesItemDetails: boolean;
   pendingLocationKey: string | null;
   enteredItemFromHome: boolean;
+  returnedHomeFromItem: boolean;
 }
 
 /**
@@ -25,6 +26,7 @@ export function useSidebarItemDetailsGate(
     gatesItemDetails,
     pendingLocationKey: null,
     enteredItemFromHome: false,
+    returnedHomeFromItem: false,
   });
 
   let currentState = state;
@@ -34,12 +36,15 @@ export function useSidebarItemDetailsGate(
     state.gatesItemDetails !== gatesItemDetails
   ) {
     const enteringItem = gatesItemDetails && !state.gatesItemDetails;
+    const returnedHomeFromItem =
+      !gatesItemDetails && state.gatesItemDetails && pathname === "/" && state.enteredItemFromHome;
     currentState = {
       locationKey,
       pathname,
       gatesItemDetails,
       pendingLocationKey: enteringItem ? locationKey : null,
       enteredItemFromHome: enteringItem && state.pathname === "/",
+      returnedHomeFromItem,
     };
     // React discards this render and retries before rendering children, so the
     // item route never briefly receives `itemDetailsReady=true` on entry.
@@ -58,6 +63,7 @@ export function useSidebarItemDetailsGate(
     itemDetailsReady: !gatesItemDetails || currentState.pendingLocationKey === null,
     pendingLocationKey: currentState.pendingLocationKey,
     enteredItemFromHome: currentState.enteredItemFromHome,
+    returnedHomeFromItem: currentState.returnedHomeFromItem,
     reveal,
   };
 }

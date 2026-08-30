@@ -439,7 +439,7 @@ describe("Home", () => {
     expect(container.querySelectorAll("[data-home-section-placeholder]")).toHaveLength(0);
   });
 
-  it("restores every deferred Home row after the sidebar handoff", async () => {
+  it("hard-caps restoration for large Home layouts", async () => {
     vi.useFakeTimers();
     vi.stubGlobal(
       "IntersectionObserver",
@@ -455,7 +455,7 @@ describe("Home", () => {
       },
     );
 
-    const layout = Array.from({ length: 5 }, (_, index) => homeLayout(`row-${index + 1}`));
+    const layout = Array.from({ length: 20 }, (_, index) => homeLayout(`row-${index + 1}`));
     mockUseHomeLayout.mockReturnValue({
       data: { sections: layout },
       isLoading: false,
@@ -479,11 +479,17 @@ describe("Home", () => {
     expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(2);
 
     await act(async () => {
-      vi.advanceTimersByTime(1_000);
+      vi.advanceTimersByTime(899);
+      await Promise.resolve();
+    });
+    expect(container.querySelectorAll('[data-kind="section-row"]')).not.toHaveLength(20);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
       await Promise.resolve();
     });
 
-    expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(5);
+    expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(20);
     expect(container.querySelectorAll("[data-home-section-placeholder]")).toHaveLength(0);
   });
 

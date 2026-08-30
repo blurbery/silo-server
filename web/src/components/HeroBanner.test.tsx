@@ -1,7 +1,7 @@
 import { MemoryRouter } from "react-router";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SectionItem } from "@/api/types";
 
@@ -175,7 +175,10 @@ describe("HeroBanner", () => {
     }));
   });
 
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   it("names the ken burns tokens literally so tailwind keeps them", () => {
     // Tailwind drops a theme variable it cannot find referenced by name in the
@@ -193,8 +196,9 @@ describe("HeroBanner", () => {
     expect(markup).toContain("var(--animate-ken-burns-a)");
   });
 
-  it("runs backdrop motion only on the visible slide", async () => {
-    const { container } = render(
+  it("keeps outgoing backdrop motion through its fade, then releases it", () => {
+    vi.useFakeTimers();
+    const { container, unmount } = render(
       <MemoryRouter>
         <HeroBanner
           items={[
@@ -211,12 +215,80 @@ describe("HeroBanner", () => {
     expect(images[1]?.style.animation).toBe("none");
     expect(images[1]).not.toHaveClass("will-change-transform");
 
-    await userEvent.click(screen.getByRole("button", { name: "Next slide" }));
+    act(() => screen.getByRole("button", { name: "Next slide" }).click());
 
-    expect(images[0]?.style.animation).toBe("none");
+    expect(images[0]?.style.animation).toBe("var(--animate-ken-burns-a)");
     expect(images[0]).not.toHaveClass("will-change-transform");
     expect(images[1]?.style.animation).toBe("var(--animate-ken-burns-b)");
     expect(images[1]).toHaveClass("will-change-transform");
+
+    act(() => vi.advanceTimersByTime(999));
+    expect(images[0]?.style.animation).toBe("var(--animate-ken-burns-a)");
+
+    act(() => vi.advanceTimersByTime(1));
+    expect(images[0]?.style.animation).toBe("none");
+    expect(images[0]).not.toHaveClass("will-change-transform");
+    expect(images.filter((image) => image.style.animation !== "none")).toHaveLength(1);
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not retain outgoing backdrop motion for reduced motion", () => {
+    vi.stubGlobal("matchMedia", () => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    const { container } = render(
+      <MemoryRouter>
+        <HeroBanner
+          items={[
+            movieSlide({ content_id: "movie-1", backdrop_url: "/first.jpg" }),
+            movieSlide({ content_id: "movie-2", title: "Second", backdrop_url: "/second.jpg" }),
+          ]}
+        />
+      </MemoryRouter>,
+    );
+    const images = Array.from(container.querySelectorAll("img"));
+
+    act(() => screen.getByRole("button", { name: "Next slide" }).click());
+
+    expect(images[0]?.style.animation).toBe("none");
+    expect(images[0]).not.toHaveClass("will-change-transform");
+    expect(images[1]).toHaveClass("will-change-transform");
+  });
+
+  it("bounds rapid handoffs to one active and one outgoing backdrop", () => {
+    vi.useFakeTimers();
+    const { container } = render(
+      <MemoryRouter>
+        <HeroBanner
+          items={Array.from({ length: 12 }, (_, index) =>
+            movieSlide({
+              content_id: `movie-${index + 1}`,
+              title: `Movie ${index + 1}`,
+              backdrop_url: `/movie-${index + 1}.jpg`,
+            }),
+          )}
+        />
+      </MemoryRouter>,
+    );
+    const next = screen.getByRole("button", { name: "Next slide" });
+
+    for (let cycle = 0; cycle < 24; cycle++) {
+      act(() => next.click());
+      const images = Array.from(container.querySelectorAll(".home-hero img"));
+      expect(images.filter((image) => image.style.animation !== "none")).toHaveLength(2);
+      expect(container.querySelectorAll(".home-hero img.will-change-transform")).toHaveLength(1);
+    }
+
+    act(() => vi.advanceTimersByTime(1000));
+    expect(
+      Array.from(container.querySelectorAll(".home-hero img")).filter(
+        (image) => image.style.animation !== "none",
+      ),
+    ).toHaveLength(1);
   });
 
   it("does not render the desktop spotlighting card", () => {

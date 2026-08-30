@@ -48,15 +48,22 @@ interface HeroBannerProps {
  * `prefers-reduced-motion`, which is what keeps this accessible.
  */
 const KEN_BURNS_ANIMATIONS = ["var(--animate-ken-burns-a)", "var(--animate-ken-burns-b)"] as const;
+const HERO_BACKDROP_FADE_MS = 1000;
+
+function shouldKeepOutgoingBackdropMotion(): boolean {
+  return !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
 
 const HeroBackdropSlide = memo(function HeroBackdropSlide({
   slide,
   index,
   isActive,
+  keepsMotion,
 }: {
   slide: SectionItem;
   index: number;
   isActive: boolean;
+  keepsMotion: boolean;
 }) {
   const [loaded, setLoaded] = useState(false);
   const thumbhash = slide.backdrop_thumbhash ? decodeThumbhash(slide.backdrop_thumbhash) : "";
@@ -85,7 +92,7 @@ const HeroBackdropSlide = memo(function HeroBackdropSlide({
             loaded ? "opacity-100" : "opacity-0",
           )}
           style={{
-            animation: isActive
+            animation: keepsMotion
               ? KEN_BURNS_ANIMATIONS[index % KEN_BURNS_ANIMATIONS.length]
               : "none",
             filter:
@@ -131,7 +138,10 @@ export default function HeroBanner({
   libraryId,
 }: HeroBannerProps) {
   const slides = useMemo(() => items.slice(0, maxSlides), [items, maxSlides]);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [{ activeIndex, outgoingIndex }, setBackdropState] = useState({
+    activeIndex: 0,
+    outgoingIndex: null as number | null,
+  });
   const [paused, setPaused] = useState(false);
   const audiobookPlayback = useAudiobookPlaybackController();
   // Bumped whenever auto-advance restarts a fresh 8s cycle — after the slide
@@ -143,12 +153,28 @@ export default function HeroBanner({
   const [playCycle, setPlayCycle] = useState(0);
 
   const next = useCallback(() => {
-    setActiveIndex((i) => (i + 1) % slides.length);
+    setBackdropState(({ activeIndex: current }) => ({
+      activeIndex: (current + 1) % slides.length,
+      outgoingIndex: shouldKeepOutgoingBackdropMotion() ? current : null,
+    }));
   }, [slides.length]);
 
   const prev = useCallback(() => {
-    setActiveIndex((i) => (i - 1 + slides.length) % slides.length);
+    setBackdropState(({ activeIndex: current }) => ({
+      activeIndex: (current - 1 + slides.length) % slides.length,
+      outgoingIndex: shouldKeepOutgoingBackdropMotion() ? current : null,
+    }));
   }, [slides.length]);
+
+  useEffect(() => {
+    if (outgoingIndex === null) return;
+    const timer = window.setTimeout(() => {
+      setBackdropState((current) =>
+        current.outgoingIndex === outgoingIndex ? { ...current, outgoingIndex: null } : current,
+      );
+    }, HERO_BACKDROP_FADE_MS);
+    return () => window.clearTimeout(timer);
+  }, [outgoingIndex]);
 
   // Pause/play helpers. Unpausing bumps playCycle so the rail animation
   // restarts at scaleX(0) in sync with the fresh 8s interval started below.
@@ -229,6 +255,7 @@ export default function HeroBanner({
           slide={slide}
           index={i}
           isActive={i === activeIndex}
+          keepsMotion={i === activeIndex || i === outgoingIndex}
         />
       ))}
 

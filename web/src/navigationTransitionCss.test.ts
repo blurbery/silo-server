@@ -64,7 +64,10 @@ describe("navigation view-transition CSS", () => {
       /html\[data-home-item-entry="true"\] \{\s*--duration-sidebar-collapse: var\(--duration-sidebar-entry\);/,
     );
     expect(css).toMatch(
-      /html\[data-navigation-direction="back"\]\[data-home-route="true"\] \{\s*--duration-sidebar-collapse: var\(--duration-sidebar-return\);/,
+      /html\[data-navigation-direction="back"\]\[data-home-item-return="true"\] \{\s*--duration-sidebar-collapse: var\(--duration-sidebar-return\);/,
+    );
+    expect(css).not.toMatch(
+      /html\[data-navigation-direction="back"\]\[data-home-route="true"\][^{]*\{[^}]*--duration-sidebar-return/,
     );
     expect(reducedMotionBlock()).toMatch(/--duration-sidebar-entry:\s*0ms;/);
     expect(reducedMotionBlock()).toMatch(/--duration-sidebar-return:\s*0ms;/);
