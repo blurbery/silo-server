@@ -96,6 +96,7 @@
   --duration-drift: 2000ms;
   /* Sidebar immersion collapse — see `.sidebar-surface`. */
   --duration-sidebar-collapse: 300ms;
+  --duration-sidebar-entry: 340ms;
   --duration-sidebar-return: 340ms;
 
   /* ── Motion: Easing ────────────────────────────────────────── */
@@ -322,9 +323,11 @@ html[data-navigation-direction="back"] {
   --nav-slide-shift: 24px;
 }
 
-/* A Home return has more cached card work to stage than an item entry. Give
-   only that live sidebar carry one extra beat so its perceived speed matches
-   the gated detail entry; every other route keeps the base 300 ms token. */
+/* Home entry and return share one perceived speed. Only this exact boundary
+   gets the extra beat; every other route keeps the base 300 ms token. */
+html[data-home-item-entry="true"] {
+  --duration-sidebar-collapse: var(--duration-sidebar-entry);
+}
 html[data-navigation-direction="back"][data-home-route="true"] {
   --duration-sidebar-collapse: var(--duration-sidebar-return);
 }
@@ -375,6 +378,7 @@ html[data-navigation-direction]::view-transition-new(main-content) {
     --duration-glacial: 0ms;
     --duration-slow: 150ms;
     --duration-sidebar-collapse: 0ms;
+    --duration-sidebar-entry: 0ms;
     --duration-sidebar-return: 0ms;
     --animate-ken-burns-a: none;
     --animate-ken-burns-b: none;

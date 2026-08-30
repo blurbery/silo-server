@@ -107,6 +107,25 @@ describe("ItemDetail", () => {
     expect(markup).not.toContain("animate-pulse");
   });
 
+  it("keeps the opaque Home shell while item data is still loading", () => {
+    mocks.useCatalogItemDetail.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+    });
+
+    const markup = renderToStaticMarkup(
+      <SidebarItemEnteredFromHomeContext.Provider value>
+        <SidebarItemDetailsReadyContext.Provider value>
+          <ItemDetail />
+        </SidebarItemDetailsReadyContext.Provider>
+      </SidebarItemEnteredFromHomeContext.Provider>,
+    );
+
+    expect(markup).toContain("home-item-transition-shell");
+    expect(markup).not.toContain("animate-pulse");
+  });
+
   it("matches the compact hero height for a season Home entry", () => {
     mocks.useCatalogItemDetail.mockReturnValue({
       data: { content_id: "season-1", title: "Season 1", type: "season" },

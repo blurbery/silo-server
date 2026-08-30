@@ -56,12 +56,17 @@ describe("navigation view-transition CSS", () => {
     expect(css).toContain("transform: translateX(calc(-1 * var(--nav-slide-shift)))");
   });
 
-  it("gives only a Back navigation landing on Home extra paint headroom", () => {
+  it("matches Home item entry and return timing without changing other routes", () => {
     expect(css).toMatch(/--duration-sidebar-collapse:\s*300ms;/);
+    expect(css).toMatch(/--duration-sidebar-entry:\s*340ms;/);
     expect(css).toMatch(/--duration-sidebar-return:\s*340ms;/);
+    expect(css).toMatch(
+      /html\[data-home-item-entry="true"\] \{\s*--duration-sidebar-collapse: var\(--duration-sidebar-entry\);/,
+    );
     expect(css).toMatch(
       /html\[data-navigation-direction="back"\]\[data-home-route="true"\] \{\s*--duration-sidebar-collapse: var\(--duration-sidebar-return\);/,
     );
+    expect(reducedMotionBlock()).toMatch(/--duration-sidebar-entry:\s*0ms;/);
     expect(reducedMotionBlock()).toMatch(/--duration-sidebar-return:\s*0ms;/);
   });
 

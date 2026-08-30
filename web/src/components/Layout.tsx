@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { startTransition, useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Menu, Search } from "lucide-react";
@@ -91,6 +91,21 @@ export default function Layout({ children }: LayoutProps) {
     reveal: revealItemDetails,
   } = useSidebarItemDetailsGate(location.key, location.pathname, isItemRoute && hasDesktopSidebar);
 
+  const revealPreparedItemDetails = useCallback(
+    (expectedLocationKey: string) => {
+      if (!enteredItemFromHome) {
+        revealItemDetails(expectedLocationKey);
+        return;
+      }
+
+      // A cached detail tree is substantially heavier than the handoff shell.
+      // Keep the shell committed while React prepares that tree concurrently,
+      // then swap it in atomically instead of blocking the last sidebar frame.
+      startTransition(() => revealItemDetails(expectedLocationKey));
+    },
+    [enteredItemFromHome, revealItemDetails],
+  );
+
   const beginItemNavigation = useCallback(
     (request: SidebarItemNavigationRequest) => {
       const itemTarget = parseItemNavigationHref(request.href, window.location.origin);
@@ -121,7 +136,7 @@ export default function Layout({ children }: LayoutProps) {
     // exception: mounting that heavier tree inside the sidebar compositor
     // motion makes repeat visits rougher than the first uncached visit.
     if (!enteredItemFromHome && hasCachedItemDetail(queryClient, itemRouteLocation)) {
-      revealItemDetails(pendingLocationKey);
+      revealPreparedItemDetails(pendingLocationKey);
       return;
     }
 
@@ -143,7 +158,7 @@ export default function Layout({ children }: LayoutProps) {
         timer = window.setTimeout(revealWhenSettled, Math.min(50, Math.max(0, remaining)));
         return;
       }
-      revealItemDetails(pendingLocationKey);
+      revealPreparedItemDetails(pendingLocationKey);
     };
 
     revealWhenSettled();
@@ -157,16 +172,16 @@ export default function Layout({ children }: LayoutProps) {
     itemRouteLocation,
     pendingLocationKey,
     queryClient,
-    revealItemDetails,
+    revealPreparedItemDetails,
   ]);
 
   const handleSidebarTransitionEnd = useCallback(
     (event: ReactTransitionEvent<HTMLDivElement>) => {
       if (event.propertyName === "transform" && isCollapsedSidebarSurface(event.target)) {
-        if (pendingLocationKey) revealItemDetails(pendingLocationKey);
+        if (pendingLocationKey) revealPreparedItemDetails(pendingLocationKey);
       }
     },
-    [pendingLocationKey, revealItemDetails],
+    [pendingLocationKey, revealPreparedItemDetails],
   );
 
   // Publish both sidebar states on the document root so out-of-tree chrome

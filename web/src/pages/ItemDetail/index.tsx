@@ -155,7 +155,7 @@ export default function ItemDetail() {
   }, [itemError]);
 
   if (loading || !itemDetailsReady) {
-    if (!itemDetailsReady && enteredItemFromHome) {
+    if (enteredItemFromHome) {
       return <HomeItemTransitionShell item={item} />;
     }
     return <ItemDetailSkeleton />;
