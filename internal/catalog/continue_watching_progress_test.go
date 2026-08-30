@@ -2,10 +2,13 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Silo-Server/silo-server/internal/userstore"
 )
@@ -165,6 +168,72 @@ func TestSupersededEpisodeProgressIDsWithoutPoolReturnsEmptySet(t *testing.T) {
 	}
 }
 
+func TestSupersededEpisodeProgressIDsUsesExactStoreWithoutPagingHistory(t *testing.T) {
+	t.Parallel()
+
+	updatedAt := time.Date(2026, 8, 30, 1, 2, 3, 0, time.UTC)
+	store := &stubExactProgressLister{
+		superseded: map[string]struct{}{"episode-1": {}},
+	}
+	filter := NewContinueWatchingProgressFilter(&pgxpool.Pool{})
+	entries := []userstore.WatchProgress{
+		{MediaItemID: "episode-1", UpdatedAt: updatedAt.Format(time.RFC3339)},
+		{MediaItemID: "movie-1", UpdatedAt: updatedAt.Add(time.Minute).Format(time.RFC3339)},
+		{MediaItemID: "bad-time", UpdatedAt: "not-a-time"},
+		{MediaItemID: "  ", UpdatedAt: updatedAt.Format(time.RFC3339)},
+	}
+
+	superseded, err := filter.SupersededEpisodeProgressIDs(context.Background(), store, "p1", entries)
+	if err != nil {
+		t.Fatalf("SupersededEpisodeProgressIDs: %v", err)
+	}
+	if _, ok := superseded["episode-1"]; !ok || len(superseded) != 1 {
+		t.Fatalf("superseded = %v, want only episode-1", superseded)
+	}
+	if len(store.calls) != 0 {
+		t.Fatalf("ListProgress calls = %+v, want none on exact-store path", store.calls)
+	}
+	if len(store.candidates) != 2 {
+		t.Fatalf("exact candidates = %+v, want two valid snapshots", store.candidates)
+	}
+	if store.candidates[0].MediaItemID != "episode-1" || !store.candidates[0].UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("first exact candidate = %+v, want episode-1 at %s", store.candidates[0], updatedAt)
+	}
+	if store.candidates[1].MediaItemID != "movie-1" {
+		t.Fatalf("second exact candidate = %+v, want movie-1 (store query filters non-episodes)", store.candidates[1])
+	}
+}
+
+func TestSupersededEpisodeProgressIDsFallsBackWhenExactStoreFails(t *testing.T) {
+	t.Parallel()
+
+	updatedAt := time.Date(2026, 8, 30, 1, 2, 3, 0, time.UTC)
+	store := &stubExactProgressLister{
+		stubProgressLister: stubProgressLister{entries: nil},
+		err:                errors.New("temporary exact-query failure"),
+	}
+	filter := NewContinueWatchingProgressFilter(&pgxpool.Pool{})
+	entries := []userstore.WatchProgress{{
+		MediaItemID: "episode-1",
+		UpdatedAt:   updatedAt.Format(time.RFC3339),
+	}}
+
+	superseded, err := filter.SupersededEpisodeProgressIDs(context.Background(), store, "p1", entries)
+	if err != nil {
+		t.Fatalf("SupersededEpisodeProgressIDs: %v", err)
+	}
+	if len(superseded) != 0 {
+		t.Fatalf("superseded = %v, want empty fallback result", superseded)
+	}
+	if len(store.calls) != 1 {
+		t.Fatalf("ListProgress calls = %+v, want one fallback call", store.calls)
+	}
+	wantCall := progressListCall{profileID: "p1", status: "completed", limit: supersededProgressPageSize, offset: 0}
+	if store.calls[0] != wantCall {
+		t.Fatalf("fallback ListProgress call = %+v, want %+v", store.calls[0], wantCall)
+	}
+}
+
 func TestHomeDismissalIndexFilterProgressDropsOnlyMatchingTimestamps(t *testing.T) {
 	t.Parallel()
 
@@ -244,4 +313,16 @@ func (s *stubProgressLister) ListProgress(_ context.Context, profileID, status s
 		end = len(s.entries)
 	}
 	return s.entries[offset:end], nil
+}
+
+type stubExactProgressLister struct {
+	stubProgressLister
+	candidates []userstore.SupersededEpisodeCandidate
+	superseded map[string]struct{}
+	err        error
+}
+
+func (s *stubExactProgressLister) SupersededEpisodeProgressIDs(_ context.Context, _ string, candidates []userstore.SupersededEpisodeCandidate) (map[string]struct{}, error) {
+	s.candidates = append([]userstore.SupersededEpisodeCandidate(nil), candidates...)
+	return s.superseded, s.err
 }

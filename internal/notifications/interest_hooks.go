@@ -39,11 +39,40 @@ func (p *interestTrackingProvider) ForUser(ctx context.Context, userID int) (use
 		return store, err
 	}
 	tracked := &interestTrackingStore{UserStore: store, userID: userID, system: p.system, updater: p.system.Interest}
-	// Preserve the interface upgrades callers probe for. Both are conditional
+	// Preserve the interface upgrades callers probe for. These are conditional
 	// on the backing store: advertising a capability it does not have would
 	// send callers down a fast path that can only fail.
 	registry, hasDevices := store.(userstore.DeviceRegistry)
 	rollup, hasRollup := store.(userstore.SeriesEpisodeRollupStore)
+	superseded, hasSuperseded := store.(userstore.SupersededEpisodeProgressStore)
+	if hasSuperseded {
+		switch {
+		case hasDevices && hasRollup:
+			return &interestTrackingStoreWithDevicesRollupAndSuperseded{
+				interestTrackingStore:          tracked,
+				DeviceRegistry:                 registry,
+				SeriesEpisodeRollupStore:       rollup,
+				SupersededEpisodeProgressStore: superseded,
+			}, nil
+		case hasDevices:
+			return &interestTrackingStoreWithDevicesAndSuperseded{
+				interestTrackingStore:          tracked,
+				DeviceRegistry:                 registry,
+				SupersededEpisodeProgressStore: superseded,
+			}, nil
+		case hasRollup:
+			return &interestTrackingStoreWithRollupAndSuperseded{
+				interestTrackingStore:          tracked,
+				SeriesEpisodeRollupStore:       rollup,
+				SupersededEpisodeProgressStore: superseded,
+			}, nil
+		default:
+			return &interestTrackingStoreWithSuperseded{
+				interestTrackingStore:          tracked,
+				SupersededEpisodeProgressStore: superseded,
+			}, nil
+		}
+	}
 	switch {
 	case hasDevices && hasRollup:
 		return &interestTrackingStoreWithDevicesAndRollup{
@@ -100,6 +129,30 @@ type interestTrackingStoreWithDevicesAndRollup struct {
 	userstore.SeriesEpisodeRollupStore
 }
 
+type interestTrackingStoreWithSuperseded struct {
+	*interestTrackingStore
+	userstore.SupersededEpisodeProgressStore
+}
+
+type interestTrackingStoreWithDevicesAndSuperseded struct {
+	*interestTrackingStore
+	userstore.DeviceRegistry
+	userstore.SupersededEpisodeProgressStore
+}
+
+type interestTrackingStoreWithRollupAndSuperseded struct {
+	*interestTrackingStore
+	userstore.SeriesEpisodeRollupStore
+	userstore.SupersededEpisodeProgressStore
+}
+
+type interestTrackingStoreWithDevicesRollupAndSuperseded struct {
+	*interestTrackingStore
+	userstore.DeviceRegistry
+	userstore.SeriesEpisodeRollupStore
+	userstore.SupersededEpisodeProgressStore
+}
+
 var _ userstore.SettingValueCompareAndSetter = (*interestTrackingStore)(nil)
 var _ userstore.SettingMutationTransactioner = (*interestTrackingStore)(nil)
 var _ userstore.SettingValueCompareAndSetter = (*interestTrackingStoreWithDevices)(nil)
@@ -110,9 +163,9 @@ var _ userstore.SettingMutationTransactioner = (*interestTrackingStoreWithDevice
 // needs an explicit forward below; the assertions make a missing one a compile
 // error instead of a silent production slowdown.
 //
-// SeriesEpisodeRollupStore is deliberately absent here: it is conditional on
-// the backing store, so it lives on the wrapper types above rather than being
-// forwarded unconditionally.
+// SeriesEpisodeRollupStore and SupersededEpisodeProgressStore are deliberately
+// absent here: they are conditional on the backing store, so they live on the
+// wrapper types above rather than being forwarded unconditionally.
 var _ userstore.WatchedBatchWriter = (*interestTrackingStore)(nil)
 var _ userstore.VisibleHistoryAdder = (*interestTrackingStore)(nil)
 var _ userstore.HistoryVisibilityStore = (*interestTrackingStore)(nil)
@@ -122,6 +175,12 @@ var _ userstore.HistoryVisibilityStore = (*interestTrackingStoreWithDevices)(nil
 var _ userstore.SeriesEpisodeRollupStore = (*interestTrackingStoreWithRollup)(nil)
 var _ userstore.SeriesEpisodeRollupStore = (*interestTrackingStoreWithDevicesAndRollup)(nil)
 var _ userstore.DeviceRegistry = (*interestTrackingStoreWithDevicesAndRollup)(nil)
+var _ userstore.SupersededEpisodeProgressStore = (*interestTrackingStoreWithSuperseded)(nil)
+var _ userstore.SupersededEpisodeProgressStore = (*interestTrackingStoreWithDevicesAndSuperseded)(nil)
+var _ userstore.SupersededEpisodeProgressStore = (*interestTrackingStoreWithRollupAndSuperseded)(nil)
+var _ userstore.SupersededEpisodeProgressStore = (*interestTrackingStoreWithDevicesRollupAndSuperseded)(nil)
+var _ userstore.DeviceRegistry = (*interestTrackingStoreWithDevicesRollupAndSuperseded)(nil)
+var _ userstore.SeriesEpisodeRollupStore = (*interestTrackingStoreWithDevicesRollupAndSuperseded)(nil)
 
 // WithPreferenceSettingsTransaction preserves the optional atomic-settings
 // capability of the wrapped store. Preference writes do not affect interest

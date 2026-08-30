@@ -42,15 +42,14 @@ func NewContinueWatchingProgressFilter(pool *pgxpool.Pool) *ContinueWatchingProg
 const supersededProgressPageSize = 500
 
 // supersededProgressMaxPages hard-caps how many completed-history pages the
-// superseded-episode walk reads in one request. The updated_at cutoff normally
-// halts paging far sooner (an import-heavy profile's completed rows predate its
-// active in-progress items, so the scan stops on the first page); this bound
-// only engages in the adversarial case of a very old in-progress entry sitting
+// fallback superseded-episode walk reads in one request. Postgres uses the
+// exact candidate-driven capability above and never enters this walk. For
+// stores without that capability, the updated_at cutoff normally halts paging
+// far sooner; this bound only engages when a very old in-progress entry sits
 // behind a large volume of newer completions. Hitting it means the tail of the
 // completed set went unscanned, so a genuinely-superseded episode could
-// momentarily survive on the Continue Watching row — we log when that happens
-// rather than silently mis-filter, and it self-corrects once the stale
-// in-progress entry ages out of the scanned window.
+// momentarily survive on the Continue Watching row. We log that tradeoff rather
+// than silently mis-filter.
 const supersededProgressMaxPages = 5
 
 // SupersededEpisodeProgressIDs returns the content IDs of in-progress entries
@@ -64,6 +63,33 @@ func (f *ContinueWatchingProgressFilter) SupersededEpisodeProgressIDs(ctx contex
 	inProgress := ProgressSnapshots(entries)
 	if len(inProgress) == 0 {
 		return map[string]struct{}{}, nil
+	}
+
+	// Postgres holds progress and catalog relationships together, so it can
+	// answer the exact question from the small candidate set in one query. This
+	// avoids walking a profile's global completed history and removes the
+	// correctness tradeoff imposed by the fallback's hard page cap. SQLite and
+	// other stores keep the bounded snapshot path below.
+	if exactStore, ok := store.(userstore.SupersededEpisodeProgressStore); ok {
+		candidates := make([]userstore.SupersededEpisodeCandidate, len(inProgress))
+		for i, snapshot := range inProgress {
+			candidates[i] = userstore.SupersededEpisodeCandidate{
+				MediaItemID: snapshot.ContentID,
+				UpdatedAt:   snapshot.UpdatedAt,
+			}
+		}
+		superseded, err := exactStore.SupersededEpisodeProgressIDs(ctx, profileID, candidates)
+		if err == nil {
+			if superseded == nil {
+				return map[string]struct{}{}, nil
+			}
+			return superseded, nil
+		}
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("querying exact superseded episode progress: %w", err)
+		}
+		slog.WarnContext(ctx, "continue-watching: exact superseded-episode query failed; using capped fallback",
+			"error", err)
 	}
 
 	// A completed episode can only supersede an in-progress one it was finished
