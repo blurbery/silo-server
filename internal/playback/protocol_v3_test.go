@@ -972,6 +972,98 @@ func TestPlanPlaybackV3WebNativeHLSAvoidsProgressiveProfile7Fallback(t *testing.
 	}
 }
 
+func TestHLSVideoSampleEntryV3ScopesAndroidMedia3NativeRecipes(t *testing.T) {
+	tests := []struct {
+		name         string
+		platform     string
+		deviceQuirks bool
+		nativeHLS    bool
+		dvProfile    int
+		dvStrip      bool
+		want         string
+	}{
+		{name: "Android plain HEVC", platform: "android", deviceQuirks: true, want: VideoSampleEntryHVC1V3},
+		{name: "Android Profile 7 strip", platform: "android", deviceQuirks: true, dvProfile: 7, dvStrip: true, want: VideoSampleEntryHVC1V3},
+		{name: "Android Profile 8 preserve", platform: "android", deviceQuirks: true, dvProfile: 8, want: VideoSampleEntryDVH1V3},
+		{name: "unscoped Android client", platform: "android", dvProfile: 8, want: VideoSampleEntryHEV1V3},
+		{name: "web hls.js", platform: "web", deviceQuirks: true, dvProfile: 7, dvStrip: true, want: VideoSampleEntryHEV1V3},
+		{name: "Apple native Profile 7 strip", platform: "tvos", nativeHLS: true, dvProfile: 7, dvStrip: true, want: VideoSampleEntryHVC1V3},
+		{name: "Apple native Profile 8 preserve", platform: "tvos", nativeHLS: true, dvProfile: 8, want: VideoSampleEntryDVH1V3},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := validStartRequestV3()
+			req.ClientPlaybackContext.Device.Platform = test.platform
+			if test.deviceQuirks {
+				req.ClientFeatures = append(req.ClientFeatures, FeatureDeviceQuirksV3)
+			}
+			if test.nativeHLS {
+				hls := req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3]
+				hls.Features = append(hls.Features, ClientNativeHLSPlaybackV3)
+				req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3] = hls
+			}
+			source := SourceDescriptorV3{VideoCodec: "hevc", DVProfile: test.dvProfile}
+			if got := hlsVideoSampleEntryV3(source, req, test.dvStrip); got != test.want {
+				t.Fatalf("sample entry = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPlanPlaybackV3AndroidMedia3HLSRecipesAcrossSourceQualities(t *testing.T) {
+	profiles := []struct {
+		name           string
+		profile        int
+		compatibility  int
+		videoRangeType string
+		hdr            *HDRCapabilitiesV3
+		wantEntry      string
+	}{
+		{name: "Profile 7 strip", profile: 7, compatibility: 6, videoRangeType: "DOVIWithEL", hdr: &HDRCapabilitiesV3{HDR10: true}, wantEntry: VideoSampleEntryHVC1V3},
+		{name: "Profile 8 preserve", profile: 8, compatibility: 1, videoRangeType: "DOVIWithHDR10", hdr: &HDRCapabilitiesV3{DolbyVisionProfiles: []int{8}, DolbyVisionProfileLevels: []DolbyVisionProfileCapabilityV3{{Profile: 8, MaxLevel: 6, BLCompatibilityIDs: []int{1}}}}, wantEntry: VideoSampleEntryDVH1V3},
+	}
+	for _, profile := range profiles {
+		for _, quality := range []string{"auto", QualityOriginalV3, "2160p"} {
+			t.Run(profile.name+"/"+quality, func(t *testing.T) {
+				file := detailedFixtureFileV3()
+				file.CodecAudio = "truehd"
+				file.AudioChannels = 8
+				file.AudioTracks[0] = models.AudioTrack{Codec: "truehd", Channels: 8, Layout: "7.1", Default: true}
+				file.VideoTracks[0].DVProfile = profile.profile
+				file.VideoTracks[0].DVBLCompatID = profile.compatibility
+				file.VideoTracks[0].DVLevel = 6
+				file.VideoTracks[0].ColorTransfer = "smpte2084"
+				file.VideoTracks[0].VideoRange = "DolbyVision"
+				file.VideoTracks[0].VideoRangeType = profile.videoRangeType
+
+				req := validStartRequestV3()
+				req.QualityPreference = quality
+				req.ClientFeatures = append(req.ClientFeatures, FeatureDeviceQuirksV3)
+				req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
+				req.Capabilities.HDRDetails = profile.hdr
+				req.ClientPlaybackContext.Output.HDRDetails = profile.hdr
+				delete(req.ClientPlaybackContext.Deliveries, DeliveryClassProgressiveV3)
+				hls := req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3]
+				hls.VideoCodecs = []string{"hevc"}
+				hls.AudioDecodeCodecs = []string{"aac"}
+				hls.HDRDetails = profile.hdr
+				req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3] = hls
+
+				result := PlanPlaybackV3(PlannerInputV3{
+					Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0,
+					Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: testTransformationRegistryV3(),
+				})
+				if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxHLSV3 || result.TargetVideoCodec != "copy" || !result.TranscodeAudio {
+					t.Fatalf("result = %s", ExplainPlannerResultV3(result))
+				}
+				if got := result.Plan.EffectiveRecipe.VideoSampleEntry; got != profile.wantEntry {
+					t.Fatalf("sample entry = %q, want %q", got, profile.wantEntry)
+				}
+			})
+		}
+	}
+}
+
 func TestPlanPlaybackV3WebNativeHLSPreservesCompatibleDolbyVisionAsDVH1(t *testing.T) {
 	file := detailedFixtureFileV3()
 	file.VideoTracks[0].DVProfile = 8

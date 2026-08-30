@@ -493,10 +493,24 @@ func TestStartTranscodeRejectsInvalidVideoSampleEntry(t *testing.T) {
 	for _, opts := range []TranscodeOpts{
 		{TargetCodecVideo: "copy", VideoSampleEntry: "dvhe"},
 		{TargetCodecVideo: "h264", VideoSampleEntry: VideoSampleEntryDVH1},
+		{SourceVideoCodec: "hevc", TargetCodecVideo: "h264", VideoSampleEntry: VideoSampleEntryHEV1V3},
+		{SourceVideoCodec: "h264", TargetCodecVideo: "copy", VideoSampleEntry: VideoSampleEntryHEV1V3},
+		{SourceVideoCodec: "hevc", TargetCodecVideo: "copy", VideoSampleEntry: VideoSampleEntryHEV1V3, RemuxDVMode: RemuxDVPreserveV3},
 	} {
 		if _, err := StartTranscode(context.Background(), opts); err == nil {
 			t.Fatalf("invalid recipe accepted: %+v", opts)
 		}
+	}
+}
+
+func TestValidVideoSampleEntryIncludesProtocolV3HEV1(t *testing.T) {
+	for _, entry := range []string{"", VideoSampleEntryHEV1V3, VideoSampleEntryHVC1V3, VideoSampleEntryDVH1V3} {
+		if !validVideoSampleEntry(entry) {
+			t.Fatalf("valid protocol-v3 sample entry %q was rejected", entry)
+		}
+	}
+	if validVideoSampleEntry("dvhe") {
+		t.Fatal("unvalidated sample entry was accepted")
 	}
 }
 
