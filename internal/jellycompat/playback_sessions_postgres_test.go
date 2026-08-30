@@ -3,15 +3,158 @@ package jellycompat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Silo-Server/silo-server/internal/catalog"
 	"github.com/Silo-Server/silo-server/internal/watchsync"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var negotiatedSessionAdvisoryLockKeySink int64
+
+func TestNegotiatedSessionAdvisoryLockKeyIsStableAndUnambiguous(t *testing.T) {
+	t.Parallel()
+
+	baseline := negotiatedSessionAdvisoryLockKey("token", "device", "route")
+	for i := 0; i < 100; i++ {
+		if got := negotiatedSessionAdvisoryLockKey("token", "device", "route"); got != baseline {
+			t.Fatalf("key changed between calls: first=%d call_%d=%d", baseline, i, got)
+		}
+	}
+
+	invalidUTF8 := string([]byte{0xff, 0xfe, 0xfd})
+	testCases := []struct {
+		name           string
+		compatToken    string
+		clientDeviceID string
+		routeItemID    string
+	}{
+		{name: "baseline", compatToken: "token", clientDeviceID: "device", routeItemID: "route"},
+		{name: "component boundary left", compatToken: "ab", clientDeviceID: "c", routeItemID: "d"},
+		{name: "component boundary right", compatToken: "a", clientDeviceID: "bc", routeItemID: "d"},
+		{name: "delimiter in token", compatToken: "a\x00b", clientDeviceID: "c", routeItemID: "d"},
+		{name: "delimiter in device", compatToken: "a", clientDeviceID: "b\x00c", routeItemID: "d"},
+		{name: "reordered components", compatToken: "device", clientDeviceID: "token", routeItemID: "route"},
+		{name: "empty components", compatToken: "", clientDeviceID: "", routeItemID: ""},
+		{name: "invalid UTF-8 bytes", compatToken: invalidUTF8, clientDeviceID: "device", routeItemID: "route"},
+		{
+			name:           "long components",
+			compatToken:    strings.Repeat("t", 4096),
+			clientDeviceID: strings.Repeat("d", 4096),
+			routeItemID:    strings.Repeat("r", 4096),
+		},
+	}
+
+	seen := make(map[int64]string, len(testCases))
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			key := negotiatedSessionAdvisoryLockKey(tc.compatToken, tc.clientDeviceID, tc.routeItemID)
+			if prior, exists := seen[key]; exists {
+				t.Fatalf("lock-key collision with %q: %d", prior, key)
+			}
+			seen[key] = tc.name
+		})
+	}
+}
+
+func TestNegotiatedSessionAdvisoryLockQueryAcceptsOnlyBigint(t *testing.T) {
+	t.Parallel()
+
+	if negotiatedSessionAdvisoryLockQuery != `SELECT pg_advisory_xact_lock($1::bigint)` {
+		t.Fatalf("advisory lock query can accept text again: %q", negotiatedSessionAdvisoryLockQuery)
+	}
+}
+
+type negotiatedSessionAdvisoryLockRecorder struct {
+	query string
+	args  []any
+	err   error
+}
+
+func (r *negotiatedSessionAdvisoryLockRecorder) Exec(_ context.Context, query string, args ...any) (pgconn.CommandTag, error) {
+	r.query = query
+	r.args = append([]any(nil), args...)
+	return pgconn.CommandTag{}, r.err
+}
+
+func TestAcquireNegotiatedSessionAdvisoryLockPassesOnlyBigint(t *testing.T) {
+	t.Parallel()
+
+	recorder := &negotiatedSessionAdvisoryLockRecorder{}
+	err := acquireNegotiatedSessionAdvisoryLock(
+		context.Background(), recorder,
+		"token\x00with-delimiter", string([]byte{'d', 0xff, 'v'}), "route\x00item",
+	)
+	if err != nil {
+		t.Fatalf("acquire advisory lock: %v", err)
+	}
+	if recorder.query != negotiatedSessionAdvisoryLockQuery {
+		t.Fatalf("query = %q, want %q", recorder.query, negotiatedSessionAdvisoryLockQuery)
+	}
+	if len(recorder.args) != 1 {
+		t.Fatalf("argument count = %d, want 1", len(recorder.args))
+	}
+	if _, ok := recorder.args[0].(int64); !ok {
+		t.Fatalf("advisory lock argument type = %T, want int64", recorder.args[0])
+	}
+}
+
+func TestAcquireNegotiatedSessionAdvisoryLockPropagatesDatabaseError(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("lock unavailable")
+	recorder := &negotiatedSessionAdvisoryLockRecorder{err: wantErr}
+	err := acquireNegotiatedSessionAdvisoryLock(context.Background(), recorder, "token", "device", "route")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want wrapped %v", err, wantErr)
+	}
+}
+
+func BenchmarkNegotiatedSessionAdvisoryLockKey(b *testing.B) {
+	testCases := []struct {
+		name           string
+		compatToken    string
+		clientDeviceID string
+		routeItemID    string
+	}{
+		{
+			name:           "typical",
+			compatToken:    strings.Repeat("a", 64),
+			clientDeviceID: "android-tv-living-room",
+			routeItemID:    "01J8Y2KJ0B9AZ7Q48H1S6X3CME",
+		},
+		{
+			name:           "embedded-NUL-and-invalid-UTF8",
+			compatToken:    "token\x00with\x00separators",
+			clientDeviceID: string([]byte{'d', 0xff, 'v'}),
+			routeItemID:    "route\x00item",
+		},
+		{
+			name:           "long-4KiB-components",
+			compatToken:    strings.Repeat("t", 4096),
+			clientDeviceID: strings.Repeat("d", 4096),
+			routeItemID:    strings.Repeat("r", 4096),
+		},
+	}
+
+	for _, tc := range testCases {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(tc.compatToken) + len(tc.clientDeviceID) + len(tc.routeItemID)))
+			for i := 0; i < b.N; i++ {
+				negotiatedSessionAdvisoryLockKeySink = negotiatedSessionAdvisoryLockKey(
+					tc.compatToken, tc.clientDeviceID, tc.routeItemID,
+				)
+			}
+		})
+	}
+}
 
 func TestMarshalPlaybackSessionStripsNestedNUL(t *testing.T) {
 	wantLiteral := `literal\u0000text`
