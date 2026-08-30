@@ -23,7 +23,11 @@ import { collectCachedHomeSections } from "./homeSectionCache";
 import { useSectionRefreshSignal } from "./homeSurfaceRefresh";
 import { useUICustomization } from "@/hooks/useUICustomization";
 import { carouselIntrinsicHeight } from "@/lib/uiCustomization";
-import { isWebKitEngine, prefersReducedMotion } from "@/hooks/useImmediateSidebarCollapse";
+import {
+  isFirefoxEngine,
+  isWebKitEngine,
+  prefersReducedMotion,
+} from "@/hooks/useImmediateSidebarCollapse";
 import { SIDEBAR_DETAILS_REVEAL_DEADLINE_MS } from "@/components/sidebarItemNavigation";
 
 const MAX_CONCURRENT_SECTION_REQUESTS = 5;
@@ -40,7 +44,7 @@ export default function Home() {
   const { data: homeRefreshSignal = 0 } = useSectionRefreshSignal();
   const { cardPresentation } = useUICustomization();
   const [rowRestorationReady, setRowRestorationReady] = useState(
-    () => !shouldWaitForWebKitSidebarReturn(),
+    () => !shouldWaitForSidebarReturn(),
   );
 
   useDocumentTitle("Home");
@@ -374,12 +378,12 @@ function DeferredHomeSection({
   );
 }
 
-function shouldWaitForWebKitSidebarReturn(): boolean {
+function shouldWaitForSidebarReturn(): boolean {
+  const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent;
   return (
     typeof window !== "undefined" &&
-    typeof navigator !== "undefined" &&
     typeof window.matchMedia === "function" &&
-    isWebKitEngine(navigator.userAgent) &&
+    (isWebKitEngine(userAgent) || isFirefoxEngine(userAgent)) &&
     window.matchMedia(DESKTOP_SIDEBAR_QUERY).matches &&
     !prefersReducedMotion() &&
     document.documentElement.dataset.sidebarVisualCollapsed === "true"

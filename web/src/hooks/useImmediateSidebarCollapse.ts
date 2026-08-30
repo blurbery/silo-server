@@ -24,6 +24,14 @@ export function isWebKitEngine(userAgent: string): boolean {
 }
 
 /**
+ * Firefox desktop identifies both its Gecko engine and Firefox product token.
+ * Firefox on iOS remains covered by the WebKit check above.
+ */
+export function isFirefoxEngine(userAgent: string): boolean {
+  return /Gecko\/\d+/i.test(userAgent) && /Firefox\/\d+/i.test(userAgent);
+}
+
+/**
  * Separates the layout snap from the visible compositor transition. Chromium
  * and Firefox keep the established one-frame handoff. WebKit gets one paint
  * boundary before the visual state changes because it can otherwise coalesce

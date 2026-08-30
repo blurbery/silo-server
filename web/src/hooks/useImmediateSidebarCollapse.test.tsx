@@ -1,7 +1,11 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { isWebKitEngine, useImmediateSidebarCollapse } from "./useImmediateSidebarCollapse";
+import {
+  isFirefoxEngine,
+  isWebKitEngine,
+  useImmediateSidebarCollapse,
+} from "./useImmediateSidebarCollapse";
 
 const SAFARI_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.6 Safari/605.1.15";
@@ -13,6 +17,8 @@ const CHROME_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36";
 const EDGE_USER_AGENT = `${CHROME_USER_AGENT} Edg/151.0.0.0`;
 const FIREFOX_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0";
+const FIREFOX_IOS_USER_AGENT =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/149.0 Mobile/15E148 Safari/605.1.15";
 
 function stubUserAgent(userAgent: string) {
   vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(userAgent);
@@ -277,7 +283,7 @@ describe("useImmediateSidebarCollapse", () => {
 });
 
 describe("isWebKitEngine", () => {
-  it.each([SAFARI_USER_AGENT, ORION_USER_AGENT, WEBKIT_GTK_USER_AGENT])(
+  it.each([SAFARI_USER_AGENT, ORION_USER_AGENT, WEBKIT_GTK_USER_AGENT, FIREFOX_IOS_USER_AGENT])(
     "detects WebKit engine user agents",
     (userAgent) => expect(isWebKitEngine(userAgent)).toBe(true),
   );
@@ -285,5 +291,22 @@ describe("isWebKitEngine", () => {
   it.each([CHROME_USER_AGENT, EDGE_USER_AGENT, FIREFOX_USER_AGENT])(
     "does not classify Blink or Gecko as WebKit",
     (userAgent) => expect(isWebKitEngine(userAgent)).toBe(false),
+  );
+});
+
+describe("isFirefoxEngine", () => {
+  it("detects desktop Firefox", () => {
+    expect(isFirefoxEngine(FIREFOX_USER_AGENT)).toBe(true);
+  });
+
+  it.each([
+    SAFARI_USER_AGENT,
+    ORION_USER_AGENT,
+    WEBKIT_GTK_USER_AGENT,
+    FIREFOX_IOS_USER_AGENT,
+    CHROME_USER_AGENT,
+    EDGE_USER_AGENT,
+  ])("does not classify other engines as desktop Firefox", (userAgent) =>
+    expect(isFirefoxEngine(userAgent)).toBe(false),
   );
 });
