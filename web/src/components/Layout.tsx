@@ -88,6 +88,7 @@ export default function Layout({ children }: LayoutProps) {
     itemDetailsReady,
     pendingLocationKey,
     enteredItemFromHome,
+    returnedHomeFromItem,
     reveal: revealItemDetails,
   } = useSidebarItemDetailsGate(location.key, location.pathname, isItemRoute && hasDesktopSidebar);
 
@@ -211,6 +212,11 @@ export default function Layout({ children }: LayoutProps) {
     } else {
       delete root.dataset.homeItemEntry;
     }
+    if (returnedHomeFromItem) {
+      root.dataset.homeItemReturn = "true";
+    } else {
+      delete root.dataset.homeItemReturn;
+    }
     if (targetDetailImmersion) {
       root.dataset.sidebarCollapsed = "true";
     } else {
@@ -225,10 +231,17 @@ export default function Layout({ children }: LayoutProps) {
       delete root.dataset.appShell;
       delete root.dataset.homeRoute;
       delete root.dataset.homeItemEntry;
+      delete root.dataset.homeItemReturn;
       delete root.dataset.sidebarCollapsed;
       delete root.dataset.sidebarVisualCollapsed;
     };
-  }, [enteredItemFromHome, isHomePath, targetDetailImmersion, visualDetailImmersion]);
+  }, [
+    enteredItemFromHome,
+    isHomePath,
+    returnedHomeFromItem,
+    targetDetailImmersion,
+    visualDetailImmersion,
+  ]);
 
   // Auto-hide the mobile header on scroll-down for the Calendar route only.
   // Direction-based (not threshold-based) so a small scroll-up reveals the

@@ -61,6 +61,50 @@ describe("useSidebarItemDetailsGate", () => {
 
     rerender({ locationKey: "home-again", pathname: "/", isItem: false });
     expect(result.current.enteredItemFromHome).toBe(false);
+    expect(result.current.returnedHomeFromItem).toBe(true);
+
+    rerender({ locationKey: "settings", pathname: "/settings", isItem: false });
+    expect(result.current.returnedHomeFromItem).toBe(false);
+  });
+
+  it("does not mark non-Home item exits or unrelated Home arrivals as item returns", () => {
+    const { result, rerender } = renderHook(
+      ({ locationKey, pathname, isItem }) =>
+        useSidebarItemDetailsGate(locationKey, pathname, isItem),
+      {
+        initialProps: { locationKey: "library", pathname: "/library/1", isItem: false },
+      },
+    );
+
+    rerender({ locationKey: "movie", pathname: "/item/movie", isItem: true });
+    rerender({ locationKey: "home", pathname: "/", isItem: false });
+    expect(result.current.returnedHomeFromItem).toBe(false);
+
+    rerender({ locationKey: "settings", pathname: "/settings", isItem: false });
+    rerender({ locationKey: "home-direct", pathname: "/", isItem: false });
+    expect(result.current.returnedHomeFromItem).toBe(false);
+  });
+
+  it("tracks repeated same-item and different-item Home cycles without retaining origin state", () => {
+    const { result, rerender } = renderHook(
+      ({ locationKey, pathname, isItem }) =>
+        useSidebarItemDetailsGate(locationKey, pathname, isItem),
+      { initialProps: { locationKey: "home-0", pathname: "/", isItem: false } },
+    );
+
+    for (let cycle = 1; cycle <= 24; cycle++) {
+      const itemId = cycle <= 12 ? "same" : `different-${cycle}`;
+      rerender({ locationKey: `item-${cycle}`, pathname: `/item/${itemId}`, isItem: true });
+      expect(result.current.enteredItemFromHome).toBe(true);
+      expect(result.current.returnedHomeFromItem).toBe(false);
+
+      rerender({ locationKey: `home-${cycle}`, pathname: "/", isItem: false });
+      expect(result.current.enteredItemFromHome).toBe(false);
+      expect(result.current.returnedHomeFromItem).toBe(true);
+    }
+
+    rerender({ locationKey: "library", pathname: "/library/1", isItem: false });
+    expect(result.current.returnedHomeFromItem).toBe(false);
   });
 
   it("does not hold cached details for non-Home item entries", () => {

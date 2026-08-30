@@ -328,7 +328,7 @@ html[data-navigation-direction="back"] {
 html[data-home-item-entry="true"] {
   --duration-sidebar-collapse: var(--duration-sidebar-entry);
 }
-html[data-navigation-direction="back"][data-home-route="true"] {
+html[data-navigation-direction="back"][data-home-item-return="true"] {
   --duration-sidebar-collapse: var(--duration-sidebar-return);
 }
 

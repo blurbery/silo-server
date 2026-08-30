@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -124,6 +125,52 @@ describe("ItemDetail", () => {
 
     expect(markup).toContain("home-item-transition-shell");
     expect(markup).not.toContain("animate-pulse");
+  });
+
+  it.each([
+    ["season", { content_id: "season-1", title: "Season 1", type: "season" }],
+    ["episode", { content_id: "episode-1", title: "Pilot", type: "episode" }],
+    ["audiobook", { content_id: "audiobook-1", title: "Dune", type: "audiobook" }],
+    [
+      "logo",
+      {
+        content_id: "movie-123",
+        title: "Catalog Detail",
+        type: "movie",
+        logo_url: "/api/v1/items/movie-123/logo",
+      },
+    ],
+  ])("keeps neutral shell geometry when cold %s data resolves mid-handoff", (_, item) => {
+    mocks.useCatalogItemDetail.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+    });
+
+    const homeEntry = () => (
+      <SidebarItemEnteredFromHomeContext.Provider value>
+        <SidebarItemDetailsReadyContext.Provider value={false}>
+          <ItemDetail />
+        </SidebarItemDetailsReadyContext.Provider>
+      </SidebarItemEnteredFromHomeContext.Provider>
+    );
+    const view = render(homeEntry());
+    const initialShell = screen.getByTestId("home-item-transition-shell");
+    const initialGeometry = initialShell.innerHTML;
+
+    expect(initialGeometry).toContain("min-h-[60dvh]");
+    expect(initialGeometry).toContain("home-item-transition-poster");
+    expect(initialGeometry).toContain("aspect-[2/3]");
+
+    mocks.useCatalogItemDetail.mockReturnValue({
+      data: item,
+      isLoading: false,
+      error: null,
+    });
+    view.rerender(homeEntry());
+
+    expect(screen.getByTestId("home-item-transition-shell")).toBe(initialShell);
+    expect(screen.getByTestId("home-item-transition-shell").innerHTML).toBe(initialGeometry);
   });
 
   it("matches the compact hero height for a season Home entry", () => {
