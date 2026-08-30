@@ -87,8 +87,9 @@ export default function Layout({ children }: LayoutProps) {
   const {
     itemDetailsReady,
     pendingLocationKey,
+    enteredItemFromHome,
     reveal: revealItemDetails,
-  } = useSidebarItemDetailsGate(location.key, isItemRoute && hasDesktopSidebar);
+  } = useSidebarItemDetailsGate(location.key, location.pathname, isItemRoute && hasDesktopSidebar);
 
   const beginItemNavigation = useCallback(
     (request: SidebarItemNavigationRequest) => {
@@ -116,10 +117,10 @@ export default function Layout({ children }: LayoutProps) {
   useEffect(() => {
     if (!isItemRoute || !pendingLocationKey) return;
 
-    // The gate stages the collapse so the detail skeleton is not what animates
-    // into view. A prefetched detail has no skeleton to hide, so waiting for
-    // the sidebar would only delay a page that is already ready to paint.
-    if (hasCachedItemDetail(queryClient, itemRouteLocation)) {
+    // Cached details can normally paint immediately. Home entries are the
+    // exception: mounting that heavier tree inside the sidebar compositor
+    // motion makes repeat visits rougher than the first uncached visit.
+    if (!enteredItemFromHome && hasCachedItemDetail(queryClient, itemRouteLocation)) {
       revealItemDetails(pendingLocationKey);
       return;
     }
@@ -150,7 +151,14 @@ export default function Layout({ children }: LayoutProps) {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [isItemRoute, itemRouteLocation, pendingLocationKey, queryClient, revealItemDetails]);
+  }, [
+    enteredItemFromHome,
+    isItemRoute,
+    itemRouteLocation,
+    pendingLocationKey,
+    queryClient,
+    revealItemDetails,
+  ]);
 
   const handleSidebarTransitionEnd = useCallback(
     (event: ReactTransitionEvent<HTMLDivElement>) => {
@@ -178,6 +186,16 @@ export default function Layout({ children }: LayoutProps) {
     // collapse — and the routes rendered outside this shell keep the default
     // root transition, which is the only thing they have to animate.
     root.dataset.appShell = "true";
+    if (isHomePath) {
+      root.dataset.homeRoute = "true";
+    } else {
+      delete root.dataset.homeRoute;
+    }
+    if (enteredItemFromHome) {
+      root.dataset.homeItemEntry = "true";
+    } else {
+      delete root.dataset.homeItemEntry;
+    }
     if (targetDetailImmersion) {
       root.dataset.sidebarCollapsed = "true";
     } else {
@@ -190,10 +208,12 @@ export default function Layout({ children }: LayoutProps) {
     }
     return () => {
       delete root.dataset.appShell;
+      delete root.dataset.homeRoute;
+      delete root.dataset.homeItemEntry;
       delete root.dataset.sidebarCollapsed;
       delete root.dataset.sidebarVisualCollapsed;
     };
-  }, [targetDetailImmersion, visualDetailImmersion]);
+  }, [enteredItemFromHome, isHomePath, targetDetailImmersion, visualDetailImmersion]);
 
   // Auto-hide the mobile header on scroll-down for the Calendar route only.
   // Direction-based (not threshold-based) so a small scroll-up reveals the
@@ -239,7 +259,11 @@ export default function Layout({ children }: LayoutProps) {
   }, [mobileHeaderHidden]);
 
   return (
-    <SidebarItemNavigationProvider begin={beginItemNavigation} itemDetailsReady={itemDetailsReady}>
+    <SidebarItemNavigationProvider
+      begin={beginItemNavigation}
+      itemDetailsReady={itemDetailsReady}
+      enteredItemFromHome={enteredItemFromHome}
+    >
       <div className="bg-background relative min-h-[100dvh] overflow-x-clip">
         <a
           href="#main-content"
