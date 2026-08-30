@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Navigate, useParams, useSearchParams } from "react-router";
 import { useCatalogItemDetail } from "@/hooks/queries/catalogRead";
 import type { ItemDetail } from "@/api/types";
@@ -74,11 +74,34 @@ function ItemDetailSkeleton() {
   );
 }
 
+interface HomeItemTransitionShape {
+  compact: boolean;
+  hidePoster: boolean;
+  squarePoster: boolean;
+  hasLogo: boolean;
+}
+
+const NEUTRAL_HOME_ITEM_TRANSITION_SHAPE: HomeItemTransitionShape = {
+  compact: false,
+  hidePoster: false,
+  squarePoster: false,
+  hasLogo: false,
+};
+
+function getHomeItemTransitionShape(item?: ItemDetail): HomeItemTransitionShape {
+  if (!item) return NEUTRAL_HOME_ITEM_TRANSITION_SHAPE;
+
+  return {
+    compact: item.type === "season",
+    hidePoster: item.type === "episode",
+    squarePoster: item.type === "audiobook",
+    hasLogo: Boolean(item.logo_url),
+  };
+}
+
 function HomeItemTransitionShell({ item }: { item?: ItemDetail }) {
-  const compact = item?.type === "season";
-  const hidePoster = item?.type === "episode";
-  const squarePoster = item?.type === "audiobook";
-  const hasLogo = Boolean(item?.logo_url);
+  const [shape] = useState(() => getHomeItemTransitionShape(item));
+  const { compact, hidePoster, squarePoster, hasLogo } = shape;
 
   return (
     <div
@@ -156,7 +179,7 @@ export default function ItemDetail() {
 
   if (loading || !itemDetailsReady) {
     if (enteredItemFromHome) {
-      return <HomeItemTransitionShell item={item} />;
+      return <HomeItemTransitionShell key={id} item={item} />;
     }
     return <ItemDetailSkeleton />;
   }
