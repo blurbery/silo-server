@@ -22,6 +22,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/mediaprobe"
 	"github.com/Silo-Server/silo-server/internal/models"
 	"github.com/Silo-Server/silo-server/internal/tonemap"
+	"github.com/google/uuid"
 )
 
 func init() {
@@ -67,15 +68,16 @@ type TranscodeOpts struct {
 	StreamOriginSeconds float64
 	// CopySeekAnchorResolved distinguishes a valid zero-second origin from
 	// older/shared recipes that never resolved a copy seek anchor.
-	CopySeekAnchorResolved bool
-	TargetResolution       string // e.g., 1080p, 720p
-	TargetCodecVideo       string // e.g., h264 (or hevc if allowed)
-	TargetCodecAudio       string // e.g., aac
-	SegmentDuration        int    // seconds, default 6
-	StartSegmentNumber     int    // -hls_segment_start_number, default 0
-	FFmpegPath             string // optional explicit ffmpeg binary path
-	HWAccel                string // auto, qsv, vaapi, nvenc, videotoolbox, none
-	HWDevice               string // e.g., /dev/dri/renderD128 (default if empty)
+	CopySeekAnchorResolved  bool
+	TargetResolution        string // e.g., 1080p, 720p
+	TargetCodecVideo        string // e.g., h264 (or hevc if allowed)
+	TargetCodecAudio        string // e.g., aac
+	SegmentDuration         int    // seconds, default 6
+	SegmentRetentionSeconds int    // downloaded media retained behind the client; 0 disables pruning
+	StartSegmentNumber      int    // -hls_segment_start_number, default 0
+	FFmpegPath              string // optional explicit ffmpeg binary path
+	HWAccel                 string // auto, qsv, vaapi, nvenc, videotoolbox, none
+	HWDevice                string // e.g., /dev/dri/renderD128 (default if empty)
 	// AvoidHWDevice asks the initial multi-device allocator to prefer any other
 	// present render device. It is a process-local startup hint used after an
 	// early GPU failure; the selected concrete device remains fully reserved and
@@ -191,6 +193,15 @@ type TranscodeSession struct {
 	done                 chan struct{} // closed when the monitor goroutine finishes
 	stdinPipe            io.WriteCloser
 	lastRequestedSegment int
+	lastCompletedSegment int
+	lastPruneFloor       int
+	lastPruneHighWater   int
+	segmentPruneRunning  bool
+	pruneBeforeStart     bool
+	copyDurationMu       sync.Mutex
+	copyDurationIndex    copyManifestDurationIndex
+	segmentGeneration    uint64
+	segmentIncarnation   string
 	throttler            *TranscodeThrottler
 	stderrLinesLogged    int
 	stderrBytesLogged    int
@@ -396,6 +407,10 @@ func StartTranscode(ctx context.Context, opts TranscodeOpts) (*TranscodeSession,
 		done:                 make(chan struct{}),
 		stderr:               newBoundedTailBuffer(stderrTailMaxBytes),
 		lastRequestedSegment: opts.StartSegmentNumber,
+		lastCompletedSegment: opts.StartSegmentNumber - 1,
+		lastPruneFloor:       opts.StartSegmentNumber - 1,
+		lastPruneHighWater:   opts.StartSegmentNumber - 1,
+		segmentIncarnation:   uuid.NewString(),
 		hwWorkloadDevice:     hwWorkloadDevice,
 	}
 
@@ -2609,6 +2624,59 @@ func (s *TranscodeSession) GetSegment(name string) (string, error) {
 	return segPath, nil
 }
 
+// SegmentLease binds an opened segment descriptor to the FFmpeg generation it
+// came from. Keeping the descriptor open makes it a filesystem-backed lease: a
+// concurrent prune may unlink the directory entry, but the response can still
+// read the complete file on POSIX filesystems.
+type SegmentLease struct {
+	File            *os.File
+	Info            os.FileInfo
+	Generation      uint64
+	GenerationToken string
+}
+
+// Close releases the opened segment descriptor.
+func (l *SegmentLease) Close() error {
+	return l.File.Close()
+}
+
+// OpenSegment opens a completed segment for serving and captures its FFmpeg
+// generation atomically with the open.
+func (s *TranscodeSession) OpenSegment(name string) (*SegmentLease, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.restarting != nil {
+		return nil, ErrSegmentNotFound
+	}
+
+	clean := filepath.Base(name)
+	segment, err := os.Open(filepath.Join(s.outputDir, clean))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrSegmentNotFound
+		}
+		return nil, fmt.Errorf("open segment: %w", err)
+	}
+	info, err := segment.Stat()
+	if err != nil {
+		_ = segment.Close()
+		return nil, fmt.Errorf("stat segment: %w", err)
+	}
+	if info.Size() <= 0 {
+		_ = segment.Close()
+		return nil, ErrSegmentNotFound
+	}
+	if s.segmentIncarnation == "" {
+		s.segmentIncarnation = uuid.NewString()
+	}
+	return &SegmentLease{
+		File:            segment,
+		Info:            info,
+		Generation:      s.segmentGeneration,
+		GenerationToken: s.segmentGenerationTokenLocked(),
+	}, nil
+}
+
 // Close terminates the ffmpeg process and removes the temporary output directory.
 func (s *TranscodeSession) Close() error {
 	return s.shutdown(true)
@@ -2643,6 +2711,8 @@ func (s *TranscodeSession) shutdown(removeOutput bool) error {
 	defer s.mu.Unlock()
 
 	s.running = false
+	s.segmentGeneration++
+	s.segmentPruneRunning = false
 
 	// Clean up temporary directory.
 	if removeOutput && s.outputDir != "" {
@@ -2867,6 +2937,21 @@ func (s *TranscodeSession) restart(
 		s.stderr.Reset()
 	}
 	s.restartCount++
+	s.segmentGeneration++
+	s.segmentPruneRunning = false
+	preStartRangePrunable := opts.SegmentRetentionSeconds > 0 && s.lastPruneFloor < startSegment
+	s.lastRequestedSegment = startSegment
+	s.lastCompletedSegment = startSegment - 1
+	if preStartRangePrunable {
+		// Every restart preserves files below startSegment. Keep an older prune
+		// cursor reachable until replacement downloads age out that range, even
+		// when the reported restart position trails the download high-water mark.
+		s.pruneBeforeStart = true
+	} else {
+		s.lastPruneFloor = startSegment - 1
+		s.pruneBeforeStart = false
+	}
+	s.lastPruneHighWater = startSegment - 1
 	hwWorkloadDevice := s.hwWorkloadDevice
 	s.mu.Unlock()
 
@@ -2954,6 +3039,7 @@ func (s *TranscodeSession) restart(
 	s.restarting = nil
 	s.stdinPipe = stdinPipe
 	s.lastRequestedSegment = startSegment
+	s.lastCompletedSegment = startSegment - 1
 	s.generationStartedAt = startedAt
 	s.done = make(chan struct{})
 	hook := s.restartHook
@@ -3014,6 +3100,49 @@ func (s *TranscodeSession) WaitForSegment(name string, timeout time.Duration) (s
 		select {
 		case <-deadline:
 			return "", ErrSegmentNotFound
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+// WaitForOpenSegment is the opened-file counterpart to WaitForSegment. It
+// closes the stat-to-open race for HTTP serving while preserving the same
+// restart and ffmpeg-exit error contract.
+func (s *TranscodeSession) WaitForOpenSegment(name string, timeout time.Duration) (*SegmentLease, error) {
+	deadline := time.After(timeout)
+	for {
+		segment, err := s.OpenSegment(name)
+		if err == nil {
+			return segment, nil
+		}
+		if !errors.Is(err, ErrSegmentNotFound) {
+			return nil, err
+		}
+
+		s.mu.Lock()
+		running := s.running
+		restarting := s.restarting != nil
+		waitErr := s.waitErr
+		s.mu.Unlock()
+
+		if restarting {
+			select {
+			case <-deadline:
+				return nil, ErrSegmentNotFound
+			case <-time.After(100 * time.Millisecond):
+				continue
+			}
+		}
+		if !running && waitErr != nil {
+			return nil, fmt.Errorf("%w: %w", ErrTranscodeFailed, waitErr)
+		}
+		if !running {
+			return nil, ErrSegmentNotFound
+		}
+
+		select {
+		case <-deadline:
+			return nil, ErrSegmentNotFound
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -3266,9 +3395,54 @@ func (s *TranscodeSession) RestartSeekTarget(segNum int) (float64, bool, error) 
 func (s *TranscodeSession) ReportSegmentDownloaded(segNum int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.reportSegmentDownloadedLocked(segNum)
+}
+
+// SegmentGeneration identifies the current ffmpeg timeline. Callers that hold
+// an open segment across a restart use it to prevent the old response from
+// advancing the replacement process's download position.
+func (s *TranscodeSession) SegmentGeneration() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.segmentGeneration
+}
+
+// ReportSegmentDownloadedForGeneration records completion only if the served
+// file belongs to the current ffmpeg timeline.
+func (s *TranscodeSession) ReportSegmentDownloadedForGeneration(segNum int, generation uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if generation != s.segmentGeneration {
+		return
+	}
+	s.reportSegmentDownloadedLocked(segNum)
+}
+
+// ReportSegmentDownloadedForGenerationToken records a completion relayed over
+// HTTP only when it belongs to this exact session object and FFmpeg timeline.
+// The opaque incarnation prevents a delayed proxy acknowledgement from matching
+// a reconstructed session whose numeric generation restarted at zero.
+func (s *TranscodeSession) ReportSegmentDownloadedForGenerationToken(segNum int, generationToken string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if generationToken == "" || generationToken != s.segmentGenerationTokenLocked() {
+		return
+	}
+	s.reportSegmentDownloadedLocked(segNum)
+}
+
+func (s *TranscodeSession) segmentGenerationTokenLocked() string {
+	return s.segmentIncarnation + ":" + strconv.FormatUint(s.segmentGeneration, 10)
+}
+
+func (s *TranscodeSession) reportSegmentDownloadedLocked(segNum int) {
 	if segNum > s.lastRequestedSegment {
 		s.lastRequestedSegment = segNum
 	}
+	if segNum > s.lastCompletedSegment {
+		s.lastCompletedSegment = segNum
+	}
+	s.scheduleSegmentPruneLocked()
 }
 
 // LastRequestedSegment returns the highest segment number downloaded by the client.

@@ -38,20 +38,42 @@ END;
 $$;
 -- +goose StatementEnd
 
-DROP TRIGGER IF EXISTS trg_episode_catalog_entries_search_fields ON public.episode_catalog_entries;
-CREATE TRIGGER trg_episode_catalog_entries_search_fields
-BEFORE INSERT OR UPDATE OF episode_id, title ON public.episode_catalog_entries
-FOR EACH ROW EXECUTE FUNCTION public.set_episode_catalog_entry_search_fields();
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'trg_episode_catalog_entries_search_fields'
+          AND tgrelid = 'public.episode_catalog_entries'::regclass
+          AND NOT tgisinternal
+    ) THEN
+        EXECUTE 'CREATE TRIGGER trg_episode_catalog_entries_search_fields BEFORE INSERT OR UPDATE OF episode_id, title ON public.episode_catalog_entries FOR EACH ROW EXECUTE FUNCTION public.set_episode_catalog_entry_search_fields()';
+    END IF;
+END;
+$$;
+-- +goose StatementEnd
 
--- Migration 142 refreshes episode_catalog_entries when searchable episode
--- metadata changes. Include overview in that existing trigger so editing an
--- episode description rewrites the stored overview vector as well; without
--- this, overview search stays stale until another episode field changes.
-DROP TRIGGER IF EXISTS trg_episode_catalog_entries_episodes ON public.episodes;
-CREATE TRIGGER trg_episode_catalog_entries_episodes
-AFTER INSERT OR UPDATE OF content_id, series_id, title, episode_number, air_date, runtime, rating_imdb, rating_tmdb, still_path, still_thumbhash, overview, created_at OR DELETE
-ON public.episodes
-FOR EACH ROW EXECUTE FUNCTION public.episode_catalog_entries_episodes_trigger();
+-- Migration 142's trigger already refreshes episode_catalog_entries for all
+-- fields except overview. Keep that live trigger in place and add the missing
+-- event separately: this migration must remain non-transactional for the
+-- concurrent indexes below, so replacing the existing trigger would open a
+-- committed write gap between DROP TRIGGER and CREATE TRIGGER.
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'trg_episode_catalog_entries_episodes_overview'
+          AND tgrelid = 'public.episodes'::regclass
+          AND NOT tgisinternal
+    ) THEN
+        EXECUTE 'CREATE TRIGGER trg_episode_catalog_entries_episodes_overview AFTER UPDATE OF overview ON public.episodes FOR EACH ROW EXECUTE FUNCTION public.episode_catalog_entries_episodes_trigger()';
+    END IF;
+END;
+$$;
+-- +goose StatementEnd
 
 UPDATE public.episode_catalog_entries ece
 SET
@@ -120,13 +142,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_episode_catalog_entries_search_episo
     ON public.episode_catalog_entries (episode_id, media_folder_id);
 
 -- +goose Down
--- Restore migration 142's original refresh set when the stored overview search
--- document is removed.
-DROP TRIGGER IF EXISTS trg_episode_catalog_entries_episodes ON public.episodes;
-CREATE TRIGGER trg_episode_catalog_entries_episodes
-AFTER INSERT OR UPDATE OF content_id, series_id, title, episode_number, air_date, runtime, rating_imdb, rating_tmdb, still_path, still_thumbhash, created_at OR DELETE
-ON public.episodes
-FOR EACH ROW EXECUTE FUNCTION public.episode_catalog_entries_episodes_trigger();
+DROP TRIGGER IF EXISTS trg_episode_catalog_entries_episodes_overview ON public.episodes;
 
 DROP INDEX CONCURRENTLY IF EXISTS public.idx_episode_catalog_entries_search_episode;
 DROP INDEX CONCURRENTLY IF EXISTS public.idx_episode_catalog_entries_search_overview;

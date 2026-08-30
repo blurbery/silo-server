@@ -1518,6 +1518,7 @@ func (r *ItemRepository) execSearchBlock(ctx context.Context, q searchQuerier, d
 //	$2               titlePrefixTsQuery (always)
 //	itemType placeholders, allowed/disabled libraries, MaxContentRating
 //	parsed.ExactTitleHint
+//	parsed.NormalizedText (leading-short title lookups only)
 //	parsed.Year (or NULL)
 //	parsed.Phrase
 //	limit, offset

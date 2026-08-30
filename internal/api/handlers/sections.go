@@ -377,7 +377,7 @@ func (h *SectionHandler) HandleDeleteSection(w http.ResponseWriter, r *http.Requ
 
 	existing, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "Section not found")
+		writeSectionDeleteError(w, err)
 		return
 	}
 	collectionID := strings.TrimSpace(sections.ParseCollectionConfig(existing.Config).LibraryCollectionID)
@@ -404,7 +404,7 @@ func (h *SectionHandler) HandleDeleteSection(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := h.repo.Delete(r.Context(), id); err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "Section not found")
+		writeSectionDeleteError(w, err)
 		return
 	}
 	collectionDeleted := h.deleteUnreferencedSectionManagedCollectionLocked(r.Context(), collectionID)
@@ -416,6 +416,14 @@ func (h *SectionHandler) HandleDeleteSection(w http.ResponseWriter, r *http.Requ
 		h.SortPreferenceCleaner.DeleteForCollection(r.Context(), userstore.CollectionKindLibrary, collectionID)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeSectionDeleteError(w http.ResponseWriter, err error) {
+	if errors.Is(err, sections.ErrSectionNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "Section not found")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete section")
 }
 
 // deleteUnreferencedSectionManagedCollectionLocked removes the collection

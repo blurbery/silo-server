@@ -155,6 +155,12 @@ func (r *ItemRepository) buildMixedSearchSQLFromParsed(
 	exactIdx := argIdx
 	args = append(args, parsed.ExactTitleHint)
 	argIdx++
+	titleLookupIdx := exactIdx
+	if leadingShortTitle {
+		titleLookupIdx = argIdx
+		args = append(args, parsed.NormalizedText)
+		argIdx++
+	}
 	var yearArg any
 	if parsed.Year != nil {
 		yearArg = *parsed.Year
@@ -172,7 +178,7 @@ func (r *ItemRepository) buildMixedSearchSQLFromParsed(
 		if exactShortTitle {
 			mediaMatch = fmt.Sprintf("(mi.title_normalized = $%d OR %s)", exactIdx, aliasCandidateArm)
 		} else if leadingShortTitle {
-			mediaMatch = fmt.Sprintf("(mi.title_normalized LIKE $%d || '%%' OR %s)", exactIdx, aliasCandidateArm)
+			mediaMatch = fmt.Sprintf("(mi.title_normalized LIKE $%d || '%%' OR %s)", titleLookupIdx, aliasCandidateArm)
 		}
 		mediaTitleConditions = append([]string{mediaMatch}, mediaConditions...)
 		if !narrowTitleLookup {
@@ -185,7 +191,7 @@ func (r *ItemRepository) buildMixedSearchSQLFromParsed(
 		if exactShortTitle {
 			episodeMatch = fmt.Sprintf("ece.search_title_normalized = $%d", exactIdx)
 		} else if leadingShortTitle {
-			episodeMatch = fmt.Sprintf("ece.search_title_normalized LIKE $%d || '%%'", exactIdx)
+			episodeMatch = fmt.Sprintf("ece.search_title_normalized LIKE $%d || '%%'", titleLookupIdx)
 		}
 		episodeTitleConditions = append([]string{episodeMatch}, episodeConditions...)
 		if !narrowTitleLookup {
@@ -248,7 +254,7 @@ func (r *ItemRepository) buildMixedSearchSQLFromParsed(
 
 	innerCTEs := make([]string, 0, 2)
 	if includeMediaItems {
-		innerCTEs = append(innerCTEs, buildMixedSearchAliasScoresCTE(exactIdx, exactShortTitle, leadingShortTitle))
+		innerCTEs = append(innerCTEs, buildMixedSearchAliasScoresCTE(exactIdx, titleLookupIdx, exactShortTitle, leadingShortTitle))
 	}
 	titleScoredBody := strings.Join(titleBranches, "\nUNION ALL\n")
 	var scoredBody string
@@ -367,13 +373,13 @@ func searchOverviewMatchCondition(overviewVector string) string {
 // index once per media candidate when PostgreSQL failed to parameterize them.
 // On large alias catalogs that turned a selective search into millions of
 // index-entry visits and pushed the plan over the JIT threshold.
-func buildMixedSearchAliasScoresCTE(exactIdx int, exactShortTitle, leadingShortTitle bool) string {
+func buildMixedSearchAliasScoresCTE(exactIdx, titleLookupIdx int, exactShortTitle, leadingShortTitle bool) string {
 	aliasVector := `to_tsvector('simple', mia.normalized_title)`
 	weightedAliasVector := `setweight(to_tsvector('simple', mia.normalized_title), 'A')`
 	prefixQuery := `to_tsquery('simple', $2)`
 	matchCondition := fmt.Sprintf("mia.normalized_title = $%d", exactIdx)
 	if leadingShortTitle {
-		matchCondition = fmt.Sprintf("mia.normalized_title LIKE $%d || '%%'", exactIdx)
+		matchCondition = fmt.Sprintf("mia.normalized_title LIKE $%d || '%%'", titleLookupIdx)
 	} else if !exactShortTitle {
 		matchCondition = fmt.Sprintf("$2 <> '' AND %s @@ %s", aliasVector, prefixQuery)
 	}

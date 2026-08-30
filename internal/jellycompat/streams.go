@@ -21,6 +21,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Silo-Server/silo-server/internal/httpstream"
 	"github.com/Silo-Server/silo-server/internal/models"
 	"github.com/Silo-Server/silo-server/internal/nodepool"
 	"github.com/Silo-Server/silo-server/internal/playback"
@@ -36,10 +37,13 @@ const (
 	compatSegmentDuration    = 2
 	transcodeUnavailableCode = "TranscodeUnavailable"
 	transcodeUnsupportedCode = "TranscodeUnsupported"
+	compatHLSPathSegment     = "hls"
 	compatAudioV2PathSegment = "audio-v2"
+	compatRemuxV1PathSegment = "remux-v1"
 )
 
 type compatAudioV2RouteContextKey struct{}
+type compatRemuxV1RouteContextKey struct{}
 
 func withCompatAudioV2Route(r *http.Request) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), compatAudioV2RouteContextKey{}, true))
@@ -50,8 +54,25 @@ func isCompatAudioV2Route(r *http.Request) bool {
 	return marked
 }
 
+func withCompatRemuxV1Route(r *http.Request) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), compatRemuxV1RouteContextKey{}, true))
+}
+
+func isCompatRemuxV1Route(r *http.Request) bool {
+	marked, _ := r.Context().Value(compatRemuxV1RouteContextKey{}).(bool)
+	return marked
+}
+
 func validateCompatAudioV2Route(w http.ResponseWriter, r *http.Request, required bool) bool {
 	if isCompatAudioV2Route(r) == required {
+		return true
+	}
+	writeError(w, http.StatusNotFound, "NotFound", "Playback route not found")
+	return false
+}
+
+func validateCompatRemuxV1Route(w http.ResponseWriter, r *http.Request, required bool) bool {
+	if isCompatRemuxV1Route(r) == required {
 		return true
 	}
 	writeError(w, http.StatusNotFound, "NotFound", "Playback route not found")
@@ -82,12 +103,47 @@ func compatProgressiveRequiresAudioV2(source PlaybackMediaSource, method string)
 }
 
 func compatHLSRequiresAudioV2(source PlaybackMediaSource) bool {
-	// Every compatibility HLS recipe targets AAC, including a full video
-	// transcode where TranscodeAudio is false. Version the fixed URL when any
-	// selectable track can need v2: audio selection changes do not mint a new
-	// playlist URL, so selected-track-only routing would permit a later switch
-	// to cross back onto an old API pod.
-	return compatSourceHasSurroundAudio(source)
+	// Every compatibility HLS encode targets AAC, including a full video
+	// transcode where TranscodeAudio is false. Audio-copy remuxes use their own
+	// route version. Version AAC recipes when any selectable track can need v2:
+	// audio selection changes do not mint a new playlist URL, so selected-track-
+	// only routing would permit a later switch to cross back onto an old API pod.
+	return compatHLSTranscodesAudio(source) && compatSourceHasSurroundAudio(source)
+}
+
+func compatHLSUsesAudioCopyV1(source PlaybackMediaSource) bool {
+	return source.HLSRemux && !source.TranscodeAudio
+}
+
+func compatHLSRoutePathSegment(source PlaybackMediaSource) string {
+	if compatHLSUsesAudioCopyV1(source) {
+		return compatRemuxV1PathSegment
+	}
+	if compatHLSRequiresAudioV2(source) {
+		return compatAudioV2PathSegment
+	}
+	return ""
+}
+
+func compatHLSCopiesVideo(source PlaybackMediaSource) bool {
+	// TranscodeAudio implied the legacy fMP4/video-copy route before HLSRemux
+	// was stored explicitly. Keep that interpretation for durable sessions
+	// negotiated by an older process during a rolling deployment.
+	return source.HLSRemux || source.TranscodeAudio
+}
+
+func compatHLSTranscodesAudio(source PlaybackMediaSource) bool {
+	if compatHLSCopiesVideo(source) {
+		return source.TranscodeAudio
+	}
+	return true
+}
+
+func compatHLSRecipeSourceAudioChannels(source PlaybackMediaSource) int {
+	if !compatHLSTranscodesAudio(source) {
+		return 0
+	}
+	return compatSourceAudioChannels(source)
 }
 
 func compatSourceHasSurroundAudio(source PlaybackMediaSource) bool {
@@ -103,7 +159,7 @@ func compatRecipeMatchesSource(recipe *playback.RecipeCard, source PlaybackMedia
 	return recipe != nil &&
 		recipe.MediaFileID == source.FileID &&
 		recipe.AudioTrackIndex == compatAudioTrackIndexOrDefault(source) &&
-		recipe.SourceAudioChannels == compatSourceAudioChannels(source)
+		recipe.SourceAudioChannels == compatHLSRecipeSourceAudioChannels(source)
 }
 
 // Versioned wrappers put a literal path segment in every byte URL whose
@@ -126,6 +182,18 @@ func (h *PlaybackHandler) HandleAudioV2HLSSegment(w http.ResponseWriter, r *http
 	h.HandleHLSSegment(w, withCompatAudioV2Route(r))
 }
 
+func (h *PlaybackHandler) HandleRemuxV1MasterManifest(w http.ResponseWriter, r *http.Request) {
+	h.HandleMasterManifest(w, withCompatRemuxV1Route(r))
+}
+
+func (h *PlaybackHandler) HandleRemuxV1HLSManifest(w http.ResponseWriter, r *http.Request) {
+	h.HandleHLSManifest(w, withCompatRemuxV1Route(r))
+}
+
+func (h *PlaybackHandler) HandleRemuxV1HLSSegment(w http.ResponseWriter, r *http.Request) {
+	h.HandleHLSSegment(w, withCompatRemuxV1Route(r))
+}
+
 // errUpstreamReplaced signals that a concurrent request attached a different
 // upstream session to the play session while this one was being created.
 var errUpstreamReplaced = errors.New("upstream session replaced concurrently")
@@ -141,6 +209,12 @@ var errAudioDownmixCapabilityUnavailable = errors.New("audio downmix capability 
 // moved on. The client may retry through the master route, which builds and
 // persists a fresh recipe from the frozen source.
 var errCompatRecipeSourceMismatch = errors.New("transcode recipe does not match the selected media source")
+
+// errCompatHLSRemuxAudioUnsupported prevents an audio-copy playlist from
+// switching to a track the negotiated device profile cannot carry in fMP4.
+// The playlist route freezes copy semantics, so changing to AAC encoding would
+// require a new PlaybackInfo negotiation and a differently versioned URL.
+var errCompatHLSRemuxAudioUnsupported = errors.New("selected audio stream is not supported by the negotiated HLS remux")
 
 // requireLocalAudioDownmixCapability gates only recipes whose bytes use the
 // versioned surround-to-stereo boost. Zero is the normalized legacy value for
@@ -402,6 +476,9 @@ func (h *PlaybackHandler) HandleMasterManifest(w http.ResponseWriter, r *http.Re
 	if !validateCompatAudioV2Route(w, r, compatHLSRequiresAudioV2(*source)) {
 		return
 	}
+	if !validateCompatRemuxV1Route(w, r, compatHLSUsesAudioCopyV1(*source)) {
+		return
+	}
 	// Attach BEFORE ensureUpstreamPlayback below: this route can start a
 	// transcode before it writes a byte, which is the whole reason §4.2 enrolls
 	// manifest routes. A cut has to be able to act here, not after the side
@@ -439,7 +516,7 @@ func (h *PlaybackHandler) HandleMasterManifest(w http.ResponseWriter, r *http.Re
 				writeError(w, http.StatusNotFound, "NotFound", "Media file not found")
 				return
 			}
-			plan, planErr := h.planCompatTranscodeSession(r.Context(), upstreamSession, file, source.Version.Bitrate, !source.TranscodeAudio, compatSourceAudioChannels(*source))
+			plan, planErr := h.planCompatTranscodeSession(r.Context(), upstreamSession, file, source.Version.Bitrate, !compatHLSCopiesVideo(*source), compatHLSRecipeSourceAudioChannels(*source))
 			if planErr != nil {
 				failRemoteStart()
 				if errors.Is(planErr, errToneMapCapabilityUnavailable) {
@@ -563,12 +640,12 @@ func (h *PlaybackHandler) HandleMasterManifest(w http.ResponseWriter, r *http.Re
 	segDuration := h.compatSegmentDuration()
 
 	if manifest == nil {
-		manifest = generateFullManifest(source.Version.Duration, segDuration, source.TranscodeAudio, playSession.InitialSeekSeconds)
+		manifest = generateFullManifest(source.Version.Duration, segDuration, compatHLSCopiesVideo(*source), playSession.InitialSeekSeconds)
 	}
 
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(rewriteManifest(manifest, playSession.RouteItemID, playSession.ID, source.ID, compatHLSRequiresAudioV2(*source)))
+	_, _ = w.Write(rewriteManifest(manifest, playSession.RouteItemID, playSession.ID, source.ID, compatHLSRoutePathSegment(*source)))
 }
 
 func writeCompatTranscodeError(w http.ResponseWriter, err error) {
@@ -632,6 +709,9 @@ func (h *PlaybackHandler) HandleHLSManifest(w http.ResponseWriter, r *http.Reque
 	if !validateCompatAudioV2Route(w, r, compatHLSRequiresAudioV2(*source)) {
 		return
 	}
+	if !validateCompatRemuxV1Route(w, r, compatHLSUsesAudioCopyV1(*source)) {
+		return
+	}
 	// Before ensureTranscodeManifest, for the same reason as the master manifest.
 	attachCompatStream(r.Context(), session, playSession, source.FileID)
 
@@ -652,11 +732,11 @@ func (h *PlaybackHandler) HandleHLSManifest(w http.ResponseWriter, r *http.Reque
 	segDuration := h.compatSegmentDuration()
 
 	if manifest == nil {
-		manifest = generateFullManifest(source.Version.Duration, segDuration, source.TranscodeAudio, playSession.InitialSeekSeconds)
+		manifest = generateFullManifest(source.Version.Duration, segDuration, compatHLSCopiesVideo(*source), playSession.InitialSeekSeconds)
 	}
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(rewriteManifest(manifest, playSession.RouteItemID, playSession.ID, source.ID, compatHLSRequiresAudioV2(*source)))
+	_, _ = w.Write(rewriteManifest(manifest, playSession.RouteItemID, playSession.ID, source.ID, compatHLSRoutePathSegment(*source)))
 }
 
 // HandleHLSSegment proxies HLS segment requests through compat-owned routes.
@@ -687,6 +767,9 @@ func (h *PlaybackHandler) HandleHLSSegment(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !validateCompatAudioV2Route(w, r, compatHLSRequiresAudioV2(*source)) {
+		return
+	}
+	if !validateCompatRemuxV1Route(w, r, compatHLSUsesAudioCopyV1(*source)) {
 		return
 	}
 	segmentSourceFileID := source.FileID
@@ -743,8 +826,8 @@ func (h *PlaybackHandler) HandleHLSSegment(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	segmentFile := name + "." + ext
-	segmentPath, err := transcodeSession.GetSegment(segmentFile)
+	segmentName := name + "." + ext
+	segmentLease, err := transcodeSession.OpenSegment(segmentName)
 	if err != nil && errors.Is(err, playback.ErrSegmentNotFound) {
 		segNum, parseErr := playback.ParseSegmentNumber(name)
 		if parseErr == nil {
@@ -755,7 +838,7 @@ func (h *PlaybackHandler) HandleHLSSegment(w http.ResponseWriter, r *http.Reques
 				lastProducedAgeMS = now.Sub(decision.Progress.LastProducedAt).Milliseconds()
 			}
 			slog.InfoContext(r.Context(), "transcode segment missing", "component", "jellycompat",
-				"segment", segmentFile,
+				"segment", segmentName,
 				"requested_segment", segNum,
 				"produced_head", decision.Progress.ProducedHead,
 				"last_requested_segment", decision.Progress.LastRequestedSegment,
@@ -769,7 +852,7 @@ func (h *PlaybackHandler) HandleHLSSegment(w http.ResponseWriter, r *http.Reques
 			)
 			if decision.Wait {
 				slog.InfoContext(r.Context(), "transcode segment wait", "component", "jellycompat",
-					"segment", segmentFile,
+					"segment", segmentName,
 					"requested_segment", segNum,
 					"produced_head", decision.Progress.ProducedHead,
 					"last_requested_segment", decision.Progress.LastRequestedSegment,
@@ -781,10 +864,10 @@ func (h *PlaybackHandler) HandleHLSSegment(w http.ResponseWriter, r *http.Reques
 					"session", playSession.UpstreamSessionID,
 					"playback_session_id", playSession.UpstreamSessionID,
 				)
-				segmentPath, err = transcodeSession.WaitForSegment(segmentFile, decision.WaitTimeout)
+				segmentLease, err = transcodeSession.WaitForOpenSegment(segmentName, decision.WaitTimeout)
 				if err != nil && errors.Is(err, playback.ErrSegmentNotFound) {
 					slog.InfoContext(r.Context(), "transcode segment wait timeout", "component", "jellycompat",
-						"segment", segmentFile,
+						"segment", segmentName,
 						"requested_segment", segNum,
 						"produced_head", decision.Progress.ProducedHead,
 						"last_requested_segment", decision.Progress.LastRequestedSegment,
@@ -804,7 +887,7 @@ func (h *PlaybackHandler) HandleHLSSegment(w http.ResponseWriter, r *http.Reques
 				if seekErr != nil && !errors.Is(seekErr, playback.ErrManifestNotReady) {
 					slog.ErrorContext(r.Context(), "resolve transcode seek target", "component", "jellycompat",
 						"error", seekErr,
-						"segment", segmentFile,
+						"segment", segmentName,
 						"play_session", playSessionID,
 						"session", playSession.UpstreamSessionID,
 						"playback_session_id", playSession.UpstreamSessionID,
@@ -823,7 +906,7 @@ func (h *PlaybackHandler) HandleHLSSegment(w http.ResponseWriter, r *http.Reques
 
 				if ok {
 					slog.InfoContext(r.Context(), "transcode seek restart", "component", "jellycompat",
-						"segment", segmentFile,
+						"segment", segmentName,
 						"requested_segment", segNum,
 						"produced_head", decision.Progress.ProducedHead,
 						"last_requested_segment", decision.Progress.LastRequestedSegment,
@@ -844,7 +927,7 @@ func (h *PlaybackHandler) HandleHLSSegment(w http.ResponseWriter, r *http.Reques
 						seekSeconds,
 						segNum,
 					); restartErr == nil {
-						segmentPath, err = transcodeSession.WaitForSegment(segmentFile, 30*time.Second)
+						segmentLease, err = transcodeSession.WaitForOpenSegment(segmentName, 30*time.Second)
 					} else {
 						err = restartErr
 					}
@@ -853,7 +936,7 @@ func (h *PlaybackHandler) HandleHLSSegment(w http.ResponseWriter, r *http.Reques
 		} else if transcodeSession.IsRunning() {
 			// Non-numbered segment (e.g. init.mp4 for fMP4 HLS).
 			// Wait briefly — the init segment is written almost immediately.
-			segmentPath, err = transcodeSession.WaitForSegment(segmentFile, 10*time.Second)
+			segmentLease, err = transcodeSession.WaitForOpenSegment(segmentName, 10*time.Second)
 		}
 	}
 	if err != nil {
@@ -862,11 +945,15 @@ func (h *PlaybackHandler) HandleHLSSegment(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if segNum, parseErr := playback.ParseSegmentNumber(name); parseErr == nil {
-		transcodeSession.ReportSegmentDownloaded(segNum)
+	defer func() { _ = segmentLease.Close() }()
+	sw := httpstream.NewRollingDeadlineWriter(w)
+	http.ServeContent(sw, r, segmentLease.Info.Name(), segmentLease.Info.ModTime(), segmentLease.File)
+	if r.Method == http.MethodGet &&
+		sw.CompletedFullResponse(segmentLease.Info.Size()) {
+		if segNum, parseErr := playback.ParseSegmentNumber(name); parseErr == nil {
+			transcodeSession.ReportSegmentDownloadedForGeneration(segNum, segmentLease.Generation)
+		}
 	}
-
-	http.ServeFile(w, r, segmentPath)
 }
 
 func (h *PlaybackHandler) prepareCompatSegmentRecipe(
@@ -903,7 +990,7 @@ func (h *PlaybackHandler) prepareCompatSegmentRecipe(
 		}
 	}
 	if playSession.Recipe.TranscodeNodeURL == "" {
-		if err := h.requireLocalAudioDownmixCapability(ctx, compatSourceAudioChannels(source)); err != nil {
+		if err := h.requireLocalAudioDownmixCapability(ctx, compatHLSRecipeSourceAudioChannels(source)); err != nil {
 			return nil, err
 		}
 	}
@@ -1305,6 +1392,7 @@ func (h *PlaybackHandler) cleanupPlaySession(
 const (
 	compatTargetVideoCodec = "h264"
 	compatTargetAudioCodec = "aac"
+	compatCopyCodec        = "copy"
 )
 
 const (
@@ -2031,7 +2119,7 @@ func (h *PlaybackHandler) ensureTranscodeSessionWithToneMapMode(
 	source PlaybackMediaSource,
 	requiredToneMapMode tonemap.Mode,
 ) (*playback.TranscodeSession, error) {
-	sourceAudioChannels := compatSourceAudioChannels(source)
+	sourceAudioChannels := compatHLSRecipeSourceAudioChannels(source)
 	audioTrackIndex := compatAudioTrackIndexOrDefault(source)
 	if existing := h.tm.GetTranscodeSession(upstreamSessionID); existing != nil && compatTranscodeSessionUsesToneMapMode(existing, requiredToneMapMode) {
 		if compatLiveTranscodeMatchesAudioSource(existing, source) {
@@ -2068,7 +2156,7 @@ func (h *PlaybackHandler) ensureTranscodeSessionWithToneMapMode(
 			}
 		}
 	}
-	if !source.TranscodeAudio && is4KResolution(source.Version.Resolution) && !h.allow4KVideoTranscode(ctx) {
+	if !compatHLSCopiesVideo(source) && is4KResolution(source.Version.Resolution) && !h.allow4KVideoTranscode(ctx) {
 		return nil, errTranscode4KDisallowed
 	}
 	if h.fileResolver == nil {
@@ -2112,16 +2200,23 @@ func (h *PlaybackHandler) ensureTranscodeSessionWithToneMapMode(
 		TotalDuration:       float64(source.Version.Duration),
 		FastStart:           true,
 	}
+	opts.SegmentRetentionSeconds = h.segmentRetentionSeconds()
 	if sourceAudioChannels > 0 {
 		opts.TargetAudioChannels = 2
 	}
-	if source.TranscodeAudio {
-		opts.TargetCodecVideo = "copy"
+	if compatHLSCopiesVideo(source) {
+		opts.TargetCodecVideo = compatCopyCodec
 		opts.VideoSampleEntry = playback.VideoSampleEntryForDVCopy(file.PrimaryDVProfile())
+		if opts.VideoSampleEntry == playback.VideoSampleEntryDVH1 {
+			opts.RemuxDVMode = playback.RemuxDVPreserveV3
+		}
+	}
+	if !compatHLSTranscodesAudio(source) {
+		opts.TargetCodecAudio = compatCopyCodec
 	}
 	var toneMapCapabilities tonemap.Capabilities
 	autoVideoToolboxBitrate := 0
-	if !source.TranscodeAudio {
+	if !compatHLSCopiesVideo(source) {
 		metadata := tonemap.MetadataForFile(file)
 		if metadata.DynamicRange != "" && metadata.DynamicRange != playback.DynamicRangeSDRV3 {
 			var capabilityErr error
@@ -2285,7 +2380,7 @@ func compatLiveTranscodeMatchesAudioSource(transcodeSession *playback.TranscodeS
 	}
 	opts := transcodeSession.Opts()
 	return opts.AudioTrackIndex == compatAudioTrackIndexOrDefault(source) &&
-		opts.SourceAudioChannels == compatSourceAudioChannels(source)
+		opts.SourceAudioChannels == compatHLSRecipeSourceAudioChannels(source)
 }
 
 func shouldGenerateCompatFullManifest(source PlaybackMediaSource, segmentDuration int) bool {
@@ -2362,8 +2457,23 @@ func selectedCompatAudioSource(session *PlaybackSession, mediaSourceID string, a
 	if !isValidCompatAudioStreamIndex(source.Version, audioStreamIndex) {
 		return nil, fmt.Errorf("invalid compat audio stream index")
 	}
+	if !compatHLSRemuxSupportsAudioStream(*source, audioStreamIndex) {
+		return nil, errCompatHLSRemuxAudioUnsupported
+	}
 	source.SelectedAudioStreamIndex = intPtr(audioStreamIndex)
 	return source, nil
+}
+
+func compatHLSRemuxSupportsAudioStream(source PlaybackMediaSource, audioStreamIndex int) bool {
+	if !compatHLSUsesAudioCopyV1(source) {
+		return true
+	}
+	for _, supportedStreamIndex := range source.HLSRemuxAudioStreamIndexes {
+		if supportedStreamIndex == audioStreamIndex {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *PlaybackHandler) preflightCompatAudioSelection(ctx context.Context, playSession *PlaybackSession, source PlaybackMediaSource) error {
@@ -2375,7 +2485,7 @@ func (h *PlaybackHandler) preflightCompatAudioSelection(ctx context.Context, pla
 		// recipe. The API-local capability only governs an integrated process.
 		return nil
 	}
-	return h.requireLocalAudioDownmixCapability(ctx, compatSourceAudioChannels(source))
+	return h.requireLocalAudioDownmixCapability(ctx, compatHLSRecipeSourceAudioChannels(source))
 }
 
 func (h *PlaybackHandler) applyCompatAudioSelection(
@@ -2538,7 +2648,7 @@ func (h *PlaybackHandler) restartCompatTranscodeForAudioSelection(
 	}
 
 	if transcodeSession := h.tm.GetTranscodeSession(playSession.UpstreamSessionID); transcodeSession != nil {
-		sourceAudioChannels := compatSourceAudioChannels(source)
+		sourceAudioChannels := compatHLSRecipeSourceAudioChannels(source)
 		if err := h.requireLocalAudioDownmixCapability(ctx, sourceAudioChannels); err != nil {
 			return false, err
 		}
@@ -2737,7 +2847,7 @@ func compatPlayMethod(method string) playback.PlayMethod {
 	}
 }
 
-func rewriteManifest(manifest []byte, routeItemID, playlistID, mediaSourceID string, audioV2 bool) []byte {
+func rewriteManifest(manifest []byte, routeItemID, playlistID, mediaSourceID, routePathSegment string) []byte {
 	var out strings.Builder
 	scanner := bufio.NewScanner(strings.NewReader(string(manifest)))
 	for scanner.Scan() {
@@ -2746,9 +2856,9 @@ func rewriteManifest(manifest []byte, routeItemID, playlistID, mediaSourceID str
 		case strings.HasPrefix(line, "#EXT-X-MAP:URI=\""):
 			prefix := "#EXT-X-MAP:URI=\""
 			uri := strings.TrimSuffix(strings.TrimPrefix(line, prefix), "\"")
-			line = prefix + buildSegmentProxyPath(routeItemID, playlistID, mediaSourceID, uri, audioV2) + "\""
+			line = prefix + buildSegmentProxyPath(routeItemID, playlistID, mediaSourceID, uri, routePathSegment) + "\""
 		case line != "" && !strings.HasPrefix(line, "#"):
-			line = buildSegmentProxyPath(routeItemID, playlistID, mediaSourceID, line, audioV2)
+			line = buildSegmentProxyPath(routeItemID, playlistID, mediaSourceID, line, routePathSegment)
 		}
 		out.WriteString(line)
 		out.WriteByte('\n')
@@ -2756,7 +2866,7 @@ func rewriteManifest(manifest []byte, routeItemID, playlistID, mediaSourceID str
 	return []byte(out.String())
 }
 
-func buildSegmentProxyPath(routeItemID, playlistID, mediaSourceID, current string, audioV2 bool) string {
+func buildSegmentProxyPath(routeItemID, playlistID, mediaSourceID, current, routePathSegment string) string {
 	base := path.Base(current)
 	query := url.Values{}
 	if parsed, err := url.Parse(current); err == nil {
@@ -2769,8 +2879,8 @@ func buildSegmentProxyPath(routeItemID, playlistID, mediaSourceID, current strin
 	}
 	qs := "?" + query.Encode()
 	basePath := fmt.Sprintf("/Videos/%s", routeItemID)
-	if audioV2 {
-		basePath += "/" + compatAudioV2PathSegment
+	if routePathSegment != "" {
+		basePath += "/" + routePathSegment
 	}
 	if base == "stream.m3u8" {
 		return fmt.Sprintf("%s/hls/%s/stream.m3u8%s", basePath, playlistID, qs)

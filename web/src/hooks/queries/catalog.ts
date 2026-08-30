@@ -153,8 +153,10 @@ export function useCatalogWindow(
   const remainingPageParams = catalogParamsForKey(state, limit, false);
   const visibleRange = options.visibleRange ?? [0, limit - 1];
   const bufferPages = state.source === "query" && state.q ? 0 : 1;
-  const startPage = Math.max(0, Math.floor(visibleRange[0] / limit) - bufferPages);
-  const endPage = Math.floor(visibleRange[1] / limit) + bufferPages;
+  const visibleStartPage = Math.max(0, Math.floor(visibleRange[0] / limit));
+  const visibleEndPage = Math.floor(visibleRange[1] / limit);
+  const startPage = Math.max(0, visibleStartPage - bufferPages);
+  const endPage = visibleEndPage + bufferPages;
 
   // Fetch page 0 separately so its snapshot timestamp is available
   // synchronously for subsequent page queries, preventing duplicate items
@@ -208,8 +210,16 @@ export function useCatalogWindow(
 
   const title = page0Result.data?.title ?? state.title;
   const isLoading = page0Result.isLoading;
-  const failedRemainingResults = remainingResults.filter((result) => result.isError);
-  const remainingError = failedRemainingResults[0]?.error;
+  const failedVisibleResults = remainingResults.filter((result, queryIndex) => {
+    const pageIndex = remainingPageIndices[queryIndex];
+    return (
+      pageIndex !== undefined &&
+      pageIndex >= visibleStartPage &&
+      pageIndex <= visibleEndPage &&
+      result.isError
+    );
+  });
+  const remainingError = failedVisibleResults[0]?.error;
 
   const pageResults = useMemo(() => {
     const map = new Map<number, CatalogResponse>();
@@ -333,7 +343,7 @@ export function useCatalogWindow(
       effectiveSort: page0Result.data?.effective_sort,
     },
     isLoading,
-    isError: page0Result.isError || failedRemainingResults.length > 0,
+    isError: page0Result.isError || failedVisibleResults.length > 0,
     isPlaceholderData: page0Result.isPlaceholderData,
     error: page0Result.error ?? remainingError,
     refetch: async () => {
@@ -342,7 +352,7 @@ export function useCatalogWindow(
       // missing from the grid and immediately recreates the same partial view.
       await Promise.all([
         page0Result.refetch(),
-        ...failedRemainingResults.map((result) => result.refetch()),
+        ...failedVisibleResults.map((result) => result.refetch()),
       ]);
     },
   };

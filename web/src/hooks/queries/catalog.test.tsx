@@ -185,6 +185,42 @@ describe("useCatalogWindow", () => {
     expect(failedPageRefetch).toHaveBeenCalledOnce();
   });
 
+  it("keeps a successful visible page when only its off-screen buffer fails", async () => {
+    const state = createCatalogSearchState("favorites");
+    const limit = 60;
+    const page0Refetch = vi.fn().mockResolvedValue(undefined);
+    const failedBufferRefetch = vi.fn().mockResolvedValue(undefined);
+
+    mocks.useQuery.mockReturnValue({
+      data: { ...makePage(0, limit), snapshot: "2026-01-01T00:00:00Z" },
+      isLoading: false,
+      isError: false,
+      isPlaceholderData: false,
+      error: null,
+      refetch: page0Refetch,
+    });
+    mocks.useQueries.mockReturnValue([
+      {
+        data: undefined,
+        isLoading: false,
+        isError: true,
+        error: new Error("buffer failed"),
+        refetch: failedBufferRefetch,
+      },
+    ]);
+
+    const { result } = renderHook(() =>
+      useCatalogWindow(state, { limit, visibleRange: [0, limit - 1] }),
+    );
+    expect(result.current.data.pages.get(0)).toHaveLength(limit);
+    expect(result.current.isError).toBe(false);
+    expect(result.current.error).toBeUndefined();
+
+    await result.current.refetch();
+    expect(page0Refetch).toHaveBeenCalledOnce();
+    expect(failedBufferRefetch).not.toHaveBeenCalled();
+  });
+
   it("estimates window size from has_more when total is omitted", () => {
     const state = createCatalogSearchState("query", { library_id: 7 });
     const limit = 60;

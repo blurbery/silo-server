@@ -19,7 +19,6 @@ func TestPostgresSearchExactTitleIndexesAreConcurrentAndRetrySafe(t *testing.T) 
 		"ADD COLUMN IF NOT EXISTS search_overview_vector tsvector",
 		"CREATE OR REPLACE FUNCTION public.set_episode_catalog_entry_search_fields()",
 		"CREATE TRIGGER trg_episode_catalog_entries_search_fields",
-		"still_thumbhash, overview, created_at OR DELETE",
 		"UPDATE public.episode_catalog_entries ece",
 		"CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_media_items_title_normalized_exact",
 		"ON public.media_items (title_normalized text_pattern_ops, content_id)",
@@ -39,7 +38,29 @@ func TestPostgresSearchExactTitleIndexesAreConcurrentAndRetrySafe(t *testing.T) 
 		}
 	}
 	downMarker := strings.Index(sql, "-- +goose Down")
-	if downMarker < 0 || !strings.Contains(sql[downMarker:], "still_thumbhash, created_at OR DELETE") {
-		t.Fatalf("migration down path does not restore the original episode refresh trigger:\n%s", sql)
+	if downMarker < 0 {
+		t.Fatalf("migration is missing its down marker:\n%s", sql)
+	}
+	upSQL := sql[:downMarker]
+	for _, forbidden := range []string{
+		"DROP TRIGGER IF EXISTS trg_episode_catalog_entries_search_fields ON public.episode_catalog_entries",
+		"DROP TRIGGER IF EXISTS trg_episode_catalog_entries_episodes ON public.episodes",
+	} {
+		if strings.Contains(upSQL, forbidden) {
+			t.Fatalf("migration must not run %q in its non-transactional up path:\n%s", forbidden, sql)
+		}
+	}
+	for _, required := range []string{
+		"CREATE TRIGGER trg_episode_catalog_entries_episodes_overview",
+		"AFTER UPDATE OF overview ON public.episodes",
+	} {
+		if !strings.Contains(upSQL, required) {
+			t.Fatalf("migration missing race-safe overview trigger clause %q:\n%s", required, sql)
+		}
+	}
+	downSQL := sql[downMarker:]
+	const overviewTriggerDrop = "DROP TRIGGER IF EXISTS trg_episode_catalog_entries_episodes_overview ON public.episodes"
+	if !strings.Contains(downSQL, overviewTriggerDrop) {
+		t.Fatalf("migration down path missing overview trigger cleanup %q:\n%s", overviewTriggerDrop, sql)
 	}
 }

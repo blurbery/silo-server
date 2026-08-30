@@ -13,8 +13,11 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-const cloudflareURLMode = "cloudflare_token"
-const chapterThumbnailSoftwareToneMapKey = "playback.chapter_thumbnail_software_tone_map_enabled"
+const (
+	cloudflareURLMode                  = "cloudflare_token"
+	playbackSegmentRetentionSettingKey = "playback.segment_retention_seconds"
+	chapterThumbnailSoftwareToneMapKey = "playback.chapter_thumbnail_software_tone_map_enabled"
+)
 
 // PlaybackTranscodeHardwareToneMapSettingKey and
 // PlaybackTranscodeSoftwareToneMapSettingKey are server-wide execution policy
@@ -84,6 +87,7 @@ var adminSettingDefaults = map[string]string{
 
 	"playback.ffmpeg_path":                     "",
 	playbackTranscodeDirSettingKey:             DefaultTranscodeDir,
+	playbackSegmentRetentionSettingKey:         "600",
 	"playback.hw_accel":                        "auto",
 	"playback.transcode_enabled":               "true",
 	PlaybackLocalTranscodeFallbackSettingKey:   "true",
@@ -349,6 +353,16 @@ func NormalizeAdminSetting(key, raw string) (string, error) {
 		return normalizeAdminInt(key, value, 1, 99)
 	case "transcode_throttle_seconds":
 		return normalizeAdminInt(key, value, 60, 86400)
+	case playbackSegmentRetentionSettingKey:
+		normalized, err := normalizeAdminInt(key, value, 0, 86400)
+		if err != nil {
+			return "", err
+		}
+		seconds, _ := strconv.Atoi(normalized)
+		if seconds != 0 && seconds < 120 {
+			return "", fmt.Errorf("%s must be 0 or between 120 and 86400", key)
+		}
+		return normalized, nil
 	case "ai.max_concurrent_jobs", "subtitle_ai.max_concurrent_jobs":
 		return normalizeAdminInt(key, value, 1, 1024)
 	case "subtitle_ai.batch_size":

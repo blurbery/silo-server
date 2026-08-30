@@ -132,7 +132,6 @@ func TestBuildRemuxArgsNormalizesAACAcrossSeekAnchors(t *testing.T) {
 			}
 		})
 	}
-
 	codecCopy := buildRemuxArgsWithAudioV3("/movie.mkv", "mp4", 600, false, 0, 0, false, false, 2, 2, 192, false)
 	if slices.Contains(codecCopy, "-af") {
 		t.Fatalf("codec-copy remux unexpectedly received an audio filter: %s", strings.Join(codecCopy, " "))

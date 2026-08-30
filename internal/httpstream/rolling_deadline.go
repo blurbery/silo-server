@@ -12,6 +12,7 @@ package httpstream
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -179,6 +180,26 @@ func (s *RollingDeadlineWriter) StatusCode() int {
 // underlying writer.
 func (s *RollingDeadlineWriter) BytesWritten() int64 {
 	return s.bytesWritten
+}
+
+// CompletedFullResponse reports whether the complete representation was
+// accepted by the transport without a write error. The request context is not
+// consulted because net/http may cancel it after the response reaches the
+// client but before the handler performs post-response accounting. ServeContent
+// returns 206 for a whole-file Range request such as "bytes=0-", so byte count
+// alone is not enough to distinguish that transfer from a partial range.
+func (s *RollingDeadlineWriter) CompletedFullResponse(fullSize int64) bool {
+	if fullSize <= 0 || s.bytesWritten != fullSize || s.firstWriteErr != nil {
+		return false
+	}
+	switch s.statusCode {
+	case http.StatusOK:
+		return true
+	case http.StatusPartialContent:
+		return s.Header().Get("Content-Range") == fmt.Sprintf("bytes 0-%d/%d", fullSize-1, fullSize)
+	default:
+		return false
+	}
 }
 
 // Outcome classifies the first write failure, or a canceled request when no

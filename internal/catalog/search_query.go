@@ -13,8 +13,8 @@ type parsedSearchQuery struct {
 	ExactTitleHint string
 	// NormalizedText is normalizeTitleForComparison(Text) computed once at parse
 	// time. Text already folds phrase + remainder together, so this is the full
-	// normalized query used by eligibleForFuzzy's token gate (which would
-	// otherwise re-normalize on every sparse search).
+	// normalized query used by the fuzzy gate and leading-title lookup (which
+	// would otherwise re-normalize on every sparse search).
 	NormalizedText string
 	Year           *int
 }
@@ -62,9 +62,14 @@ const fuzzyMinTokenLen = 4
 // uses the separate leading-title B-tree transition path below.
 const searchPrefixMinTokenLen = 4
 
-// eligibleForFuzzy reports whether a parsed query clears the min-token gate for
-// the trigram fuzzy title fallback.
+// eligibleForFuzzy reports whether a parsed query should use the trigram fuzzy
+// title fallback. A quoted phrase with a short remainder stays exclusively on
+// the indexed leading-title path so fuzzy matching cannot reintroduce results
+// that satisfy only the phrase and omit the remainder.
 func eligibleForFuzzy(parsed parsedSearchQuery) bool {
+	if parsed.Phrase != "" && useLeadingShortTitleSearch(parsed) {
+		return false
+	}
 	longest := 0
 	for _, tok := range strings.Fields(parsed.NormalizedText) {
 		if n := len([]rune(tok)); n > longest {

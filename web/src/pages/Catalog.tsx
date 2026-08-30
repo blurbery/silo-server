@@ -426,14 +426,19 @@ function CatalogResults({
           className="search-paint-surface flex flex-col items-center justify-center gap-3 rounded-2xl border px-4 py-16 text-center"
           role="alert"
         >
-          <p className="font-medium">Search stopped before it could finish.</p>
+          <p className="font-medium">
+            {isQuerySource
+              ? "Search stopped before it could finish."
+              : "Catalog stopped before it could finish."}
+          </p>
           <p className="text-muted-foreground max-w-md text-sm">
-            The server ended the lookup so it could not keep using CPU in the background. Try a more
-            specific title or retry once.
+            {isQuerySource
+              ? "The server ended the lookup so it could not keep using CPU in the background. Try a more specific title or retry once."
+              : "The server could not load every requested result. Retry the catalog once."}
           </p>
           <Button variant="outline" size="sm" onClick={() => void catalogQuery.refetch()}>
             <RefreshCw className="size-4" />
-            Retry search
+            {isQuerySource ? "Retry search" : "Retry catalog"}
           </Button>
         </div>
       ) : tmdbMayRescueLibrary ? null : (

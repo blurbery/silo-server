@@ -23,6 +23,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/chapterthumbs"
 	"github.com/Silo-Server/silo-server/internal/config"
 	"github.com/Silo-Server/silo-server/internal/downloadprepare"
+	"github.com/Silo-Server/silo-server/internal/httpstream"
 	"github.com/Silo-Server/silo-server/internal/nodeconfig"
 	"github.com/Silo-Server/silo-server/internal/nodemetrics"
 	"github.com/Silo-Server/silo-server/internal/nodesessions"
@@ -30,6 +31,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/streamtelemetry"
 	"github.com/Silo-Server/silo-server/internal/streamtoken"
 	"github.com/Silo-Server/silo-server/internal/tonemap"
+	"github.com/Silo-Server/silo-server/internal/transcodeproxy"
 )
 
 // TranscodeStartRequest is the JSON body for POST /transcode/start.
@@ -662,6 +664,7 @@ func (s *Server) Handler() http.Handler {
 		r.Delete("/transcode/{session_id}", s.handleStop)
 		r.Get("/transcode/{session_id}/master.m3u8", observeNode(s.telemetry, http.MethodGet, "/transcode/{session_id}/master.m3u8", s.handleManifest))
 		r.Get("/transcode/{session_id}/segment/{name}", observeNode(s.telemetry, http.MethodGet, "/transcode/{session_id}/segment/{name}", s.handleSegment))
+		r.Post("/transcode/{session_id}/segment/{name}/downloaded", s.handleSegmentDownloaded)
 		r.Post("/admin/force-reload", s.handleForceReload)
 		r.Post("/admin/reload-config", s.handleReloadConfig)
 		r.Post("/admin/reprobe-capabilities", s.handleReprobeCapabilities)
@@ -1317,6 +1320,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		TargetAudioBitrateKbps:     req.TargetAudioBitrateKbps,
 		TargetBitrateKbps:          req.TargetBitrateKbps,
 		SegmentDuration:            req.SegmentDuration,
+		SegmentRetentionSeconds:    cfg.Playback.SegmentRetentionSeconds,
 		FFmpegPath:                 cfg.Playback.FFmpegPath,
 		HWAccel:                    req.HWAccel,
 		// This node's configured device (or device list — StartTranscode
@@ -1630,6 +1634,7 @@ func (s *Server) spawnReconstruct(r *http.Request, sessionID string, requestedSe
 	// rebuild. Run as a transcode node, not integrated (card.TranscodeOpts defaults).
 	opts.HWAccel = cfg.Playback.HWAccel
 	opts.HWDevice = cfg.Playback.HWDevice
+	opts.SegmentRetentionSeconds = cfg.Playback.SegmentRetentionSeconds
 	opts.NodeType = "transcode"
 	opts.ExecutionMode = "transcode_node"
 	if toneMapRecipeRequested(opts) {
@@ -1905,7 +1910,7 @@ func (s *Server) handleSegment(w http.ResponseWriter, r *http.Request) {
 	}
 	s.attachTelemetrySession(r, sessionID)
 
-	segPath, err := session.GetSegment(name)
+	segmentLease, err := session.OpenSegment(name)
 	if err != nil && err == playback.ErrSegmentNotFound {
 		segNum, parseErr := playback.ParseSegmentNumber(name)
 		if parseErr == nil {
@@ -1940,7 +1945,7 @@ func (s *Server) handleSegment(w http.ResponseWriter, r *http.Request) {
 					"session", sessionID,
 					"playback_session_id", sessionID,
 				)
-				segPath, err = session.WaitForSegment(name, decision.WaitTimeout)
+				segmentLease, err = session.WaitForOpenSegment(name, decision.WaitTimeout)
 				if err != nil && err == playback.ErrSegmentNotFound {
 					slog.InfoContext(r.Context(), "transcode segment wait timeout", "component", "transcodenode",
 						"segment", name,
@@ -1985,7 +1990,7 @@ func (s *Server) handleSegment(w http.ResponseWriter, r *http.Request) {
 						seekSeconds,
 						segNum,
 					); restartErr == nil {
-						segPath, err = session.WaitForSegment(name, 30*time.Second)
+						segmentLease, err = session.WaitForOpenSegment(name, 30*time.Second)
 					} else {
 						err = restartErr
 					}
@@ -1997,7 +2002,7 @@ func (s *Server) handleSegment(w http.ResponseWriter, r *http.Request) {
 		} else if session.IsRunning() {
 			// Non-numbered segment (e.g., init.mp4 for fMP4 HLS).
 			// Wait briefly — the init segment is written almost immediately.
-			segPath, err = session.WaitForSegment(name, 10*time.Second)
+			segmentLease, err = session.WaitForOpenSegment(name, 10*time.Second)
 		}
 	}
 	if err != nil {
@@ -2011,7 +2016,46 @@ func (s *Server) handleSegment(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	w.Header().Set("Pragma", "no-cache")
-	http.ServeFile(w, r, segPath)
+	proxied := r.Header.Get(transcodeproxy.RequestHeader) == "1"
+	if proxied {
+		w.Header().Set(transcodeproxy.GenerationHeader, segmentLease.GenerationToken)
+	}
+	defer func() { _ = segmentLease.Close() }()
+	sw := httpstream.NewRollingDeadlineWriter(w)
+	http.ServeContent(sw, r, segmentLease.Info.Name(), segmentLease.Info.ModTime(), segmentLease.File)
+	if !proxied && r.Method == http.MethodGet &&
+		sw.CompletedFullResponse(segmentLease.Info.Size()) {
+		if segmentNumber, parseErr := playback.ParseSegmentNumber(name); parseErr == nil {
+			session.ReportSegmentDownloadedForGeneration(segmentNumber, segmentLease.Generation)
+		}
+	}
+}
+
+// handleSegmentDownloaded records completion only after the central API has
+// delivered the full segment to its downstream playback client. The generation
+// returned with the original segment response prevents a delayed acknowledgement
+// from advancing a replacement FFmpeg timeline.
+func (s *Server) handleSegmentDownloaded(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "session_id")
+	name := chi.URLParam(r, "name")
+	segmentNumber, err := playback.ParseSegmentNumber(name)
+	if err != nil {
+		http.Error(w, "invalid segment", http.StatusBadRequest)
+		return
+	}
+	generationToken := r.Header.Get(transcodeproxy.GenerationHeader)
+	if generationToken == "" {
+		http.Error(w, "invalid segment generation", http.StatusBadRequest)
+		return
+	}
+
+	session, ok := s.acquireSessionTouched(sessionID)
+	if !ok {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	session.ReportSegmentDownloadedForGenerationToken(segmentNumber, generationToken)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleReloadConfig re-reads this node's configuration and nothing else.

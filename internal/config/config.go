@@ -158,9 +158,10 @@ func (c MatcherConfig) TVSeriesRootQueueEnabled() bool {
 
 // PlaybackConfig holds transcoding and playback settings.
 type PlaybackConfig struct {
-	FFmpegPath   string `yaml:"ffmpeg_path"`
-	TranscodeDir string `yaml:"transcode_dir"`
-	HWAccel      string `yaml:"hw_accel"`
+	FFmpegPath              string `yaml:"ffmpeg_path"`
+	TranscodeDir            string `yaml:"transcode_dir"`
+	SegmentRetentionSeconds int    `yaml:"segment_retention_seconds"`
+	HWAccel                 string `yaml:"hw_accel"`
 	// HWDevice is the GPU render device for hardware transcodes. A single
 	// path pins every GPU workload to that device; a comma-separated list
 	// (e.g. "/dev/dri/renderD128,/dev/dri/renderD129") balances workloads
@@ -500,6 +501,7 @@ func setDefaults() *configRaw {
 		Playback: PlaybackConfig{
 			FFmpegPath:                   "",
 			TranscodeDir:                 DefaultTranscodeDir,
+			SegmentRetentionSeconds:      600,
 			HWAccel:                      "auto",
 			ChapterThumbnailWorkers:      1,
 			ChapterThumbnailExecution:    "local",

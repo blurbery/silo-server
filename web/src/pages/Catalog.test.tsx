@@ -641,6 +641,26 @@ describe("Catalog page", () => {
     expect(markup).not.toContain("Stale Result");
   });
 
+  it("uses catalog-specific copy for a non-search failure", () => {
+    appInitialEntries = ["/catalog?source=favorites"];
+    mockUseCatalogWindow.mockReturnValue({
+      data: { title: "Favorites", totalItems: 0, pages: new Map() },
+      isLoading: false,
+      isError: true,
+      refetch: vi.fn(),
+    });
+
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain("Catalog stopped before it could finish.");
+    expect(markup).toContain("Retry catalog");
+    expect(markup).not.toContain("Try a more specific title");
+  });
+
   it("applies the preferred media scope (default: video) when the URL has no type param", () => {
     renderToStaticMarkup(
       <QueryClientProvider client={new QueryClient()}>

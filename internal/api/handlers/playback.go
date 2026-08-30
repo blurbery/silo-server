@@ -36,6 +36,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/subtitles"
 	"github.com/Silo-Server/silo-server/internal/tonemap"
 	"github.com/Silo-Server/silo-server/internal/transcodenode"
+	"github.com/Silo-Server/silo-server/internal/transcodeproxy"
 	"github.com/Silo-Server/silo-server/internal/userstore"
 	"github.com/Silo-Server/silo-server/internal/watchstate"
 	"github.com/Silo-Server/silo-server/internal/watchsync"
@@ -316,10 +317,11 @@ func NewPlaybackHandler(sessionMgr SessionManagerInterface, opts ...FilePathReso
 	h.tm.Config = func() playback.TranscodeRuntimeConfig {
 		c := h.playbackConfig()
 		return playback.TranscodeRuntimeConfig{
-			TranscodeDir: c.TranscodeDir,
-			FFmpegPath:   c.FFmpegPath,
-			HWAccel:      c.HWAccel,
-			HWDevice:     c.HWDevice,
+			TranscodeDir:            c.TranscodeDir,
+			FFmpegPath:              c.FFmpegPath,
+			HWAccel:                 c.HWAccel,
+			HWDevice:                c.HWDevice,
+			SegmentRetentionSeconds: c.SegmentRetentionSeconds,
 		}
 	}
 	h.tm.StartThrottler = func(ctx context.Context, ts *playback.TranscodeSession) {
@@ -1701,7 +1703,7 @@ func (h *PlaybackHandler) HandleGetTranscodeSegment(w http.ResponseWriter, r *ht
 	h.touchSessionActivity(sessionID)
 
 	segmentName := chi.URLParam(r, "name")
-	segmentPath, err := transcodeSession.GetSegment(segmentName)
+	segmentLease, err := transcodeSession.OpenSegment(segmentName)
 	if err != nil && errors.Is(err, playback.ErrSegmentNotFound) {
 		segNum, parseErr := playback.ParseSegmentNumber(segmentName)
 		if parseErr == nil {
@@ -1738,7 +1740,7 @@ func (h *PlaybackHandler) HandleGetTranscodeSegment(w http.ResponseWriter, r *ht
 					"session", sessionID,
 					"playback_session_id", sessionID,
 				)
-				segmentPath, err = transcodeSession.WaitForSegment(segmentName, decision.WaitTimeout)
+				segmentLease, err = transcodeSession.WaitForOpenSegment(segmentName, decision.WaitTimeout)
 				if err != nil && errors.Is(err, playback.ErrSegmentNotFound) {
 					slog.InfoContext(r.Context(), "transcode segment wait timeout", "component", "api",
 						"segment", segmentName,
@@ -1800,7 +1802,7 @@ func (h *PlaybackHandler) HandleGetTranscodeSegment(w http.ResponseWriter, r *ht
 					); restartErr == nil {
 						// Throttler + exit monitor re-arm via the session's
 						// restart hook.
-						segmentPath, err = transcodeSession.WaitForSegment(segmentName, 30*time.Second)
+						segmentLease, err = transcodeSession.WaitForOpenSegment(segmentName, 30*time.Second)
 						if err == nil && strings.EqualFold(transcodeSession.Opts().TargetCodecVideo, "copy") {
 							// Copy-mode seeks can resume as soon as the target segment
 							// exists, but that sometimes leaves the player one segment
@@ -1808,7 +1810,9 @@ func (h *PlaybackHandler) HandleGetTranscodeSegment(w http.ResponseWriter, r *ht
 							// for a single lookahead fragment when available so the
 							// first resumed playback window is less brittle.
 							nextSegmentName := fmt.Sprintf("seg_%05d.m4s", segNum+1)
-							_, _ = transcodeSession.WaitForSegment(nextSegmentName, 1200*time.Millisecond)
+							if nextSegment, nextErr := transcodeSession.WaitForOpenSegment(nextSegmentName, 1200*time.Millisecond); nextErr == nil {
+								_ = nextSegment.Close()
+							}
 						}
 					} else {
 						err = restartErr
@@ -1818,7 +1822,7 @@ func (h *PlaybackHandler) HandleGetTranscodeSegment(w http.ResponseWriter, r *ht
 		} else if transcodeSession.IsRunning() {
 			// Non-numbered segment (e.g., init.mp4 for fMP4 HLS).
 			// Wait briefly — the init segment is written almost immediately.
-			segmentPath, err = transcodeSession.WaitForSegment(segmentName, 10*time.Second)
+			segmentLease, err = transcodeSession.WaitForOpenSegment(segmentName, 10*time.Second)
 		}
 	}
 	if err != nil {
@@ -1833,14 +1837,17 @@ func (h *PlaybackHandler) HandleGetTranscodeSegment(w http.ResponseWriter, r *ht
 		return
 	}
 
-	// Report segment download for throttle tracking.
-	if segNum, parseErr := playback.ParseSegmentNumber(segmentName); parseErr == nil {
-		transcodeSession.ReportSegmentDownloaded(segNum)
-	}
-
 	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	w.Header().Set("Pragma", "no-cache")
-	http.ServeFile(w, r, segmentPath)
+	defer func() { _ = segmentLease.Close() }()
+	sw := httpstream.NewRollingDeadlineWriter(w)
+	http.ServeContent(sw, r, segmentLease.Info.Name(), segmentLease.Info.ModTime(), segmentLease.File)
+	if r.Method == http.MethodGet &&
+		sw.CompletedFullResponse(segmentLease.Info.Size()) {
+		if segNum, parseErr := playback.ParseSegmentNumber(segmentName); parseErr == nil {
+			transcodeSession.ReportSegmentDownloadedForGeneration(segNum, segmentLease.Generation)
+		}
+	}
 }
 
 // buildProxyManifestURL signs a stream token carrying the session's full
@@ -1865,6 +1872,9 @@ func (h *PlaybackHandler) buildProxyManifestURL(card playback.RecipeCard, proxyN
 func (h *PlaybackHandler) proxyToTranscodeNode(w http.ResponseWriter, r *http.Request, transcodeNodeURL, path string) {
 	sessionID := chi.URLParam(r, "session_id")
 	targetURL := transcodeNodeURL + path
+	isSegmentRoute := strings.Contains(path, "/segment/")
+	_, segmentParseErr := playback.ParseSegmentNumber(filepath.Base(path))
+	isMediaSegment := segmentParseErr == nil
 	// Capture the signed stream token ("st") before stripping it from the URL.
 	// We forward it out-of-band as a header so the node can reconstruct after a
 	// self-restart, while keeping it out of the forwarded/logged URL.
@@ -1884,6 +1894,14 @@ func (h *PlaybackHandler) proxyToTranscodeNode(w http.ResponseWriter, r *http.Re
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+h.JWTSecret)
+	if isSegmentRoute {
+		// The node's immediate transport peer is this API process, so receiving a
+		// complete response there does not prove that the browser received it.
+		// Suppress node-local accounting and acknowledge only after the downstream
+		// writer completes. Forward range validators so both hops serve the same
+		// representation.
+		transcodeproxy.PrepareRequest(req, r)
+	}
 	// Best-effort forward of the stream token as a header so the node's
 	// reconstruct path (X-Silo-Stream-Token) can rebuild after a self-restart.
 	// Verify at the API boundary and confirm it belongs to this session; an
@@ -1907,7 +1925,7 @@ func (h *PlaybackHandler) proxyToTranscodeNode(w http.ResponseWriter, r *http.Re
 		http.Error(w, "transcode node unavailable", http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// The node strips "st" from the request query (kept out of node URLs/logs),
 	// so the segment/init URIs in the manifest it builds carry no token. Without
@@ -1937,16 +1955,22 @@ func (h *PlaybackHandler) proxyToTranscodeNode(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	for k, vv := range resp.Header {
-		for _, v := range vv {
-			w.Header().Add(k, v)
-		}
-	}
+	generation := resp.Header.Get(transcodeproxy.GenerationHeader)
+	transcodeproxy.CopyResponseHeaders(w.Header(), resp.Header)
 	// Proxied transcode output can stream past the server's absolute
 	// WriteTimeout; roll the write deadline with progress instead.
 	sw := httpstream.NewRollingDeadlineWriter(w)
 	sw.WriteHeader(resp.StatusCode)
-	io.Copy(sw, resp.Body)
+	if _, copyErr := io.Copy(sw, resp.Body); copyErr != nil {
+		return
+	}
+	fullSize := transcodeproxy.FullRepresentationSize(resp)
+	if isMediaSegment && generation != "" && r.Method == http.MethodGet &&
+		sw.CompletedFullResponse(fullSize) {
+		if ackErr := transcodeproxy.Acknowledge(r.Context(), http.DefaultClient, transcodeNodeURL+path, h.JWTSecret, generation); ackErr != nil {
+			slog.WarnContext(r.Context(), "acknowledge transcode segment completion", "component", "api", "error", ackErr, "playback_session_id", sessionID)
+		}
+	}
 }
 
 // maybeStartThrottler reads throttle settings and starts the throttler if enabled.

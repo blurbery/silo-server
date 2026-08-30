@@ -292,6 +292,42 @@ func TestServeContentReadFromOutcomeCompletedAndCounted(t *testing.T) {
 	}
 }
 
+func TestCompletedFullResponse(t *testing.T) {
+	const body = "complete segment"
+	tests := []struct {
+		name             string
+		rangeHeader      string
+		method           string
+		cancelAfterWrite bool
+		want             bool
+	}{
+		{name: "ordinary get", method: http.MethodGet, want: true},
+		{name: "completed get with canceled context", method: http.MethodGet, cancelAfterWrite: true, want: true},
+		{name: "open ended full range", method: http.MethodGet, rangeHeader: "bytes=0-", want: true},
+		{name: "explicit full range", method: http.MethodGet, rangeHeader: "bytes=0-15", want: true},
+		{name: "partial range", method: http.MethodGet, rangeHeader: "bytes=1-", want: false},
+		{name: "head", method: http.MethodHead, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			sw := newRollingDeadlineWriter(rr, time.Second, 0)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			req := httptest.NewRequest(tt.method, "/segment.ts", nil).WithContext(ctx)
+			req.Header.Set("Range", tt.rangeHeader)
+			http.ServeContent(sw, req, "segment.ts", time.Time{}, strings.NewReader(body))
+			if tt.cancelAfterWrite {
+				cancel()
+			}
+			if got := sw.CompletedFullResponse(int64(len(body))); got != tt.want {
+				t.Fatalf("CompletedFullResponse = %v, want %v (status=%d range=%q bytes=%d)",
+					got, tt.want, sw.StatusCode(), rr.Header().Get("Content-Range"), sw.BytesWritten())
+			}
+		})
+	}
+}
+
 // TestReadFromPreservesCompletion exercises the io.ReaderFrom path used by
 // http.ServeContent (sendfile) under a server WriteTimeout shorter than the
 // transfer, with a source large enough to require multiple bounded slices.

@@ -388,14 +388,17 @@ func TestEligibleForFuzzy(t *testing.T) {
 		query string
 		want  bool
 	}{
-		{"avegners", true},   // 8-char typo
-		{"sponge bob", true}, // longest token "sponge" (6)
-		{"a vengers", true},  // judged on "vengers" (7), not "a"
-		{"dune", true},       // exactly at the floor
-		{"the", false},       // 3 chars
-		{"a b c", false},     // all short
-		{"and the", false},   // "and" normalized away, "the" is 3
-		{"   ", false},       // empty
+		{"avegners", true},         // 8-char typo
+		{"sponge bob", true},       // unquoted input retains fuzzy typo recovery
+		{"a vengers", true},        // judged on "vengers" (7), not "a"
+		{"dune", true},             // exactly at the floor
+		{"star wars", true},        // final token is long enough for normal fuzzy fallback
+		{"star w", true},           // unquoted typeahead retains fuzzy augmentation
+		{`"Star Wars" zen`, false}, // quoted remainder stays on the leading-title path
+		{"the", false},             // 3 chars
+		{"a b c", false},           // all short
+		{"and the", false},         // "and" normalized away, "the" is 3
+		{"   ", false},             // empty
 	}
 	for _, tc := range cases {
 		if got := eligibleForFuzzy(parseSearchQuery(tc.query)); got != tc.want {
@@ -527,6 +530,32 @@ func TestItemRepo_Search_ShortFinalTokenUsesLeadingTitleIndexes(t *testing.T) {
 	}
 	if strings.Contains(dataSQL, "search_overview_vector") {
 		t.Fatalf("leading-title transition must not expand into overview FTS:\n%s", dataSQL)
+	}
+}
+
+func TestItemRepo_Search_QuotedPhraseShortRemainderUsesFullLeadingTitle(t *testing.T) {
+	repo := &ItemRepository{}
+	dataSQL, _, args := repo.buildSearchSQLWithTotal(`"Star Wars" z`, nil, 20, 0, AccessFilter{}, false)
+
+	lookupArg := -1
+	for i, arg := range args {
+		if arg == "star wars z" {
+			lookupArg = i + 1
+			break
+		}
+	}
+	if lookupArg < 0 {
+		t.Fatalf("leading-title lookup must bind the full normalized query; got args %#v", args)
+	}
+
+	for _, want := range []string{
+		fmt.Sprintf("mi.title_normalized LIKE $%d || '%%'", lookupArg),
+		fmt.Sprintf("mia.normalized_title LIKE $%d || '%%'", lookupArg),
+		fmt.Sprintf("ece.search_title_normalized LIKE $%d || '%%'", lookupArg),
+	} {
+		if !strings.Contains(dataSQL, want) {
+			t.Fatalf("quoted leading-title transition missing %q:\n%s", want, dataSQL)
+		}
 	}
 }
 
