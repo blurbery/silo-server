@@ -134,6 +134,28 @@ type SeriesEpisodeRollupStore interface {
 	SeriesEpisodeWatchCounts(ctx context.Context, profileID string, seriesIDs []string) (map[string]SeriesWatchCounts, error)
 }
 
+// SupersededEpisodeCandidate is an in-progress item that may be hidden from a
+// Continue Watching surface when a later episode in the same series was
+// completed more recently.
+type SupersededEpisodeCandidate struct {
+	MediaItemID string
+	UpdatedAt   time.Time
+}
+
+// SupersededEpisodeProgressStore is an optional store capability for resolving
+// superseded Continue Watching episodes without walking the profile's global
+// completed-progress history. Postgres implements the relationship as one
+// account- and profile-scoped catalog query; stores whose progress and catalog
+// live separately keep using catalog's bounded snapshot fallback.
+//
+// Implementations must return only candidate IDs for which a later episode in
+// the same series has a visible completed-progress row whose updated_at is
+// strictly newer than the candidate timestamp. Hidden completed-progress rows
+// must not supersede a candidate.
+type SupersededEpisodeProgressStore interface {
+	SupersededEpisodeProgressIDs(ctx context.Context, profileID string, candidates []SupersededEpisodeCandidate) (map[string]struct{}, error)
+}
+
 // CompletedHistoryItemMap returns the latest completed-history item row for a
 // scoped item query. Lookup failures degrade to an empty map so user-data
 // enrichment can keep returning progress rows.

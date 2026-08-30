@@ -704,6 +704,81 @@ func (s *PostgresUserStore) ListProgress(ctx context.Context, profileID, status 
 	return results, nil
 }
 
+const supersededEpisodeProgressQuery = `
+	WITH in_progress(content_id, updated_at) AS (
+		SELECT * FROM unnest($3::text[], $4::timestamptz[])
+	)
+	SELECT DISTINCT candidate.content_id
+	FROM in_progress candidate
+	JOIN episodes current_episode
+	  ON current_episode.content_id = candidate.content_id
+	WHERE EXISTS (
+		SELECT 1
+		FROM episodes later_episode
+		JOIN user_watch_progress completed_progress
+		  ON completed_progress.user_id = $1
+		 AND completed_progress.profile_id = $2
+		 AND completed_progress.media_item_id = later_episode.content_id
+		 AND completed_progress.completed = TRUE
+		 AND completed_progress.updated_at > candidate.updated_at
+		WHERE later_episode.series_id = current_episode.series_id
+		  AND (later_episode.season_number, later_episode.episode_number)
+		      > (current_episode.season_number, current_episode.episode_number)
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM user_history_hidden_items hidden
+			WHERE hidden.user_id = completed_progress.user_id
+			  AND hidden.profile_id = completed_progress.profile_id
+			  AND hidden.media_item_id = completed_progress.media_item_id
+			  AND completed_progress.updated_at <= hidden.hidden_before
+		  )
+	)`
+
+// SupersededEpisodeProgressIDs resolves stale Continue Watching candidates
+// directly from the profile's completed episode rows. The candidate set is at
+// most one Continue Watching page in normal callers, so this query is bounded
+// by the requested episodes and their series rather than by the size of an
+// imported account-wide watch history.
+func (s *PostgresUserStore) SupersededEpisodeProgressIDs(ctx context.Context, profileID string, candidates []userstore.SupersededEpisodeCandidate) (map[string]struct{}, error) {
+	result := make(map[string]struct{})
+	if strings.TrimSpace(profileID) == "" || len(candidates) == 0 {
+		return result, nil
+	}
+
+	contentIDs := make([]string, 0, len(candidates))
+	updatedAts := make([]time.Time, 0, len(candidates))
+	for _, candidate := range candidates {
+		contentID := strings.TrimSpace(candidate.MediaItemID)
+		if contentID == "" || candidate.UpdatedAt.IsZero() {
+			continue
+		}
+		contentIDs = append(contentIDs, contentID)
+		updatedAts = append(updatedAts, candidate.UpdatedAt.UTC())
+	}
+	if len(contentIDs) == 0 {
+		return result, nil
+	}
+
+	rows, err := s.pool.Query(ctx, supersededEpisodeProgressQuery,
+		s.userID, profileID, contentIDs, updatedAts)
+	if err != nil {
+		return nil, fmt.Errorf("querying superseded episode progress: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var contentID string
+		if err := rows.Scan(&contentID); err != nil {
+			return nil, fmt.Errorf("scanning superseded episode progress: %w", err)
+		}
+		result[contentID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating superseded episode progress: %w", err)
+	}
+	return result, nil
+}
+
 // ListProgressFiltered mirrors the status branches of ListProgress and AND-s in
 // an EXISTS pre-filter so the requested item types and/or library are resolved
 // in SQL instead of after a full-set scan. Movies/series resolve through

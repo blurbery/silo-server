@@ -167,6 +167,12 @@ func TestInterestTrackingStorePreservesWatchStateCapabilities(t *testing.T) {
 	if _, ok := wrapped.(userstore.SeriesEpisodeRollupStore); ok {
 		t.Error("wrapper advertises SeriesEpisodeRollupStore for a store that cannot perform the rollup")
 	}
+	if _, ok := userstore.UserStore(inner).(userstore.SupersededEpisodeProgressStore); ok {
+		t.Fatal("test setup: SQLite store unexpectedly implements SupersededEpisodeProgressStore")
+	}
+	if _, ok := wrapped.(userstore.SupersededEpisodeProgressStore); ok {
+		t.Error("wrapper advertises SupersededEpisodeProgressStore for a store that cannot perform the exact query")
+	}
 
 	// The forwarded batch write must actually reach the backing store.
 	writer, ok := wrapped.(userstore.WatchedBatchWriter)
@@ -275,6 +281,30 @@ type rollupCapableStore struct {
 	called bool
 }
 
+// postgresCatalogCapableStore models the production Postgres store's three
+// conditional capabilities so the notification decorator cannot silently
+// drop the exact Continue Watching path while preserving the others.
+type postgresCatalogCapableStore struct {
+	userstore.UserStore
+	userstore.DeviceRegistry
+	rollupCalled     bool
+	supersededCalled bool
+}
+
+func (s *postgresCatalogCapableStore) SeriesEpisodeWatchCounts(_ context.Context, _ string, seriesIDs []string) (map[string]userstore.SeriesWatchCounts, error) {
+	s.rollupCalled = true
+	counts := make(map[string]userstore.SeriesWatchCounts, len(seriesIDs))
+	for _, seriesID := range seriesIDs {
+		counts[seriesID] = userstore.SeriesWatchCounts{TotalEpisodes: 2, WatchedCount: 1}
+	}
+	return counts, nil
+}
+
+func (s *postgresCatalogCapableStore) SupersededEpisodeProgressIDs(_ context.Context, _ string, _ []userstore.SupersededEpisodeCandidate) (map[string]struct{}, error) {
+	s.supersededCalled = true
+	return map[string]struct{}{"episode-1": {}}, nil
+}
+
 func (s *rollupCapableStore) SeriesEpisodeWatchCounts(_ context.Context, _ string, seriesIDs []string) (map[string]userstore.SeriesWatchCounts, error) {
 	s.called = true
 	counts := make(map[string]userstore.SeriesWatchCounts, len(seriesIDs))
@@ -326,5 +356,57 @@ func TestInterestTrackingStoreForwardsRollupWhenSupported(t *testing.T) {
 	}
 	if _, ok := wrapped.(userstore.SettingValueCompareAndSetter); !ok {
 		t.Error("rollup-capable wrapper dropped SettingValueCompareAndSetter")
+	}
+}
+
+func TestInterestTrackingStorePreservesCombinedPostgresCatalogCapabilities(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := userdb.InitSchema(db); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+
+	base := userdb.NewSQLiteUserStore(db)
+	registry, ok := any(base).(userstore.DeviceRegistry)
+	if !ok {
+		t.Fatal("test setup: SQLite store does not implement DeviceRegistry")
+	}
+	inner := &postgresCatalogCapableStore{UserStore: base, DeviceRegistry: registry}
+	provider := WrapUserStoreProvider(preferenceTransactionTestProvider{store: inner}, &System{})
+	wrapped, err := provider.ForUser(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("ForUser: %v", err)
+	}
+
+	if _, ok := wrapped.(userstore.DeviceRegistry); !ok {
+		t.Error("combined wrapper dropped DeviceRegistry")
+	}
+	rollup, ok := wrapped.(userstore.SeriesEpisodeRollupStore)
+	if !ok {
+		t.Fatal("combined wrapper dropped SeriesEpisodeRollupStore")
+	}
+	if _, err := rollup.SeriesEpisodeWatchCounts(context.Background(), "p1", []string{"series-1"}); err != nil {
+		t.Fatalf("SeriesEpisodeWatchCounts: %v", err)
+	}
+	exact, ok := wrapped.(userstore.SupersededEpisodeProgressStore)
+	if !ok {
+		t.Fatal("combined wrapper dropped SupersededEpisodeProgressStore")
+	}
+	got, err := exact.SupersededEpisodeProgressIDs(context.Background(), "p1", []userstore.SupersededEpisodeCandidate{{
+		MediaItemID: "episode-1",
+		UpdatedAt:   time.Now().UTC(),
+	}})
+	if err != nil {
+		t.Fatalf("SupersededEpisodeProgressIDs: %v", err)
+	}
+	if _, ok := got["episode-1"]; !ok || len(got) != 1 {
+		t.Fatalf("superseded = %v, want episode-1", got)
+	}
+	if !inner.rollupCalled || !inner.supersededCalled {
+		t.Fatalf("capability forwarding calls: rollup=%v superseded=%v, want both true",
+			inner.rollupCalled, inner.supersededCalled)
 	}
 }
