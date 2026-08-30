@@ -23,7 +23,12 @@ import { collectCachedHomeSections } from "./homeSectionCache";
 import { useSectionRefreshSignal } from "./homeSurfaceRefresh";
 import { useUICustomization } from "@/hooks/useUICustomization";
 import { carouselIntrinsicHeight } from "@/lib/uiCustomization";
-import { prefersReducedMotion } from "@/hooks/useImmediateSidebarCollapse";
+import {
+  isFirefoxEngine,
+  isWebKitEngine,
+  prefersReducedMotion,
+} from "@/hooks/useImmediateSidebarCollapse";
+import { SIDEBAR_DETAILS_REVEAL_DEADLINE_MS } from "@/components/sidebarItemNavigation";
 
 const MAX_CONCURRENT_SECTION_REQUESTS = 5;
 const SKELETON_CARD_COUNT = 7;
@@ -31,12 +36,16 @@ const EAGER_HOME_ROW_COUNT = 2;
 const HOME_ROW_RENDER_MARGIN = "100% 0px";
 const HOME_ROW_RESTORE_DELAY_MS = 360;
 const HOME_ROW_RESTORE_STAGGER_MS = 70;
+const DESKTOP_SIDEBAR_QUERY = "(min-width: 64rem)";
 
 export default function Home() {
   const queryClient = useQueryClient();
   const { data, isLoading, isError, refetch } = useHomeLayout();
   const { data: homeRefreshSignal = 0 } = useSectionRefreshSignal();
   const { cardPresentation } = useUICustomization();
+  const [rowRestorationReady, setRowRestorationReady] = useState(
+    () => !shouldWaitForSidebarReturn(),
+  );
 
   useDocumentTitle("Home");
 
@@ -58,6 +67,41 @@ export default function Home() {
     freshCachedHomeSectionIds(queryClient, layout),
   );
   const activeSectionIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (rowRestorationReady) return;
+    const stage = document.querySelector<HTMLElement>(".sidebar-main-stage");
+    if (!stage) {
+      setRowRestorationReady(true);
+      return;
+    }
+
+    let revealed = false;
+    const reveal = (event?: Event) => {
+      if (revealed) return;
+      if (
+        event instanceof TransitionEvent &&
+        (event.target !== stage || event.propertyName !== "transform")
+      ) {
+        return;
+      }
+      revealed = true;
+      stage.removeEventListener("transitionend", reveal);
+      stage.removeEventListener("transitioncancel", reveal);
+      window.clearTimeout(deadline);
+      startTransition(() => setRowRestorationReady(true));
+    };
+
+    stage.addEventListener("transitionend", reveal);
+    stage.addEventListener("transitioncancel", reveal);
+    const deadline = window.setTimeout(reveal, SIDEBAR_DETAILS_REVEAL_DEADLINE_MS);
+    return () => {
+      revealed = true;
+      stage.removeEventListener("transitionend", reveal);
+      stage.removeEventListener("transitioncancel", reveal);
+      window.clearTimeout(deadline);
+    };
+  }, [rowRestorationReady]);
 
   useEffect(() => {
     const activeIds = layout.map((section) => section.id);
@@ -226,6 +270,7 @@ export default function Home() {
                 key={slot.layout.id}
                 section={slot.section}
                 eager={rowIndex < EAGER_HOME_ROW_COUNT}
+                restorationReady={rowRestorationReady}
                 placeholderHeight={rowPlaceholderHeight}
                 restoreDelayMs={
                   HOME_ROW_RESTORE_DELAY_MS +
@@ -265,11 +310,13 @@ export default function Home() {
 function DeferredHomeSection({
   section,
   eager,
+  restorationReady,
   placeholderHeight,
   restoreDelayMs,
 }: {
   section: ResolvedSection;
   eager: boolean;
+  restorationReady: boolean;
   placeholderHeight: string;
   restoreDelayMs: number;
 }) {
@@ -280,7 +327,7 @@ function DeferredHomeSection({
   const placeholderRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (rendered) return;
+    if (rendered || !restorationReady) return;
     if (eager) {
       startTransition(() => setRendered(true));
       return;
@@ -317,7 +364,7 @@ function DeferredHomeSection({
       observer.disconnect();
       window.clearTimeout(restoreTimer);
     };
-  }, [eager, rendered, restoreDelayMs]);
+  }, [eager, rendered, restorationReady, restoreDelayMs]);
 
   if (rendered) return <SectionRow section={section} />;
 
@@ -328,6 +375,18 @@ function DeferredHomeSection({
       aria-hidden="true"
       style={{ minHeight: placeholderHeight }}
     />
+  );
+}
+
+function shouldWaitForSidebarReturn(): boolean {
+  const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    (isWebKitEngine(userAgent) || isFirefoxEngine(userAgent)) &&
+    window.matchMedia(DESKTOP_SIDEBAR_QUERY).matches &&
+    !prefersReducedMotion() &&
+    document.documentElement.dataset.sidebarVisualCollapsed === "true"
   );
 }
 

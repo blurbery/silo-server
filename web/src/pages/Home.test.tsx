@@ -8,6 +8,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import Home from "./Home";
+import { SIDEBAR_DETAILS_REVEAL_DEADLINE_MS } from "@/components/sidebarItemNavigation";
 import { sectionKeys } from "@/hooks/queries/keys";
 
 (
@@ -16,6 +17,12 @@ import { sectionKeys } from "@/hooks/queries/keys";
 
 const mockUseHomeLayout = vi.fn();
 const mockFetchHomeSectionItems = vi.fn();
+const SAFARI_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.6 Safari/605.1.15";
+const FIREFOX_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:154.0) Gecko/20100101 Firefox/154.0";
+const CHROME_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36";
 
 vi.mock("@/hooks/queries/sections", () => ({
   useHomeLayout: (...args: unknown[]) => mockUseHomeLayout(...args),
@@ -69,8 +76,10 @@ describe("Home", () => {
       root.unmount();
     });
     container.remove();
+    delete document.documentElement.dataset.sidebarVisualCollapsed;
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("does not invalidate cached home sections on mount", async () => {
@@ -153,6 +162,153 @@ describe("Home", () => {
 
     expect(markup.match(/data-home-section-placeholder=/g)).toHaveLength(5);
     expect(markup).not.toContain('data-kind="section-row"');
+  });
+
+  it.each([
+    ["WebKit", SAFARI_USER_AGENT],
+    ["Firefox", FIREFOX_USER_AGENT],
+  ])(
+    "keeps %s Home rows deferred until the sidebar return finishes",
+    async (_browser, userAgent) => {
+      vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(userAgent);
+      vi.stubGlobal("matchMedia", (query: string) => ({
+        matches: query === "(min-width: 64rem)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }));
+      document.documentElement.dataset.sidebarVisualCollapsed = "true";
+      const layout = [homeLayout("row-1"), homeLayout("row-2")];
+      mockUseHomeLayout.mockReturnValue({
+        data: { sections: layout },
+        isLoading: false,
+        isError: false,
+        refetch: vi.fn(),
+      });
+      const queryClient = new QueryClient();
+      layout.forEach((section) => {
+        queryClient.setQueryData(sectionKeys.homeItems(section.id), homeSection(section.id));
+      });
+
+      await act(async () => {
+        root.render(
+          <div className="sidebar-main-stage">
+            <QueryClientProvider client={queryClient}>
+              <Home />
+            </QueryClientProvider>
+          </div>,
+        );
+        await Promise.resolve();
+      });
+
+      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(0);
+      expect(container.querySelectorAll("[data-home-section-placeholder]")).toHaveLength(2);
+
+      const stage = container.querySelector(".sidebar-main-stage");
+      const unrelatedTransition = new TransitionEvent("transitionend", { propertyName: "opacity" });
+      await act(async () => {
+        stage?.dispatchEvent(unrelatedTransition);
+        await Promise.resolve();
+      });
+      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(0);
+
+      const transformTransition = new TransitionEvent("transitionend", {
+        propertyName: "transform",
+      });
+      await act(async () => {
+        stage?.dispatchEvent(transformTransition);
+        await Promise.resolve();
+      });
+
+      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(2);
+      expect(container.querySelectorAll("[data-home-section-placeholder]")).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    ["WebKit", SAFARI_USER_AGENT],
+    ["Firefox", FIREFOX_USER_AGENT],
+  ])(
+    "restores %s Home rows at the deadline if the transition is interrupted",
+    async (_browser, userAgent) => {
+      vi.useFakeTimers();
+      vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(userAgent);
+      vi.stubGlobal("matchMedia", (query: string) => ({
+        matches: query === "(min-width: 64rem)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }));
+      document.documentElement.dataset.sidebarVisualCollapsed = "true";
+      const layout = [homeLayout("row-1")];
+      mockUseHomeLayout.mockReturnValue({
+        data: { sections: layout },
+        isLoading: false,
+        isError: false,
+        refetch: vi.fn(),
+      });
+      const queryClient = new QueryClient();
+      queryClient.setQueryData(sectionKeys.homeItems("row-1"), homeSection("row-1"));
+
+      await act(async () => {
+        root.render(
+          <div className="sidebar-main-stage">
+            <QueryClientProvider client={queryClient}>
+              <Home />
+            </QueryClientProvider>
+          </div>,
+        );
+        await Promise.resolve();
+      });
+
+      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(0);
+
+      await act(async () => {
+        vi.advanceTimersByTime(SIDEBAR_DETAILS_REVEAL_DEADLINE_MS - 1);
+        await Promise.resolve();
+      });
+      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(0);
+
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+        await Promise.resolve();
+      });
+      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(1);
+    },
+  );
+
+  it("does not gate Chromium Home rows during the sidebar return", async () => {
+    vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(CHROME_USER_AGENT);
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(min-width: 64rem)",
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    document.documentElement.dataset.sidebarVisualCollapsed = "true";
+    const layout = [homeLayout("row-1")];
+    mockUseHomeLayout.mockReturnValue({
+      data: { sections: layout },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(sectionKeys.homeItems("row-1"), homeSection("row-1"));
+
+    await act(async () => {
+      root.render(
+        <div className="sidebar-main-stage">
+          <QueryClientProvider client={queryClient}>
+            <Home />
+          </QueryClientProvider>
+        </div>,
+      );
+      await Promise.resolve();
+    });
+
+    expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(1);
+    expect(container.querySelectorAll("[data-home-section-placeholder]")).toHaveLength(0);
   });
 
   it("mounts only nearby cached rows until lower Home sections approach the viewport", async () => {
@@ -354,7 +510,12 @@ describe("Home", () => {
     expect(container.querySelectorAll("[data-home-section-placeholder]")).toHaveLength(0);
   });
 
-  it("renders every Home row immediately for reduced motion", () => {
+  it.each([
+    ["WebKit", SAFARI_USER_AGENT],
+    ["Firefox", FIREFOX_USER_AGENT],
+  ])("renders every Home row immediately for reduced motion in %s", (_browser, userAgent) => {
+    vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(userAgent);
+    document.documentElement.dataset.sidebarVisualCollapsed = "true";
     vi.stubGlobal("matchMedia", (query: string) => ({
       matches: query === "(prefers-reduced-motion: reduce)",
       media: query,
