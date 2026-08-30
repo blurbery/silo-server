@@ -143,7 +143,7 @@ const (
 )
 
 func validVideoSampleEntry(value string) bool {
-	return value == "" || value == VideoSampleEntryDVH1 || value == VideoSampleEntryHVC1
+	return value == "" || value == VideoSampleEntryHEV1V3 || value == VideoSampleEntryDVH1 || value == VideoSampleEntryHVC1
 }
 
 // VideoSampleEntryForDVCopy returns the sample entry a copy-video HLS session

@@ -626,14 +626,16 @@ func progressiveVideoSampleEntryV3(source SourceDescriptorV3, dvStrip bool) stri
 	return VideoSampleEntryHEV1V3
 }
 
-// Native HLS uses the same Apple media-element evidence as progressive
-// playback, while hls.js consumes MediaSource fMP4 and is probed against hev1.
-// Keep those byte recipes separate even when they preserve the same HDR range.
+// Native HLS uses hvc1/dvh1 byte recipes. Silo Android's Media3 engine is a
+// native HLS consumer but predates the delivery-scoped native-HLS feature, so
+// its existing first-party device-quirks opt-in supplies that evidence. hls.js
+// consumes MediaSource fMP4 and remains independently probed against hev1.
 func hlsVideoSampleEntryV3(source SourceDescriptorV3, request StartRequestV3, dvStrip bool) string {
 	if !strings.EqualFold(source.VideoCodec, "hevc") {
 		return ""
 	}
-	if !deliverySupportsFeatureV3(request, DeliveryClassHLSV3, ClientNativeHLSPlaybackV3) {
+	if !deliverySupportsFeatureV3(request, DeliveryClassHLSV3, ClientNativeHLSPlaybackV3) &&
+		!usesFirstPartyAndroidMedia3HLSV3(request) {
 		return VideoSampleEntryHEV1V3
 	}
 	if !dvStrip && (source.DVProfile == 5 || source.DVProfile == 8) {

@@ -72,6 +72,15 @@ func isAndroidMobileBluetoothOutputV3(request StartRequestV3) bool {
 		len(output.AudioPassthrough.PassthroughCodecs) == 0
 }
 
+// usesFirstPartyAndroidMedia3HLSV3 identifies Silo Android's native Media3 HLS
+// engine. The device-quirks protocol is the first-party opt-in: an unrelated
+// client cannot obtain Android-specific byte recipes by sending only the broad
+// platform label.
+func usesFirstPartyAndroidMedia3HLSV3(request StartRequestV3) bool {
+	return deviceQuirkProtocolAvailableV3(request) &&
+		strings.EqualFold(strings.TrimSpace(request.ClientPlaybackContext.Device.Platform), "android")
+}
+
 func dv8HDR10PlusRuntimeCorrectionV3(source SourceDescriptorV3, request StartRequestV3, deliveryClass string) (*AppliedQuirkV3, bool) {
 	if !deviceQuirkProtocolAvailableV3(request) || source.DVProfile != 8 || !source.HDR10Plus ||
 		!isAmazonFireTVV3(request) || !deliverySupportsFeatureV3(request, deliveryClass, ClientDV8HDR10PlusSanitizerV3) {
