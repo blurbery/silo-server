@@ -1,7 +1,11 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import DetailHero from "./DetailHero";
+
+vi.mock("@/lib/thumbhash", () => ({
+  decodeThumbhash: (thumbhash: string) => `data:image/png;base64,${thumbhash}`,
+}));
 
 describe("DetailHero artwork revisions", () => {
   it("keeps the above-fold primary content on one bounded reveal surface", () => {
@@ -44,5 +48,29 @@ describe("DetailHero artwork revisions", () => {
     fireEvent.load(replacement);
     expect(replacement).toHaveClass("opacity-100");
     expect(replacementPlaceholder).toHaveClass("opacity-0");
+  });
+
+  it("keeps the backdrop placeholder behind the image throughout its fade", () => {
+    const { container } = render(
+      <DetailHero
+        title="Blade Runner"
+        backdropUrl="/backdrop.rev-a.webp"
+        backdropThumbhash="placeholder"
+      />,
+    );
+
+    const artwork = container.querySelector<HTMLElement>(".hero-backdrop-artwork");
+    const backdrop = container.querySelector<HTMLImageElement>('img[src="/backdrop.rev-a.webp"]');
+    expect(artwork).toHaveStyle({
+      backgroundImage: 'url("data:image/png;base64,placeholder")',
+    });
+    expect(backdrop).toHaveClass("opacity-0", "transition-opacity", "duration-300");
+
+    fireEvent.load(backdrop!);
+
+    expect(backdrop).toHaveClass("opacity-100", "transition-opacity", "duration-300");
+    expect(artwork).toHaveStyle({
+      backgroundImage: 'url("data:image/png;base64,placeholder")',
+    });
   });
 });

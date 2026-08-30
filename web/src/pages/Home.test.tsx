@@ -168,7 +168,7 @@ describe("Home", () => {
     ["WebKit", SAFARI_USER_AGENT],
     ["Firefox", FIREFOX_USER_AGENT],
   ])(
-    "keeps %s Home rows deferred until the sidebar return finishes",
+    "restores above-fold %s Home rows during the sidebar return and gates only lower rows",
     async (_browser, userAgent) => {
       vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(userAgent);
       vi.stubGlobal("matchMedia", (query: string) => ({
@@ -178,7 +178,7 @@ describe("Home", () => {
         removeEventListener: vi.fn(),
       }));
       document.documentElement.dataset.sidebarVisualCollapsed = "true";
-      const layout = [homeLayout("row-1"), homeLayout("row-2")];
+      const layout = [homeLayout("row-1"), homeLayout("row-2"), homeLayout("row-3")];
       mockUseHomeLayout.mockReturnValue({
         data: { sections: layout },
         isLoading: false,
@@ -201,8 +201,8 @@ describe("Home", () => {
         await Promise.resolve();
       });
 
-      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(0);
-      expect(container.querySelectorAll("[data-home-section-placeholder]")).toHaveLength(2);
+      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(2);
+      expect(container.querySelectorAll("[data-home-section-placeholder]")).toHaveLength(1);
 
       const stage = container.querySelector(".sidebar-main-stage");
       const unrelatedTransition = new TransitionEvent("transitionend", { propertyName: "opacity" });
@@ -210,7 +210,7 @@ describe("Home", () => {
         stage?.dispatchEvent(unrelatedTransition);
         await Promise.resolve();
       });
-      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(0);
+      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(2);
 
       const transformTransition = new TransitionEvent("transitionend", {
         propertyName: "transform",
@@ -220,7 +220,7 @@ describe("Home", () => {
         await Promise.resolve();
       });
 
-      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(2);
+      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(3);
       expect(container.querySelectorAll("[data-home-section-placeholder]")).toHaveLength(0);
     },
   );
@@ -240,7 +240,7 @@ describe("Home", () => {
         removeEventListener: vi.fn(),
       }));
       document.documentElement.dataset.sidebarVisualCollapsed = "true";
-      const layout = [homeLayout("row-1")];
+      const layout = [homeLayout("row-1"), homeLayout("row-2"), homeLayout("row-3")];
       mockUseHomeLayout.mockReturnValue({
         data: { sections: layout },
         isLoading: false,
@@ -248,7 +248,9 @@ describe("Home", () => {
         refetch: vi.fn(),
       });
       const queryClient = new QueryClient();
-      queryClient.setQueryData(sectionKeys.homeItems("row-1"), homeSection("row-1"));
+      layout.forEach((section) => {
+        queryClient.setQueryData(sectionKeys.homeItems(section.id), homeSection(section.id));
+      });
 
       await act(async () => {
         root.render(
@@ -261,19 +263,21 @@ describe("Home", () => {
         await Promise.resolve();
       });
 
-      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(0);
+      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(2);
+      expect(container.querySelectorAll("[data-home-section-placeholder]")).toHaveLength(1);
 
       await act(async () => {
         vi.advanceTimersByTime(SIDEBAR_DETAILS_REVEAL_DEADLINE_MS - 1);
         await Promise.resolve();
       });
-      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(0);
+      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(2);
 
       await act(async () => {
         vi.advanceTimersByTime(1);
         await Promise.resolve();
       });
-      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(1);
+      expect(container.querySelectorAll('[data-kind="section-row"]')).toHaveLength(3);
+      expect(container.querySelectorAll("[data-home-section-placeholder]")).toHaveLength(0);
     },
   );
 

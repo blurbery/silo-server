@@ -327,7 +327,11 @@ function DeferredHomeSection({
   const placeholderRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (rendered || !restorationReady) return;
+    // Restore the bounded above-fold budget as soon as the lightweight Home
+    // commit has painted. WebKit and Firefox keep lower rows behind the sidebar
+    // return gate, but the visible Home surface must travel with that motion
+    // instead of waiting for transitionend (or its 760 ms safety deadline).
+    if (rendered || (!eager && !restorationReady)) return;
     if (eager) {
       startTransition(() => setRendered(true));
       return;

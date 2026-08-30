@@ -103,7 +103,7 @@ export default function DetailHero({
         <div
           className="hero-backdrop-artwork absolute inset-0 h-full w-full"
           style={{
-            ...(backdropPlaceholder && !backdropLoaded
+            ...(backdropPlaceholder
               ? {
                   backgroundImage: `url(${backdropPlaceholder})`,
                   backgroundSize: "cover",
