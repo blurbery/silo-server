@@ -18,6 +18,9 @@ const mocks = vi.hoisted(() => ({
   } as { name: string; avatar_url?: string },
 }));
 
+let browserUserAgent =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36";
+
 vi.mock("react-router", async () => {
   const actual = await vi.importActual<typeof import("react-router")>("react-router");
   return {
@@ -142,6 +145,9 @@ beforeEach(() => {
     name: "Admin",
     avatar_url: "https://example.com/admin-avatar.webp",
   };
+  browserUserAgent =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36";
+  vi.spyOn(window.navigator, "userAgent", "get").mockImplementation(() => browserUserAgent);
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: query === "(min-width: 64rem)",
     media: query,

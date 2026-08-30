@@ -79,7 +79,7 @@ export default function Layout({ children }: LayoutProps) {
     isCalendarRoute;
 
   // The item route commits its lightweight shell immediately. The following
-  // frame starts the sidebar/main compositor transition; prefetched details
+  // paint handoff starts the sidebar/main compositor transition; prefetched details
   // and artwork are revealed only after that motion completes.
   const isDetailImmersion = isItemRoute;
   const targetDetailImmersion = isDetailImmersion;
@@ -187,7 +187,7 @@ export default function Layout({ children }: LayoutProps) {
   // Publish both sidebar states on the document root so out-of-tree chrome
   // (notably ImpersonationBanner, which renders above all routes) can align
   // with the sidebar. The target drives the snapped `--app-sidebar-offset`;
-  // the visual state is the same one-frame handoff `.sidebar-main-stage` uses
+  // the visual state is the same paint handoff `.sidebar-main-stage` uses
   // in-tree, letting that chrome animate its edge instead of jumping.
   //
   // Layout effect, not effect: the sidebar receives `data-collapsed` during
