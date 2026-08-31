@@ -212,7 +212,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	clientManagedRange := clientManagesOriginalDynamicRangeV3(source, input.Request)
 	originalRangeOK := rangeOK || clientManagedRange
 	audioOK, passthrough, audioClaims := audioEligibilityV3(source, input.Request)
-	windowsAudioQuirk, normalizeWindowsAudio := windowsWebAudioNormalizationQuirkV3(source, input.Request)
+	webAudioQuirk, normalizeWebAudio := webAudioNormalizationQuirkV3(source, input.Request)
 	firefoxAACTimingQuirk, normalizeMatroskaAAC := firefoxMatroskaAACTimingQuirkV3(source, input.Request)
 	originalAudioSelectionOK := audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) ||
 		clientSelectsOriginalAudioTrackV3(input.Request)
@@ -377,7 +377,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	// source. A decoder profile/max-instance claim alone is not proof of native
 	// dual-layer output, so the default Android route mirrors Silo Apple: P8.1
 	// base-layer Dolby Vision first, then same-file HDR10.
-	if !normalizeWindowsAudio && !preferServerHLS && source.DVProfile == 7 && quality.PreservesSource && videoOK && containerOK && audioOK && originalAudioSelectionOK && !subtitle.RequiresBurn {
+	if !normalizeWebAudio && !preferServerHLS && source.DVProfile == 7 && quality.PreservesSource && videoOK && containerOK && audioOK && originalAudioSelectionOK && !subtitle.RequiresBurn {
 		if clientDV81Eligible {
 			plan := base
 			plan.Delivery = DeliveryOriginalHTTPV3
@@ -430,7 +430,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		}
 	}
 
-	if !normalizeWindowsAudio && !preferServerHLS && source.DVProfile != 7 && deliveryAvailableV3(input.Request, DeliveryClassOriginalHTTPV3) && containerOK && videoOK && originalRangeOK && audioOK && originalAudioSelectionOK && quality.PreservesSource && !subtitle.RequiresBurn {
+	if !normalizeWebAudio && !preferServerHLS && source.DVProfile != 7 && deliveryAvailableV3(input.Request, DeliveryClassOriginalHTTPV3) && containerOK && videoOK && originalRangeOK && audioOK && originalAudioSelectionOK && quality.PreservesSource && !subtitle.RequiresBurn {
 		plan := base
 		plan.Delivery = DeliveryOriginalHTTPV3
 		plan.Stream = StreamV3{Protocol: StreamHTTPProgressiveV3, Container: source.Container, MIMEType: MimeFromExtension(file.FilePath), Headers: map[string]string{}, HeaderRefresh: HeaderRefreshNoneV3}
@@ -461,11 +461,12 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		// contains 1024 samples. Copying those rounded timestamps into MP4/fMP4
 		// produces real sub-frame gaps and overlaps that Firefox renders as
 		// crackle. Keep video-copy remuxing, but re-encode the selected AAC track
-		// through the versioned timestamp-normalization recipe. Non-Windows native
-		// original playback above remains byte-for-byte direct play; Windows
-		// Firefox is deliberately forced through this branch.
-		progressiveTranscodeAudio := !progressiveAudioOK || normalizeMatroskaAAC || normalizeWindowsAudio
-		hlsTranscodeAudio := !hlsAudioOK || normalizeMatroskaAAC || normalizeWindowsAudio
+		// through the versioned timestamp-normalization recipe. Unaffected native
+		// original playback above remains byte-for-byte direct play; the scoped
+		// Windows and Android Firefox routes are deliberately forced through this
+		// branch.
+		progressiveTranscodeAudio := !progressiveAudioOK || normalizeMatroskaAAC || normalizeWebAudio
+		hlsTranscodeAudio := !hlsAudioOK || normalizeMatroskaAAC || normalizeWebAudio
 		hlsAudioQuirk, hlsAudioQuirkOK := hlsEAC3AudioCorrectionV3(source, input.Request)
 		localAudioConvertOK := input.Registry.Available(TransformationAudioToAACV3)
 		if progressiveTranscodeAudio && hlsTranscodeAudio {
@@ -509,8 +510,8 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		if normalizeMatroskaAAC {
 			appendAppliedQuirkV3(&progressivePlan, *firefoxAACTimingQuirk, "")
 		}
-		if normalizeWindowsAudio && !normalizeMatroskaAAC {
-			appendAppliedQuirkV3(&progressivePlan, *windowsAudioQuirk, "")
+		if normalizeWebAudio && !normalizeMatroskaAAC {
+			appendAppliedQuirkV3(&progressivePlan, *webAudioQuirk, "")
 		}
 		if !dvStrip {
 			applyCopiedVideoQuirksV3(&progressivePlan, source, input.Request, high10Quirk)
@@ -554,11 +555,11 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 				}
 				// HLS packaging cannot safely copy non-native codecs such as
 				// DTS, TrueHD, or Opus. Preserve surround when adapting those
-				// codecs on clients with a proven multichannel path. Windows web
-				// deliberately keeps the conservative AAC stereo contract used
-				// by progressive delivery so an HLS fallback cannot reintroduce
-				// the platform-specific audio failure.
-				preserveSurround := !hlsNativeAudioCodecV3(source.AudioCodec) && !normalizeWindowsAudio
+				// codecs on clients with a proven multichannel path. Affected web
+				// routes deliberately keep the conservative AAC stereo contract
+				// used by progressive delivery so an HLS fallback cannot
+				// reintroduce the platform-specific audio failure.
+				preserveSurround := !hlsNativeAudioCodecV3(source.AudioCodec) && !normalizeWebAudio
 				hlsAudioChannels = aacOutputChannelsV3(input.Request, DeliveryClassHLSV3, source.AudioChannels, preserveSurround)
 				plan.EffectiveRecipe.AudioCodec = audioCodecAACV3
 				plan.EffectiveRecipe.AudioChannels = intPointerV3(hlsAudioChannels)
@@ -570,8 +571,8 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 			if normalizeMatroskaAAC {
 				appendAppliedQuirkV3(&plan, *firefoxAACTimingQuirk, "")
 			}
-			if normalizeWindowsAudio && !normalizeMatroskaAAC {
-				appendAppliedQuirkV3(&plan, *windowsAudioQuirk, "")
+			if normalizeWebAudio && !normalizeMatroskaAAC {
+				appendAppliedQuirkV3(&plan, *webAudioQuirk, "")
 			}
 			if hlsAudioQuirkOK && !hlsTranscodeAudio {
 				if !input.hlsRegistry().Available(TransformationAudioToAACV3) {
@@ -731,7 +732,7 @@ const (
 func planAudioOnlyV3(input PlannerInputV3, file *models.MediaFile, source SourceDescriptorV3) PlannerResultV3 {
 	request := input.Request
 	audioOK, _, audioClaims := audioEligibilityV3(source, request)
-	windowsAudioQuirk, normalizeWindowsAudio := windowsWebAudioNormalizationQuirkV3(source, request)
+	webAudioQuirk, normalizeWebAudio := webAudioNormalizationQuirkV3(source, request)
 	firefoxAACTimingQuirk, normalizeMatroskaAAC := firefoxMatroskaAACTimingQuirkV3(source, request)
 	originalAudioSelectionOK := audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) ||
 		clientSelectsOriginalAudioTrackV3(request)
@@ -762,14 +763,14 @@ func planAudioOnlyV3(input PlannerInputV3, file *models.MediaFile, source Source
 		SubtitleFidelityPolicy: subtitlePolicyNameV3(request.SubtitleFidelityPreference),
 		Timeline:               TimelineV3{SourceStartSeconds: floatOrZeroV3(request.StartPosition), PlayerStartSeconds: floatOrZeroV3(request.StartPosition), CanSeekAnywhere: true, SeekRestoration: "player_position"},
 	}
-	if normalizeWindowsAudio && !normalizeMatroskaAAC {
-		appendAppliedQuirkV3(&base, *windowsAudioQuirk, "")
+	if normalizeWebAudio && !normalizeMatroskaAAC {
+		appendAppliedQuirkV3(&base, *webAudioQuirk, "")
 	}
-	if normalizeWindowsAudio && normalizeMatroskaAAC {
+	if normalizeWebAudio && normalizeMatroskaAAC {
 		appendAppliedQuirkV3(&base, *firefoxAACTimingQuirk, "")
 	}
 	containerOK := containsFoldV3(request.Capabilities.Containers, source.Container)
-	if !normalizeWindowsAudio && audioOK && containerOK && !bandwidthCapExceeded && originalAudioSelectionOK && deliveryAvailableV3(request, DeliveryClassOriginalHTTPV3) {
+	if !normalizeWebAudio && audioOK && containerOK && !bandwidthCapExceeded && originalAudioSelectionOK && deliveryAvailableV3(request, DeliveryClassOriginalHTTPV3) {
 		plan := base
 		plan.Delivery = DeliveryOriginalHTTPV3
 		plan.Stream = StreamV3{Protocol: StreamHTTPProgressiveV3, Container: source.Container, MIMEType: MimeFromExtension(file.FilePath), Headers: map[string]string{}, HeaderRefresh: HeaderRefreshNoneV3}
@@ -782,7 +783,7 @@ func planAudioOnlyV3(input PlannerInputV3, file *models.MediaFile, source Source
 	if !deliveryAvailableV3(request, DeliveryClassProgressiveV3) {
 		return terminalPlannerResultV3("adaptation_unavailable", "No validated playback route is available for this audio source.", false)
 	}
-	transcodeAudio := !audioOK || bandwidthCapExceeded || normalizeWindowsAudio
+	transcodeAudio := !audioOK || bandwidthCapExceeded || normalizeWebAudio
 	if transcodeAudio && (input.Registry == nil || !input.Registry.Available(TransformationAudioToAACV3)) {
 		return terminalPlannerResultV3(TerminalAudioConversionUnsupportedV3, "The required validated AAC conversion toolchain is unavailable.", true)
 	}
@@ -903,7 +904,7 @@ func applyAudioOnlyAACConversionV3(plan *PlanV3, targetChannels, targetBitrateKb
 // sends the user chasing a problem that is not blocking them. Retryable
 // infrastructure failures and the client-route terminal keep their own reasons.
 func planVideoTranscodeV3(input PlannerInputV3, base PlanV3, source SourceDescriptorV3, quality QualityResultV3, subtitle SubtitlePolicyResultV3, reasonOverride string, subtitleForcedAdaptation bool) PlannerResultV3 {
-	windowsAudioQuirk, normalizeWindowsAudio := windowsWebAudioNormalizationQuirkV3(source, input.Request)
+	webAudioQuirk, normalizeWebAudio := webAudioNormalizationQuirkV3(source, input.Request)
 	firefoxAACTimingQuirk, normalizeMatroskaAAC := firefoxMatroskaAACTimingQuirkV3(source, input.Request)
 	if !deliveryAvailableV3(input.Request, DeliveryClassHLSV3) {
 		return terminalPlannerResultV3("client_hls_unsupported", "The client cannot execute the required HLS adaptation route.", false)
@@ -953,10 +954,10 @@ func planVideoTranscodeV3(input PlannerInputV3, base PlanV3, source SourceDescri
 	plan.EffectiveRecipe.Height = intPointerV3(quality.Height)
 	plan.EffectiveRecipe.BitrateKbps = intPointerV3(quality.BitrateKbps)
 	// Surround sources normally keep 5.1 through the AAC re-encode (universal
-	// Media3 decode). Windows web uses the same AAC stereo contract as its
-	// source-preserving remux routes so a quality change, subtitle burn, or
-	// exhausted copy route cannot bring the crackle back.
-	targetAudioChannels := aacOutputChannelsV3(input.Request, DeliveryClassHLSV3, source.AudioChannels, !normalizeWindowsAudio)
+	// Media3 decode). Affected web routes use the same AAC stereo contract as
+	// their source-preserving remux routes so a quality change, subtitle burn,
+	// or exhausted copy route cannot bring the crackle back.
+	targetAudioChannels := aacOutputChannelsV3(input.Request, DeliveryClassHLSV3, source.AudioChannels, !normalizeWebAudio)
 	audioLayout := audioLayoutForChannelsV3(targetAudioChannels)
 	plan.EffectiveRecipe.AudioChannels = intPointerV3(targetAudioChannels)
 	plan.EffectiveRecipe.AudioLayout = audioLayout
@@ -964,11 +965,11 @@ func planVideoTranscodeV3(input PlannerInputV3, base PlanV3, source SourceDescri
 		TransformationV3{Name: TransformationVideoToH264V3, Executor: ExecutorServerV3, RecipeVersion: TransformationVideoToH264RecipeVersionV3, ValidatedClaims: []string{ClaimH264DecodeV3}},
 		TransformationV3{Name: TransformationAudioToAACV3, Executor: ExecutorServerV3, RecipeVersion: TransformationAudioToAACRecipeVersionV3, ValidatedClaims: []string{ClaimAudioDecodeV3}},
 	)
-	if normalizeWindowsAudio && normalizeMatroskaAAC {
+	if normalizeWebAudio && normalizeMatroskaAAC {
 		appendAppliedQuirkV3(&plan, *firefoxAACTimingQuirk, "")
 	}
-	if normalizeWindowsAudio && !normalizeMatroskaAAC {
-		appendAppliedQuirkV3(&plan, *windowsAudioQuirk, "")
+	if normalizeWebAudio && !normalizeMatroskaAAC {
+		appendAppliedQuirkV3(&plan, *webAudioQuirk, "")
 	}
 	toneMapPolicy := toneMapRecipe.policy
 	toneMapMode := toneMapRecipe.mode
