@@ -56,7 +56,14 @@ type PlaybackSession struct {
 	// clients cannot round-trip a native stream token, so jellycompat carries the
 	// recipe in its own durable compat store (this struct, persisted as JSONB)
 	// rather than in the token. Nil until a transcode actually starts.
-	Recipe    *playback.RecipeCard
+	Recipe *playback.RecipeCard
+	// RoutingAssignment is committed only after the master manifest prepares a
+	// complete route. Child HLS resources use it as their durable proof that the
+	// recipe may egress through this API process; it survives API restarts with
+	// the recipe and is independent of later executor changes such as an audio
+	// switch between local and pooled transcoding.
+	RoutingAssignment *playback.NodeRoutingAssignment
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	ExpiresAt time.Time
@@ -74,10 +81,12 @@ type PlaybackMediaSource struct {
 	SupportsDirectPlay   bool
 	SupportsDirectStream bool
 	SupportsTranscoding  bool
-	// HLSRemux selects fragmented MP4 with video copy. TranscodeAudio remains
-	// the independent audio-encode decision, so a compatible audio codec can
-	// stay bit-for-bit copied.
+	// HLSRemux selects HLS with video copy. TranscodeAudio remains the
+	// independent audio-encode decision, so a compatible audio codec can stay
+	// bit-for-bit copied. HLSRemuxMPEGTS overrides the normal fMP4 packaging for
+	// clients whose Dolby Vision decoder requires MPEG-TS.
 	HLSRemux                    bool
+	HLSRemuxMPEGTS              bool
 	HLSRemuxAudioStreamIndexes  []int
 	TranscodeAudio              bool
 	DefaultAudioStreamIndex     *int

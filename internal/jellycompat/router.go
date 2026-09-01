@@ -15,6 +15,7 @@ import (
 
 	"github.com/Silo-Server/silo-server/internal/catalog"
 	"github.com/Silo-Server/silo-server/internal/clientip"
+	"github.com/Silo-Server/silo-server/internal/config"
 	"github.com/Silo-Server/silo-server/internal/httpstream"
 	"github.com/Silo-Server/silo-server/internal/playback"
 	"github.com/Silo-Server/silo-server/internal/recommendations"
@@ -111,6 +112,12 @@ func NewRouter(deps Dependencies) chi.Router {
 			return cfg.Playback.SegmentRetentionSeconds
 		}
 		return startupSegmentRetention()
+	}
+	playbackHandler.PlaybackConfig = func() config.PlaybackConfig {
+		if cfg := deps.CurrentConfig(); cfg != nil {
+			return cfg.Playback
+		}
+		return config.PlaybackConfig{Routing: config.DefaultPlaybackRoutingPolicy()}
 	}
 	if deps.DB != nil {
 		playbackHandler.profileStaler = recommendations.NewRepo(deps.DB)
@@ -280,6 +287,9 @@ func NewRouter(deps Dependencies) chi.Router {
 		r.Get("/Videos/{id}/remux-v1/master.m3u8", observeCompat(deps.StreamTelemetry, http.MethodGet, "/Videos/{id}/remux-v1/master.m3u8", playbackHandler.HandleRemuxV1MasterManifest))
 		r.Get("/Videos/{id}/remux-v1/hls/{playlistId}/stream.m3u8", observeCompat(deps.StreamTelemetry, http.MethodGet, "/Videos/{id}/remux-v1/hls/{playlistId}/stream.m3u8", playbackHandler.HandleRemuxV1HLSManifest))
 		r.Get("/Videos/{id}/remux-v1/hls/{playlistId}/{segmentId}.{segmentContainer}", observeCompat(deps.StreamTelemetry, http.MethodGet, "/Videos/{id}/remux-v1/hls/{playlistId}/{segmentId}.{segmentContainer}", playbackHandler.HandleRemuxV1HLSSegment))
+		r.Get("/Videos/{id}/remux-ts-v1/master.m3u8", observeCompat(deps.StreamTelemetry, http.MethodGet, "/Videos/{id}/remux-ts-v1/master.m3u8", playbackHandler.HandleRemuxTSV1MasterManifest))
+		r.Get("/Videos/{id}/remux-ts-v1/hls/{playlistId}/stream.m3u8", observeCompat(deps.StreamTelemetry, http.MethodGet, "/Videos/{id}/remux-ts-v1/hls/{playlistId}/stream.m3u8", playbackHandler.HandleRemuxTSV1HLSManifest))
+		r.Get("/Videos/{id}/remux-ts-v1/hls/{playlistId}/{segmentId}.{segmentContainer}", observeCompat(deps.StreamTelemetry, http.MethodGet, "/Videos/{id}/remux-ts-v1/hls/{playlistId}/{segmentId}.{segmentContainer}", playbackHandler.HandleRemuxTSV1HLSSegment))
 		r.Get("/Videos/{routeItemId}/{routeMediaSourceId}/Subtitles/{routeIndex}/stream.{routeFormat}", observeCompat(deps.StreamTelemetry, http.MethodGet, "/Videos/{routeItemId}/{routeMediaSourceId}/Subtitles/{routeIndex}/stream.{routeFormat}", playbackHandler.HandleSubtitleStream))
 		// Infuse probes external subtitles with an extra numeric path component before stream.{format}.
 		r.Get("/Videos/{routeItemId}/{routeMediaSourceId}/Subtitles/{routeIndex}/{routeDeliveryIndex}/stream.{routeFormat}", observeCompat(deps.StreamTelemetry, http.MethodGet, "/Videos/{routeItemId}/{routeMediaSourceId}/Subtitles/{routeIndex}/{routeDeliveryIndex}/stream.{routeFormat}", playbackHandler.HandleSubtitleStream))
@@ -309,7 +319,7 @@ func skipCompatMediaCompression(r *http.Request) bool {
 	case len(p) == 5 && p[0] == videosSegment && p[1] != "" && p[2] == compatHLSPathSegment && p[3] != "" && p[4] != "":
 		return p[4] != hlsManifest && strings.Contains(p[4], ".")
 	case len(p) == 6 && p[0] == videosSegment && p[1] != "" &&
-		(p[2] == compatAudioV2PathSegment || p[2] == compatRemuxV1PathSegment) &&
+		(p[2] == compatAudioV2PathSegment || p[2] == compatRemuxV1PathSegment || p[2] == compatRemuxTSV1PathSegment) &&
 		p[3] == compatHLSPathSegment && p[4] != "" && p[5] != "":
 		return p[5] != hlsManifest && strings.Contains(p[5], ".")
 	case len(p) == 3 && p[0] == "Items" && p[1] != "" && p[2] == "Download":

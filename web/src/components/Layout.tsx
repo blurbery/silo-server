@@ -78,9 +78,9 @@ export default function Layout({ children }: LayoutProps) {
     isRecommendationsRoute ||
     isCalendarRoute;
 
-  // The item route commits its lightweight shell immediately. The following
-  // paint handoff starts the sidebar/main compositor transition; prefetched details
-  // and artwork are revealed only after that motion completes.
+  // Cold item routes commit a lightweight shell while the sidebar collapses.
+  // A detail already cached before navigation skips that gate and renders on
+  // the destination's first frame.
   const isDetailImmersion = isItemRoute;
   const targetDetailImmersion = isDetailImmersion;
   const visualDetailImmersion = useImmediateSidebarCollapse(targetDetailImmersion);
@@ -88,9 +88,14 @@ export default function Layout({ children }: LayoutProps) {
     itemDetailsReady,
     pendingLocationKey,
     enteredItemFromHome,
+    animateHomeItemEntry,
     returnedHomeFromItem,
+    prepareItemNavigation,
     reveal: revealItemDetails,
-  } = useSidebarItemDetailsGate(location.key, location.pathname, isItemRoute && hasDesktopSidebar);
+  } = useSidebarItemDetailsGate(location.key, location.pathname, isItemRoute && hasDesktopSidebar, {
+    itemRouteLocation,
+    itemDetailsAvailableOnEntry: isItemRoute && hasCachedItemDetail(queryClient, itemRouteLocation),
+  });
 
   const revealPreparedItemDetails = useCallback(
     (expectedLocationKey: string) => {
@@ -114,8 +119,16 @@ export default function Layout({ children }: LayoutProps) {
         return false;
       }
 
+      const queryKey = catalogKeys.itemDetail(itemTarget.contentId, itemTarget.libraryId);
+      const destination = new URL(request.href, window.location.origin);
+      prepareItemNavigation(
+        `${destination.pathname}${destination.search}`,
+        // This must be read before prefetchQuery. A fast response is still a
+        // cold navigation and should keep the lightweight handoff shell.
+        queryClient.getQueryData(queryKey) !== undefined,
+      );
       void queryClient.prefetchQuery({
-        queryKey: catalogKeys.itemDetail(itemTarget.contentId, itemTarget.libraryId),
+        queryKey,
         queryFn: () => fetchCatalogItemDetail(itemTarget.contentId, itemTarget.libraryId),
       });
       navigate(request.href, {
@@ -124,7 +137,7 @@ export default function Layout({ children }: LayoutProps) {
       });
       return true;
     },
-    [hasDesktopSidebar, isItemRoute, navigate, queryClient],
+    [hasDesktopSidebar, isItemRoute, navigate, prepareItemNavigation, queryClient],
   );
 
   // Transitionend is the fast path. Polling handles reconstructed layers, and
@@ -133,9 +146,9 @@ export default function Layout({ children }: LayoutProps) {
   useEffect(() => {
     if (!isItemRoute || !pendingLocationKey) return;
 
-    // Cached details can normally paint immediately. Home entries are the
-    // exception: mounting that heavier tree inside the sidebar compositor
-    // motion makes repeat visits rougher than the first uncached visit.
+    // A cold prefetch may finish after the route commits. Non-Home entries can
+    // reveal at that point; cold Home entries keep the stable handoff shell
+    // until the sidebar settles.
     if (!enteredItemFromHome && hasCachedItemDetail(queryClient, itemRouteLocation)) {
       revealPreparedItemDetails(pendingLocationKey);
       return;
@@ -207,7 +220,7 @@ export default function Layout({ children }: LayoutProps) {
     } else {
       delete root.dataset.homeRoute;
     }
-    if (enteredItemFromHome) {
+    if (animateHomeItemEntry) {
       root.dataset.homeItemEntry = "true";
     } else {
       delete root.dataset.homeItemEntry;
@@ -236,7 +249,7 @@ export default function Layout({ children }: LayoutProps) {
       delete root.dataset.sidebarVisualCollapsed;
     };
   }, [
-    enteredItemFromHome,
+    animateHomeItemEntry,
     isHomePath,
     returnedHomeFromItem,
     targetDetailImmersion,

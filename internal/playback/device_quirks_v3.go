@@ -11,6 +11,7 @@ const (
 	QuirkFirefoxMatroskaAACTimingV3        = "web.firefox.matroska_aac_timestamps_v1"
 	QuirkWindowsWebAudioNormalizeV3        = "web.windows.audio_normalization_v1"
 	QuirkAndroidFirefoxWebAudioNormalizeV3 = "web.android.firefox.audio_normalization_v1"
+	legacyAndroidMedia3HLSBuildV3          = "15"
 )
 
 func high10DecodeOverrideV3(source SourceDescriptorV3, request StartRequestV3) (*AppliedQuirkV3, bool) {
@@ -74,13 +75,14 @@ func isAndroidMobileBluetoothOutputV3(request StartRequestV3) bool {
 		len(output.AudioPassthrough.PassthroughCodecs) == 0
 }
 
-// usesFirstPartyAndroidMedia3HLSV3 identifies Silo Android's native Media3 HLS
-// engine. The device-quirks protocol is the first-party opt-in: an unrelated
-// client cannot obtain Android-specific byte recipes by sending only the broad
-// platform label.
+// usesFirstPartyAndroidMedia3HLSV3 identifies the exact legacy Silo Android
+// build that predates native_hls_playback_v1 but already reports its build and
+// opts into the device-quirks contract. Current clients advertise the native
+// HLS feature on the delivery directly.
 func usesFirstPartyAndroidMedia3HLSV3(request StartRequestV3) bool {
 	return deviceQuirkProtocolAvailableV3(request) &&
-		strings.EqualFold(strings.TrimSpace(request.ClientPlaybackContext.Device.Platform), "android")
+		strings.EqualFold(strings.TrimSpace(request.ClientPlaybackContext.Device.Platform), "android") &&
+		strings.TrimSpace(request.ClientPlaybackContext.AppBuild) == legacyAndroidMedia3HLSBuildV3
 }
 
 func dv8HDR10PlusRuntimeCorrectionV3(source SourceDescriptorV3, request StartRequestV3, deliveryClass string) (*AppliedQuirkV3, bool) {

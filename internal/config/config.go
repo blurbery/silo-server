@@ -174,11 +174,12 @@ type PlaybackConfig struct {
 	// identical paths on every node; devices absent on a node fall out of
 	// that node's rotation. The admin hw-accel endpoint reports each node's
 	// inventory so the UI can flag divergence.
-	HWDevice                     string `yaml:"hw_device"`
-	ChapterThumbnailWorkers      int    `yaml:"chapter_thumbnail_workers"`
-	ChapterThumbnailExecution    string `yaml:"chapter_thumbnail_execution"`
-	ChapterThumbnailNodeCapacity int    `yaml:"chapter_thumbnail_node_capacity"`
-	TranscodeEnabled             bool   `yaml:"transcode_enabled"`
+	HWDevice                     string                `yaml:"hw_device"`
+	ChapterThumbnailWorkers      int                   `yaml:"chapter_thumbnail_workers"`
+	ChapterThumbnailExecution    string                `yaml:"chapter_thumbnail_execution"`
+	ChapterThumbnailNodeCapacity int                   `yaml:"chapter_thumbnail_node_capacity"`
+	TranscodeEnabled             bool                  `yaml:"transcode_enabled"`
+	Routing                      PlaybackRoutingPolicy `yaml:"-"`
 }
 
 // RedisConfig holds Redis connection settings.

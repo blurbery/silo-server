@@ -112,7 +112,20 @@ func (h *StreamHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 	// Without a token (or signing secret) reconstruct is off, collapsing to a
 	// plain GetSession + ownership check.
 	card, claims := verifiedStreamCardFromRequest(r, sessionID, h.JWTSecret)
-	session, status, reconstructed := h.TM.LoadOrReconstructSessionDetail(r.Context(), h.sessionMgr.GetSession, sessionID, userID, card)
+	loadCard := card
+	if _, err := h.sessionMgr.GetSession(sessionID); err == nil {
+		// A live route may have been replanned since this token was issued. Do not
+		// let stale recipe routing override the current session, and do not revive
+		// the stale recipe if the live session disappears during this request.
+		loadCard = nil
+	} else if errors.Is(err, playback.ErrSessionNotFound) && !requireNativeRecipeAPIEgressV3(w, card) {
+		return
+	} else if err != nil && !errors.Is(err, playback.ErrSessionNotFound) {
+		// Do not turn an inconsistent backend read into authority to reconstruct
+		// from a recipe whose route was never checked against a clean miss.
+		loadCard = nil
+	}
+	session, status, reconstructed := h.TM.LoadOrReconstructSessionDetail(r.Context(), h.sessionMgr.GetSession, sessionID, userID, loadCard)
 	switch status {
 	case playback.SessionMissing:
 		writePlaybackSessionNotFound(w)
@@ -132,6 +145,9 @@ func (h *StreamHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	if !transportStreamClaimsMatchSession(r.Context(), session) {
 		writeError(w, http.StatusForbidden, "forbidden", "Stream token no longer matches the playback session")
+		return
+	}
+	if !requireNativeSessionAPIEgressV3(w, session) {
 		return
 	}
 

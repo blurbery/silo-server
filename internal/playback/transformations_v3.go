@@ -167,6 +167,30 @@ func (r *TransformationRegistryV3) WithAdvertised(advertised []TransformationV3)
 	return NewTransformationRegistryV3(specs)
 }
 
+// OnlyAdvertised returns a registry whose availability comes exclusively from
+// matching pooled-node advertisements. It preserves the local registry's
+// transformation definitions and recipe pins, but deliberately discards local
+// availability for routes whose policy forbids execution on the API host.
+func (r *TransformationRegistryV3) OnlyAdvertised(advertised []TransformationV3) *TransformationRegistryV3 {
+	if r == nil {
+		return nil
+	}
+	specs := make([]TransformationSpecV3, 0, len(r.entries))
+	for _, spec := range r.entries {
+		spec.Available = false
+		for _, remote := range advertised {
+			if strings.EqualFold(strings.TrimSpace(remote.Name), spec.Name) &&
+				strings.TrimSpace(remote.RecipeVersion) == spec.RecipeVersion &&
+				strings.EqualFold(strings.TrimSpace(remote.Executor), "server") {
+				spec.Available = true
+				break
+			}
+		}
+		specs = append(specs, spec)
+	}
+	return NewTransformationRegistryV3(specs)
+}
+
 func (r *TransformationRegistryV3) Advertised() []TransformationV3 {
 	if r == nil {
 		return nil

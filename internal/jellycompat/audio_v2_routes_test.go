@@ -41,6 +41,31 @@ func TestMasterManifestKeepsRemuxV1AndLegacySessionsIsolated(t *testing.T) {
 			serve:      (*PlaybackHandler).HandleRemuxV1MasterManifest,
 			requestURL: "/Videos/item-1/remux-v1/master.m3u8?PlaySessionId=play-1&MediaSourceId=source-1",
 		},
+		{
+			name: "remux-v1 route rejects MPEG-TS remux",
+			source: PlaybackMediaSource{
+				ID: "source-1", FileID: 42, HLSRemux: true, HLSRemuxMPEGTS: true,
+				HLSRemuxAudioStreamIndexes: []int{1},
+				Version:                    testCompatVersion(),
+			},
+			serve:      (*PlaybackHandler).HandleRemuxV1MasterManifest,
+			requestURL: "/Videos/item-1/remux-v1/master.m3u8?PlaySessionId=play-1&MediaSourceId=source-1",
+		},
+		{
+			name: "audio-v2 route rejects MPEG-TS remux",
+			source: PlaybackMediaSource{
+				ID: "source-1", FileID: 42, HLSRemux: true, HLSRemuxMPEGTS: true, TranscodeAudio: true,
+				Version: testCompatVersion(),
+			},
+			serve:      (*PlaybackHandler).HandleAudioV2MasterManifest,
+			requestURL: "/Videos/item-1/audio-v2/master.m3u8?PlaySessionId=play-1&MediaSourceId=source-1",
+		},
+		{
+			name:       "remux-ts-v1 route rejects fMP4 remux",
+			source:     PlaybackMediaSource{ID: "source-1", FileID: 42, HLSRemux: true, Version: testCompatVersion()},
+			serve:      (*PlaybackHandler).HandleRemuxTSV1MasterManifest,
+			requestURL: "/Videos/item-1/remux-ts-v1/master.m3u8?PlaySessionId=play-1&MediaSourceId=source-1",
+		},
 	}
 
 	for _, tt := range tests {
@@ -95,5 +120,19 @@ func TestMediaSourceDTOEmitsStableAudioV2HLSRoute(t *testing.T) {
 	stereoDTO := (&PlaybackHandler{}).mediaSourceDTO("item-1", "play-2", "token-1", stereo)
 	if !strings.HasPrefix(stereoDTO.TranscodingURL, "/Videos/item-1/master.m3u8?") {
 		t.Fatalf("all-stereo HLS URL = %q, want legacy route", stereoDTO.TranscodingURL)
+	}
+}
+
+func TestMediaSourceDTOEmitsDedicatedMPEGTSRemuxRoute(t *testing.T) {
+	for _, transcodeAudio := range []bool{false, true} {
+		source := testCompatSource(NewResourceIDCodec(), testCompatVersion())
+		source.HLSRemux = true
+		source.HLSRemuxMPEGTS = true
+		source.TranscodeAudio = transcodeAudio
+
+		dto := (&PlaybackHandler{}).mediaSourceDTO("item-1", "play-1", "token-1", source)
+		if !strings.HasPrefix(dto.TranscodingURL, "/Videos/item-1/remux-ts-v1/master.m3u8?") {
+			t.Fatalf("TranscodeAudio=%v MPEG-TS URL = %q, want dedicated remux-ts-v1 route", transcodeAudio, dto.TranscodingURL)
+		}
 	}
 }

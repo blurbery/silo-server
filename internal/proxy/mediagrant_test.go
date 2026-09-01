@@ -13,6 +13,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/auth"
 	"github.com/Silo-Server/silo-server/internal/config"
 	"github.com/Silo-Server/silo-server/internal/nodeconfig"
+	"github.com/Silo-Server/silo-server/internal/noderouting"
 	"github.com/Silo-Server/silo-server/internal/nodesessions"
 	"github.com/Silo-Server/silo-server/internal/playback"
 	"github.com/Silo-Server/silo-server/internal/streamtoken"
@@ -120,6 +121,7 @@ func TestProxyGrantRoutesRefuseUnauthenticatedAndUnauthorizedCallers(t *testing.
 			}
 		})
 	}
+
 }
 
 // An API key is a machine credential, not a viewer: it is refused here rather
@@ -164,6 +166,79 @@ func TestProxyGrantDirectPlayServesTheGrantedFile(t *testing.T) {
 	// sets; the grant route must not lose it by serving the file some other way.
 	if rr.Header().Get("ETag") == "" {
 		t.Fatal("direct play served without an ETag; a resumed range could not validate")
+	}
+}
+
+func TestProxyGrantRoutesEnforceCommittedProxyEgress(t *testing.T) {
+	path := writeGrantMedia(t, "proxy-authorized")
+	base := playback.RecipeCard{
+		SessionID: "base", UserID: 7, ProfileID: "profile-1", MediaFileID: 42,
+		PlayMethod: playback.PlayDirect, InputPath: path,
+	}
+	api := base
+	api.SessionID = "api"
+	api.RoutingWorkload = string(noderouting.WorkloadDirectPlay)
+	api.RoutingExecution = string(noderouting.ExecutionNone)
+	api.RoutingEgress = string(noderouting.EgressAPI)
+	partial := base
+	partial.SessionID = "partial"
+	partial.RoutingWorkload = string(noderouting.WorkloadDirectPlay)
+	proxy := base
+	proxy.SessionID = "proxy"
+	proxy.RoutingWorkload = string(noderouting.WorkloadDirectPlay)
+	proxy.RoutingExecution = string(noderouting.ExecutionNone)
+	proxy.RoutingEgress = string(noderouting.EgressProxy)
+	proxy.RoutingEgressNodeID = 11
+	legacy := base
+	legacy.SessionID = "legacy"
+	srv := newGrantProxyServer(t, map[string]playback.RecipeCard{
+		api.SessionID: api, partial.SessionID: partial, proxy.SessionID: proxy, legacy.SessionID: legacy,
+	})
+	srv.nodeRowID = func() (int, bool) { return 11, true }
+	bearer := grantAccessToken(t, 7, "login-1")
+
+	for _, test := range []struct {
+		sessionID  string
+		wantStatus int
+		wantError  string
+		wantBody   string
+	}{
+		{sessionID: "api", wantStatus: http.StatusServiceUnavailable, wantError: "routing_policy_unsatisfied"},
+		{sessionID: "partial", wantStatus: http.StatusConflict, wantError: "playback_route_unbound"},
+		{sessionID: "proxy", wantStatus: http.StatusOK, wantBody: "proxy-authorized"},
+		{sessionID: "legacy", wantStatus: http.StatusOK, wantBody: "proxy-authorized"},
+	} {
+		t.Run(test.sessionID, func(t *testing.T) {
+			recorder := grantRequest(t, srv, http.MethodGet, "/stream/v3/"+test.sessionID, bearer)
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d; body = %s", recorder.Code, test.wantStatus, recorder.Body.String())
+			}
+			if test.wantBody != "" {
+				if recorder.Body.String() != test.wantBody {
+					t.Fatalf("body = %q, want %q", recorder.Body.String(), test.wantBody)
+				}
+				return
+			}
+			var body grantErrorResponse
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Error != test.wantError {
+				t.Fatalf("error = %q, want %q", body.Error, test.wantError)
+			}
+		})
+	}
+
+	sibling := newGrantProxyServer(t, map[string]playback.RecipeCard{proxy.SessionID: proxy})
+	sibling.nodeRowID = func() (int, bool) { return 12, true }
+	recorder := grantRequest(t, sibling, http.MethodGet, "/stream/v3/"+proxy.SessionID, bearer)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("sibling proxy status = %d, want 503; body = %s", recorder.Code, recorder.Body.String())
+	}
+
+	recorder = grantRequest(t, srv, http.MethodGet, "/stream/v3/"+proxy.SessionID+"/master.m3u8", bearer)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("identity grant on transcode route = %d, want 503; body = %s", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -233,8 +308,8 @@ func TestProxyGrantIdentityRefusesATranscodeGrant(t *testing.T) {
 		"session-hls": {SessionID: "session-hls", UserID: 7, PlayMethod: playback.PlayTranscode, TranscodeNodeURL: "http://node-1"},
 	})
 	rr := grantRequest(t, srv, http.MethodGet, "/stream/v3/session-hls", grantAccessToken(t, 7, "login-1"))
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (body %s)", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body %s)", rr.Code, rr.Body.String())
 	}
 }
 

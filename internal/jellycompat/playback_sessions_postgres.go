@@ -211,7 +211,7 @@ func (d *DurableCompatPlaybackStore) PutNegotiated(session PlaybackSession) {
 		return
 	}
 
-	scope := "negotiated\x00" + session.CompatToken + "\x00" + session.ClientDeviceID + "\x00" + session.RouteItemID
+	scope := negotiatedPlaybackScope(session.CompatToken, session.ClientDeviceID, session.RouteItemID)
 	unlockSession := d.lockSessionMutation(scope)
 	defer unlockSession()
 	d.cacheMutationMu.RLock()
@@ -313,6 +313,18 @@ func (d *DurableCompatPlaybackStore) replaceUnstartedNegotiation(
 		return nil, err
 	}
 	return removed, nil
+}
+
+func negotiatedPlaybackScope(compatToken, clientDeviceID, routeItemID string) string {
+	compatToken = stripCompatNUL(compatToken)
+	clientDeviceID = stripCompatNUL(clientDeviceID)
+	routeItemID = stripCompatNUL(routeItemID)
+	return fmt.Sprintf(
+		"negotiated|%d:%s|%d:%s|%d:%s",
+		len(compatToken), compatToken,
+		len(clientDeviceID), clientDeviceID,
+		len(routeItemID), routeItemID,
+	)
 }
 
 // Get periodically revalidates the durable row before returning an active

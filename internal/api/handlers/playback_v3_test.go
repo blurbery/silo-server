@@ -25,6 +25,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/markers"
 	"github.com/Silo-Server/silo-server/internal/models"
 	"github.com/Silo-Server/silo-server/internal/nodepool"
+	"github.com/Silo-Server/silo-server/internal/noderouting"
 	"github.com/Silo-Server/silo-server/internal/playback"
 	"github.com/Silo-Server/silo-server/internal/streamtoken"
 	"github.com/Silo-Server/silo-server/internal/subtitles"
@@ -2933,9 +2934,10 @@ func TestSeekReanchorIdentityChangesV3ReportsOnlyChangedFieldNames(t *testing.T)
 	candidate.PlanID = "plan:candidate"
 	candidate.Delivery = playback.DeliveryRemuxHLSV3
 	candidate.Stream.Container = "hls"
+	candidate.EffectiveRecipe.VideoSampleEntry = playback.VideoSampleEntryHVC1
 	candidate.EffectiveRecipe.AudioCodec = "ac3"
 	got := strings.Join(seekReanchorIdentityChangesV3(record, &candidate), ",")
-	if want := "plan_id,delivery,container,audio_codec"; got != want {
+	if want := "plan_id,delivery,container,video_sample_entry,audio_codec"; got != want {
 		t.Fatalf("changed fields = %q, want %q", got, want)
 	}
 }
@@ -3415,7 +3417,7 @@ func TestPrepareTransportV3RejectsNodeMissingRequiredTransformation(t *testing.T
 
 	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0))
 	handler.NodePlanner = staticNodePlannerV3{plan: nodepool.Plan{TranscodeNode: &nodepool.Node{URL: remote.URL}}}
-	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{"playback.local_transcode_fallback": "false"}}
+	requireWorkerRoutingV3(handler)
 	plan := &playback.PlanV3{
 		PlanID:   "plan:remote-capability",
 		Delivery: playback.DeliveryTranscodeHLSV3,
@@ -3426,7 +3428,7 @@ func TestPrepareTransportV3RejectsNodeMissingRequiredTransformation(t *testing.T
 	}
 	request := httptest.NewRequest(http.MethodPost, "/", nil)
 	_, transportErr := handler.prepareTransportV3(request, &playback.Session{ID: "session-capability"}, v3HandlerFixtureFile(t), playback.PlannerResultV3{Plan: plan, PlayMethod: playback.PlayTranscode, TargetVideoCodec: "h264", TargetAudioCodec: "aac"}, mediaAuthModeV3{})
-	if transportErr == nil || transportErr.reason != "transcode_node_capability_unavailable" {
+	if transportErr == nil || transportErr.reason != routeCapabilityUnavailableReasonV3 {
 		t.Fatalf("transport error = %#v", transportErr)
 	}
 	if startHits != 0 {
@@ -3558,7 +3560,10 @@ func TestPrepareTransportV3SendsResolvedCopyAnchorToRemoteExecutor(t *testing.T)
 			if err := json.NewDecoder(r.Body).Decode(&startRequest); err != nil {
 				t.Errorf("decode remote start: %v", err)
 			}
-			writeJSON(w, http.StatusAccepted, transcodenode.TranscodeStartResponse{SessionID: startRequest.SessionID, Status: "started"})
+			writeJSON(w, http.StatusAccepted, transcodenode.TranscodeStartResponse{
+				SessionID: startRequest.SessionID, Status: "started",
+				CopyFMP4RecipeVersion: startRequest.CopyFMP4RecipeVersion,
+			})
 		case r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -3616,7 +3621,10 @@ func TestPrepareRemoteTransportV3RemuxOmitsToneMapOnlyDolbyVisionEvidence(t *tes
 			if err := json.NewDecoder(r.Body).Decode(&startRequest); err != nil {
 				t.Errorf("decode remote start: %v", err)
 			}
-			writeJSON(w, http.StatusAccepted, transcodenode.TranscodeStartResponse{SessionID: startRequest.SessionID, Status: "started"})
+			writeJSON(w, http.StatusAccepted, transcodenode.TranscodeStartResponse{
+				SessionID: startRequest.SessionID, Status: "started",
+				CopyFMP4RecipeVersion: startRequest.CopyFMP4RecipeVersion,
+			})
 		case r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -3650,6 +3658,9 @@ func TestPrepareRemoteTransportV3RemuxOmitsToneMapOnlyDolbyVisionEvidence(t *tes
 	if !startCalled {
 		t.Fatal("remote transcode start was not requested")
 	}
+	if startRequest.CopyFMP4RecipeVersion != playback.CopyFMP4RecipeVersion {
+		t.Fatalf("copy fMP4 recipe version = %q, want %q", startRequest.CopyFMP4RecipeVersion, playback.CopyFMP4RecipeVersion)
+	}
 	if startRequest.ToneMapDVConfigPresent || startRequest.ToneMapDVBLCompatIDPresent || startRequest.ToneMapDVBLPresent || startRequest.ToneMapDVRPUPresent {
 		t.Fatalf("remote copy/remux request carried tone-map-only Dolby Vision evidence: %#v", startRequest)
 	}
@@ -3672,6 +3683,12 @@ func TestVideoSampleEntryForPlanV3(t *testing.T) {
 			name: "stripped HDR10",
 			plan: &playback.PlanV3{Delivery: playback.DeliveryRemuxHLSV3,
 				Transformations: []playback.TransformationV3{{Name: playback.TransformationServerDV7HDR10V3}}},
+			want: playback.VideoSampleEntryHVC1,
+		},
+		{
+			name: "explicit native HLS recipe",
+			plan: &playback.PlanV3{Delivery: playback.DeliveryRemuxHLSV3,
+				EffectiveRecipe: playback.EffectiveRecipeV3{VideoCodec: "hevc", VideoSampleEntry: playback.VideoSampleEntryHVC1}},
 			want: playback.VideoSampleEntryHVC1,
 		},
 		{
@@ -3700,7 +3717,10 @@ func TestPrepareTransportV3UsesFrozenSourceMetadataAfterProbeDrift(t *testing.T)
 			if err := json.NewDecoder(r.Body).Decode(&startRequest); err != nil {
 				t.Errorf("decode remote start: %v", err)
 			}
-			writeJSON(w, http.StatusAccepted, transcodenode.TranscodeStartResponse{SessionID: startRequest.SessionID, Status: "started"})
+			writeJSON(w, http.StatusAccepted, transcodenode.TranscodeStartResponse{
+				SessionID: startRequest.SessionID, Status: "started",
+				CopyFMP4RecipeVersion: startRequest.CopyFMP4RecipeVersion,
+			})
 		case r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -3851,7 +3871,10 @@ func TestPrepareRemoteTransportV3OmitsToneMapProvenanceForDolbyVisionRemux(t *te
 				http.Error(w, "incomplete tone-map recipe", http.StatusUnprocessableEntity)
 				return
 			}
-			writeJSON(w, http.StatusAccepted, transcodenode.TranscodeStartResponse{SessionID: startRequest.SessionID, Status: "started"})
+			writeJSON(w, http.StatusAccepted, transcodenode.TranscodeStartResponse{
+				SessionID: startRequest.SessionID, Status: "started",
+				CopyFMP4RecipeVersion: startRequest.CopyFMP4RecipeVersion,
+			})
 		case r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -4988,6 +5011,53 @@ func TestSidecarOnlyHLSReplanKeepsEffectiveToneMapFallback(t *testing.T) {
 	}
 }
 
+func TestReusedHLSRouteAllowedV3HonorsCurrentHardPolicy(t *testing.T) {
+	result := playback.PlannerResultV3{Plan: &playback.PlanV3{Delivery: playback.DeliveryRemuxHLSV3}}
+	local := &playback.Session{
+		RoutingWorkload:  string(noderouting.WorkloadRemux),
+		RoutingExecution: string(noderouting.ExecutionAPI),
+		RoutingEgress:    string(noderouting.EgressAPI),
+	}
+	remote := &playback.Session{
+		RoutingWorkload:  string(noderouting.WorkloadRemux),
+		RoutingExecution: string(noderouting.ExecutionTranscode),
+		RoutingEgress:    string(noderouting.EgressProxy),
+	}
+	tests := []struct {
+		name         string
+		session      *playback.Session
+		mutate       func(*config.PlaybackRoutingPolicy)
+		proxyAllowed bool
+		want         bool
+	}{
+		{name: "local remains legal under soft preferences", session: local, proxyAllowed: true, want: true},
+		{name: "local violates worker only", session: local, proxyAllowed: true, mutate: func(policy *config.PlaybackRoutingPolicy) {
+			policy.RemuxExecution = config.PlaybackExecutionWorkerOnly
+		}},
+		{name: "local violates proxy only", session: local, proxyAllowed: true, mutate: func(policy *config.PlaybackRoutingPolicy) {
+			policy.RemuxEgress = config.PlaybackEgressProxyOnly
+		}},
+		{name: "remote violates API execution only", session: remote, proxyAllowed: true, mutate: func(policy *config.PlaybackRoutingPolicy) {
+			policy.RemuxExecution = config.PlaybackExecutionAPIOnly
+		}},
+		{name: "remote violates API egress only", session: remote, proxyAllowed: true, mutate: func(policy *config.PlaybackRoutingPolicy) {
+			policy.RemuxEgress = config.PlaybackEgressAPIOnly
+		}},
+		{name: "remote proxy is client incompatible", session: remote, proxyAllowed: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			policy := config.DefaultPlaybackRoutingPolicy()
+			if test.mutate != nil {
+				test.mutate(&policy)
+			}
+			if got := reusedHLSRouteAllowedV3(test.session, result, policy, test.proxyAllowed); got != test.want {
+				t.Fatalf("reusedHLSRouteAllowedV3() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 func TestSidecarOnlyHLSReplanRejectsSourceVideoExecutionFactDrift(t *testing.T) {
 	currentPlan := playback.PlanV3{
 		PlanID:               "current-plan",
@@ -5372,7 +5442,7 @@ func identityProxyPlanV3(delivery playback.DeliveryV3, transformations ...playba
 func TestPrepareTransportV3RoutesDirectPlayThroughProxyNode(t *testing.T) {
 	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0))
 	handler.JWTSecret = "test-secret"
-	planner := &recordingNodePlannerV3{plan: nodepool.Plan{ProxyNode: &nodepool.Node{URL: "http://proxy-1"}}}
+	planner := &recordingNodePlannerV3{plan: nodepool.Plan{ProxyNode: &nodepool.Node{ID: 41, URL: "http://proxy-1"}}}
 	handler.NodePlanner = planner
 
 	transport, transportErr := handler.prepareTransportV3(
@@ -5409,6 +5479,12 @@ func TestPrepareTransportV3RoutesDirectPlayThroughProxyNode(t *testing.T) {
 	if claims.PlayMethod != string(playback.PlayDirect) {
 		t.Fatalf("token play method = %q, want direct", claims.PlayMethod)
 	}
+	if claims.RoutingWorkload != string(noderouting.WorkloadDirectPlay) ||
+		claims.RoutingExecution != string(noderouting.ExecutionNone) ||
+		claims.RoutingEgress != string(noderouting.EgressProxy) ||
+		claims.RoutingEgressNodeID != 41 {
+		t.Fatalf("token route = %q/%q/%q on node %d, want direct/none/proxy on node 41", claims.RoutingWorkload, claims.RoutingExecution, claims.RoutingEgress, claims.RoutingEgressNodeID)
+	}
 }
 
 func TestPrepareTransportV3RoutesProgressiveRemuxThroughProxyNodeWithSeekAndDV(t *testing.T) {
@@ -5416,7 +5492,7 @@ func TestPrepareTransportV3RoutesProgressiveRemuxThroughProxyNodeWithSeekAndDV(t
 	handler.JWTSecret = "test-secret"
 	stubCopySeekAnchorV3(handler)
 	proxy := capableProxyStubV3(t)
-	handler.NodePlanner = &recordingNodePlannerV3{plan: nodepool.Plan{ProxyNode: &nodepool.Node{URL: proxy.URL + "/"}}}
+	handler.NodePlanner = &recordingNodePlannerV3{plan: nodepool.Plan{ProxyNode: &nodepool.Node{ID: 42, URL: proxy.URL + "/"}}}
 
 	file := v3HandlerFixtureFile(t)
 	file.VideoTracks[0].DVProfile = 7
@@ -5451,6 +5527,12 @@ func TestPrepareTransportV3RoutesProgressiveRemuxThroughProxyNodeWithSeekAndDV(t
 	}
 	if !claims.TranscodeAudio {
 		t.Fatal("token must tell the proxy to convert audio")
+	}
+	if claims.RoutingWorkload != string(noderouting.WorkloadRemux) ||
+		claims.RoutingExecution != string(noderouting.ExecutionProxy) ||
+		claims.RoutingEgress != string(noderouting.EgressProxy) ||
+		claims.RoutingEgressNodeID != 42 {
+		t.Fatalf("token route = %q/%q/%q on node %d, want remux/proxy/proxy on node 42", claims.RoutingWorkload, claims.RoutingExecution, claims.RoutingEgress, claims.RoutingEgressNodeID)
 	}
 }
 
@@ -5571,7 +5653,7 @@ func TestPrepareTransportV3RefusesLocalRemuxWhenFallbackDisabled(t *testing.T) {
 	handler.JWTSecret = "test-secret"
 	stubCopySeekAnchorV3(handler)
 	handler.NodePlanner = &recordingNodePlannerV3{plan: nodepool.Plan{}}
-	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{"playback.local_transcode_fallback": "false"}}
+	requireWorkerRoutingV3(handler)
 
 	_, transportErr := handler.prepareTransportV3(
 		httptest.NewRequest(http.MethodPost, "/", nil),
@@ -5582,8 +5664,8 @@ func TestPrepareTransportV3RefusesLocalRemuxWhenFallbackDisabled(t *testing.T) {
 			PlayMethod:     playback.PlayRemux,
 			TranscodeAudio: true,
 		}, mediaAuthModeV3{})
-	if transportErr == nil || transportErr.reason != "capacity_unavailable" {
-		t.Fatalf("transport error = %#v, want capacity_unavailable when local remux work is disabled", transportErr)
+	if transportErr == nil || transportErr.reason != string(noderouting.OutcomeCapacityUnavailable) {
+		t.Fatalf("transport error = %#v, want route capacity unavailable when worker-only remux has no worker", transportErr)
 	}
 }
 
@@ -5591,7 +5673,7 @@ func TestPrepareTransportV3AllowsLocalDirectPlayWhenFallbackDisabled(t *testing.
 	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0))
 	handler.JWTSecret = "test-secret"
 	handler.NodePlanner = &recordingNodePlannerV3{plan: nodepool.Plan{}}
-	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{"playback.local_transcode_fallback": "false"}}
+	requireWorkerRoutingV3(handler)
 
 	// Direct play moves bytes rather than running ffmpeg, so the transcode
 	// fallback gate must not strand a single-node deployment.
@@ -5659,6 +5741,9 @@ func TestPrepareTransportV3KeepsBoostedDownmixLocalWhenProxyHasOldRecipe(t *test
 	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0))
 	handler.JWTSecret = "test-secret"
 	stubCopySeekAnchorV3(handler)
+	presetLocalRegistryV3(handler, playback.NewTransformationRegistryV3([]playback.TransformationSpecV3{{
+		Name: playback.TransformationAudioToAACV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3, Available: true,
+	}}))
 	planner := &recordingNodePlannerV3{plan: nodepool.Plan{ProxyNode: &nodepool.Node{URL: proxy.URL}}}
 	handler.NodePlanner = planner
 
@@ -5685,6 +5770,40 @@ func TestPrepareTransportV3KeepsBoostedDownmixLocalWhenProxyHasOldRecipe(t *test
 	// incapable proxy in the first place and none needs releasing.
 	if len(planner.released) != 0 {
 		t.Fatalf("released = %v, want no reservation taken on an incapable proxy", planner.released)
+	}
+}
+
+func TestPrepareTransportV3SkipsIncapablePreferredAPIForProgressiveRemux(t *testing.T) {
+	proxy := capableProxyStubV3(t)
+	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0))
+	handler.JWTSecret = "test-secret"
+	stubCopySeekAnchorV3(handler)
+	presetLocalRegistryV3(handler, playback.NewTransformationRegistryV3([]playback.TransformationSpecV3{{
+		Name: playback.TransformationAudioToAACV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3,
+	}}))
+	handler.NodePlanner = &recordingNodePlannerV3{plan: nodepool.Plan{ProxyNode: &nodepool.Node{URL: proxy.URL}}}
+	policy := config.DefaultPlaybackRoutingPolicy()
+	policy.RemuxExecution = config.PlaybackExecutionPreferAPI
+	policy.RemuxEgress = config.PlaybackEgressPreferAPI
+	handler.PlaybackConfig = func() config.PlaybackConfig { return config.PlaybackConfig{Routing: policy} }
+
+	transport, transportErr := handler.prepareTransportV3(
+		httptest.NewRequest(http.MethodPost, "/", nil),
+		&playback.Session{ID: "session-proxy-only-recipe", UserID: 7, ProfileID: "profile-1"},
+		v3HandlerFixtureFile(t),
+		playback.PlannerResultV3{
+			Plan: identityProxyPlanV3(playback.DeliveryRemuxProgressiveV3, playback.TransformationV3{
+				Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3,
+				RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3,
+			}),
+			PlayMethod: playback.PlayRemux, TranscodeAudio: true, TargetAudioCodec: "aac",
+		}, mediaAuthModeV3{})
+	if transportErr != nil {
+		t.Fatalf("prepare identity transport: %v", transportErr)
+	}
+	defer transport.rollback()
+	if !strings.HasPrefix(transport.url, proxy.URL+"/stream/remux/") {
+		t.Fatalf("stream url = %q, want the capable proxy when the preferred API lacks the recipe", transport.url)
 	}
 }
 
@@ -5821,7 +5940,7 @@ func TestPrepareTransportV3PrefersACapableSiblingProxy(t *testing.T) {
 	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0))
 	handler.JWTSecret = "test-secret"
 	stubCopySeekAnchorV3(handler)
-	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{"playback.local_transcode_fallback": "false"}}
+	requireWorkerRoutingV3(handler)
 	handler.NodePlanner = &poolNodePlannerV3{proxies: []*nodepool.Node{
 		{ID: 1, URL: stale.URL},
 		{ID: 2, URL: upgraded.URL},
@@ -6216,5 +6335,29 @@ func TestRefreshNodeCapabilitiesV3NormalizesTheCacheKey(t *testing.T) {
 	}
 	if invalidations == 0 {
 		t.Fatal("the invalidation was counted under a different key than planning reads")
+	}
+}
+
+func TestPlaybackRoutingPolicySnapshotContextV3(t *testing.T) {
+	calls := 0
+	handler := &PlaybackHandler{PlaybackConfig: func() config.PlaybackConfig {
+		calls++
+		policy := config.DefaultPlaybackRoutingPolicy()
+		if calls > 1 {
+			policy.DirectPlayEgress = config.PlaybackEgressAPIOnly
+		}
+		return config.PlaybackConfig{Routing: policy}
+	}}
+
+	snapshot := handler.playbackRoutingPolicyV3()
+	ctx := withPlaybackRoutingPolicySnapshotV3(context.Background(), snapshot)
+	if got := handler.playbackRoutingPolicyForContextV3(ctx); got != snapshot {
+		t.Fatalf("context policy = %#v, want immutable snapshot %#v", got, snapshot)
+	}
+	if calls != 1 {
+		t.Fatalf("PlaybackConfig calls = %d, want one snapshot read", calls)
+	}
+	if got := handler.playbackRoutingPolicyForContextV3(context.Background()); got.DirectPlayEgress != config.PlaybackEgressAPIOnly {
+		t.Fatalf("unsnapshotted policy = %#v, want current config", got)
 	}
 }

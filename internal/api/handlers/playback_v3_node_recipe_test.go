@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Silo-Server/silo-server/internal/config"
 	"github.com/Silo-Server/silo-server/internal/nodepool"
 	"github.com/Silo-Server/silo-server/internal/playback"
 	"github.com/Silo-Server/silo-server/internal/transcodenode"
@@ -135,10 +136,15 @@ func TestPrepareRemoteTransportV3RejectsOldNodeAfterStaleAudioCapabilityProbe(t 
 	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0))
 	handler.JWTSecret = "test-secret"
 	handler.NodePlanner = &recordingNodePlannerV3{plan: nodepool.Plan{TranscodeNode: &nodepool.Node{URL: node.URL}}}
-	_, transportErr := handler.prepareTransportV3(
+	policy := config.DefaultPlaybackRoutingPolicy()
+	// This test exercises the stale worker's start receipt, not fallback to the
+	// API host. Pin the executor boundary so the assertion cannot depend on a
+	// concurrent local FFmpeg capability probe.
+	policy.VideoTranscodeExecution = config.PlaybackExecutionWorkerOnly
+	_, transportErr := handler.prepareTransportWithPolicyV3(
 		httptest.NewRequest(http.MethodPost, "/", nil),
 		&playback.Session{ID: "session-stale-audio-node", UserID: 7, ProfileID: "profile-1"},
-		v3HandlerFixtureFile(t), remoteHLSResultV3(), mediaAuthModeV3{})
+		v3HandlerFixtureFile(t), remoteHLSResultV3(), mediaAuthModeV3{}, policy)
 	if transportErr == nil || transportErr.reason != transcodeStartFailedReasonV3 {
 		t.Fatalf("transport error = %#v, want %q", transportErr, transcodeStartFailedReasonV3)
 	}
@@ -296,23 +302,26 @@ func TestFinalizeSessionStopDropsTheNodeRecipe(t *testing.T) {
 // transcode node keeps its half, because it is running the job.
 func TestPrepareTransportV3ReleasesTheProxyHalfWhenTheManifestIsNotProxyServed(t *testing.T) {
 	for _, test := range []struct {
-		name      string
-		jwtSecret string
-		mode      mediaAuthModeV3
-		grants    recipeCardStoreV3
+		name             string
+		jwtSecret        string
+		mode             mediaAuthModeV3
+		grants           recipeCardStoreV3
+		wantProxyRelease bool
 	}{
 		{
-			name:      "grant write failed",
-			jwtSecret: "test-secret",
-			mode:      authorizedOriginsModeV3(),
-			grants:    &recordingRecipeCardStoreV3{putErr: errors.New("redis is down")},
+			name:             "grant write failed",
+			jwtSecret:        "test-secret",
+			mode:             authorizedOriginsModeV3(),
+			grants:           &recordingRecipeCardStoreV3{putErr: errors.New("redis is down")},
+			wantProxyRelease: true,
 		},
 		{
 			// The legacy no-token fallback leaks the same half: no signable
 			// token means the proxy URL cannot be addressed at all.
-			name:   "legacy attempt with no signable token",
-			mode:   mediaAuthModeV3{},
-			grants: &recordingRecipeCardStoreV3{},
+			name:             "legacy attempt with no signable token",
+			mode:             mediaAuthModeV3{},
+			grants:           &recordingRecipeCardStoreV3{},
+			wantProxyRelease: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -337,8 +346,12 @@ func TestPrepareTransportV3ReleasesTheProxyHalfWhenTheManifestIsNotProxyServed(t
 			if transport.url != "/playback/transcode/session-proxy-half/master.m3u8" {
 				t.Fatalf("manifest url = %q, want the API-relayed manifest", transport.url)
 			}
-			if len(planner.releasedProxy) != 1 || planner.releasedProxy[0] != "session-proxy-half" {
-				t.Fatalf("proxy-half releases = %v, want the unused proxy reservation given back", planner.releasedProxy)
+			wantProxyReleases := 0
+			if test.wantProxyRelease {
+				wantProxyReleases = 1
+			}
+			if len(planner.releasedProxy) != wantProxyReleases {
+				t.Fatalf("proxy-half releases = %v, want %d", planner.releasedProxy, wantProxyReleases)
 			}
 			if len(planner.released) != 0 {
 				t.Fatalf("whole-reservation releases = %v, want none: the transcode node is running the job", planner.released)

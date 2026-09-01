@@ -76,6 +76,47 @@ Some settings are only read at startup. Two routes carry that contract:
 | `restart_mark_count` | int | Increments on every restart-required save. Because the boolean latches, this counter is the only signal that a **new** requirement arrived — the admin UI re-arms its dismissed restart banner on it. |
 | `restart_requested`, `restart_requested_at` | bool, RFC3339 string | An in-app restart was requested, and when. |
 
+## Playback node routing
+
+Playback routing separates where media work executes from the process that is
+the client-facing media origin. `GET /api/v1/admin/playback-routing/capabilities`
+advertises the supported contract:
+
+```json
+{
+  "features": ["playback_node_routing_v1"],
+  "workloads": ["direct_play", "remux", "video_transcode"],
+  "execution_preferences": ["prefer_worker", "worker_only", "prefer_api", "api_only"],
+  "egress_preferences": ["prefer_proxy", "proxy_only", "prefer_api", "api_only"]
+}
+```
+
+The existing atomic admin settings update writes the five primitive policies:
+
+| Setting | Default |
+|---|---|
+| `playback.routing.direct_play_egress` | `prefer_proxy` |
+| `playback.routing.remux_execution` | `prefer_worker` |
+| `playback.routing.remux_egress` | `prefer_proxy` |
+| `playback.routing.video_transcode_execution` | `prefer_worker` |
+| `playback.routing.video_transcode_egress` | `prefer_proxy` |
+
+`prefer_*` permits fallback; `*_only` is a hard boundary. An atomic update is
+rejected when API-only execution is combined with proxy-only egress for remux
+or video transcode, because no implemented transport can satisfy that shape.
+The policy is read as one immutable snapshot for each playback start or replan.
+
+`GET /api/v1/admin/sessions/capabilities` advertises `node_routing: true`.
+Rows from `GET /api/v1/admin/sessions` may then include
+`routing_workload`, `routing_execution`, `routing_execution_node_id`,
+`routing_execution_node_name`, `routing_egress`, `routing_egress_node_id`, and
+`routing_egress_node_name`. Node fields are absent for the integrated API
+process and for direct play's `none` executor.
+
+`silo_playback_routing_decisions_total` counts routing outcomes with bounded
+`workload`, `execution`, `egress`, `outcome`, and `reason` labels. It never
+labels observations with playback-session or node identity.
+
 ## Catalog search status
 
 `GET /api/v1/admin/catalog/search/status` reports the configured search

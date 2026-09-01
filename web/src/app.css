@@ -323,8 +323,8 @@ html[data-navigation-direction="back"] {
   --nav-slide-shift: 24px;
 }
 
-/* Home entry and return share one perceived speed. Only this exact boundary
-   gets the extra beat; every other route keeps the base 300 ms token. */
+/* Cold Home entry and return share one perceived speed. Cached entries leave
+   this marker off so their ready detail tree is never held behind this beat. */
 html[data-home-item-entry="true"] {
   --duration-sidebar-collapse: var(--duration-sidebar-entry);
 }
@@ -341,7 +341,7 @@ html[data-navigation-direction="back"][data-home-item-return="true"] {
   }
 }
 
-/* Home item entry uses a handful of fixed, solid boxes while the sidebar moves.
+/* A cold Home item entry uses fixed, solid boxes while the sidebar moves.
    They never pulse or request artwork, and disappear before the real hero's
    bounded poster/copy group settles. The page surface itself stays opaque. */
 .home-item-transition-block {

@@ -46,6 +46,18 @@ type Session struct {
 	TranscodeTransportID string // remote node process identity; empty means session ID
 	AudioTrackIndex      int
 
+	// RoutingWorkload and the execution/egress fields describe the committed
+	// node-routing assignment independently from the transcode process route.
+	// Node URLs are internal identities used by the session sync layer to join
+	// stable stream-node IDs; they are never returned as client media origins.
+	RoutingWorkload         string
+	RoutingExecution        string
+	RoutingExecutionNodeID  int
+	RoutingExecutionNodeURL string
+	RoutingEgress           string
+	RoutingEgressNodeID     int
+	RoutingEgressNodeURL    string
+
 	StreamBitrateKbps      int          // currently delivered bitrate, when known
 	TargetResolution       string       // requested output resolution for transcodes
 	TargetVideoCodec       string       // requested output video codec for transcodes
@@ -110,6 +122,13 @@ type SessionStreamState struct {
 	TranscodeNodeURL           string
 	TranscodeTransportID       string
 	TranscodeRouteSet          bool
+	RoutingWorkload            string
+	RoutingExecution           string
+	RoutingExecutionNodeID     int
+	RoutingExecutionNodeURL    string
+	RoutingEgress              string
+	RoutingEgressNodeID        int
+	RoutingEgressNodeURL       string
 	RequireMediaAuthorization  bool
 	MediaAuthorizationSet      bool
 
@@ -129,6 +148,20 @@ type SessionStreamState struct {
 type TranscodeRoute struct {
 	NodeURL     string
 	TransportID string
+}
+
+// NodeRoutingAssignment is the committed placement of one playback workload.
+// The string vocabulary belongs to the routing package; playback stores it as
+// opaque session state to avoid coupling session lifetime management to route
+// selection.
+type NodeRoutingAssignment struct {
+	Workload         string
+	Execution        string
+	ExecutionNodeID  int
+	ExecutionNodeURL string
+	Egress           string
+	EgressNodeID     int
+	EgressNodeURL    string
 }
 
 // SessionReplacement is the complete mutable session state associated with a
@@ -966,6 +999,13 @@ func applySessionStreamStateLocked(s *Session, state SessionStreamState) {
 	if state.TranscodeRouteSet {
 		s.TranscodeNodeURL = state.TranscodeNodeURL
 		s.TranscodeTransportID = state.TranscodeTransportID
+		s.RoutingWorkload = state.RoutingWorkload
+		s.RoutingExecution = state.RoutingExecution
+		s.RoutingExecutionNodeID = state.RoutingExecutionNodeID
+		s.RoutingExecutionNodeURL = state.RoutingExecutionNodeURL
+		s.RoutingEgress = state.RoutingEgress
+		s.RoutingEgressNodeID = state.RoutingEgressNodeID
+		s.RoutingEgressNodeURL = state.RoutingEgressNodeURL
 	}
 	if state.MediaAuthorizationSet {
 		s.RequireMediaAuthorization = state.RequireMediaAuthorization
@@ -1007,6 +1047,13 @@ func snapshotSessionStreamStateLocked(s *Session) SessionStreamState {
 		TranscodeNodeURL:           s.TranscodeNodeURL,
 		TranscodeTransportID:       s.TranscodeTransportID,
 		TranscodeRouteSet:          true,
+		RoutingWorkload:            s.RoutingWorkload,
+		RoutingExecution:           s.RoutingExecution,
+		RoutingExecutionNodeID:     s.RoutingExecutionNodeID,
+		RoutingExecutionNodeURL:    s.RoutingExecutionNodeURL,
+		RoutingEgress:              s.RoutingEgress,
+		RoutingEgressNodeID:        s.RoutingEgressNodeID,
+		RoutingEgressNodeURL:       s.RoutingEgressNodeURL,
 		SubtitleTrackIndex:         s.SubtitleTrackIndex,
 		SubtitleBurnIn:             s.SubtitleBurnIn,
 		SegmentDuration:            s.SegmentDuration,
@@ -1039,6 +1086,13 @@ func restoreSessionStreamStateLocked(s *Session, state SessionStreamState) {
 	s.ToneMapMode = state.ToneMapMode
 	s.TranscodeNodeURL = state.TranscodeNodeURL
 	s.TranscodeTransportID = state.TranscodeTransportID
+	s.RoutingWorkload = state.RoutingWorkload
+	s.RoutingExecution = state.RoutingExecution
+	s.RoutingExecutionNodeID = state.RoutingExecutionNodeID
+	s.RoutingExecutionNodeURL = state.RoutingExecutionNodeURL
+	s.RoutingEgress = state.RoutingEgress
+	s.RoutingEgressNodeID = state.RoutingEgressNodeID
+	s.RoutingEgressNodeURL = state.RoutingEgressNodeURL
 	s.RequireMediaAuthorization = state.RequireMediaAuthorization
 	s.SubtitleTrackIndex = state.SubtitleTrackIndex
 	s.SubtitleBurnIn = state.SubtitleBurnIn
@@ -1175,6 +1229,30 @@ func (m *SessionManager) SetTranscodeNodeURL(sessionID, url string) error {
 	}
 
 	s.TranscodeNodeURL = url
+	s.streamRevision++
+	m.touchSessionLocked(s)
+	return nil
+}
+
+// SetNodeRoutingAssignment records the successfully prepared route exposed by
+// live-session observability. Callers invoke it only after the selected route
+// has enough authority to serve the client.
+func (m *SessionManager) SetNodeRoutingAssignment(sessionID string, assignment NodeRoutingAssignment) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, ok := m.sessions[sessionID]
+	if !ok {
+		return ErrSessionNotFound
+	}
+
+	s.RoutingWorkload = assignment.Workload
+	s.RoutingExecution = assignment.Execution
+	s.RoutingExecutionNodeID = assignment.ExecutionNodeID
+	s.RoutingExecutionNodeURL = assignment.ExecutionNodeURL
+	s.RoutingEgress = assignment.Egress
+	s.RoutingEgressNodeID = assignment.EgressNodeID
+	s.RoutingEgressNodeURL = assignment.EgressNodeURL
 	s.streamRevision++
 	m.touchSessionLocked(s)
 	return nil

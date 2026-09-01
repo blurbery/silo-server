@@ -389,6 +389,24 @@ func TestPlanAttemptKeyV3Fixture(t *testing.T) {
 	}
 }
 
+func TestPlanIdentityIncludesVideoSampleEntry(t *testing.T) {
+	plan := PlanV3{
+		PlanID:          "plan:sample-entry",
+		Delivery:        DeliveryRemuxHLSV3,
+		Stream:          StreamV3{Protocol: StreamHLSV3, Container: "hls"},
+		EffectiveRecipe: EffectiveRecipeV3{VideoCodec: "hevc"},
+	}
+	withoutEntryID := DeterministicPlanIDV3("attempt-sample-entry", 42, 42, plan)
+	withoutEntryKey := PlanAttemptKeyV3(plan, "output-1", nil)
+	plan.EffectiveRecipe.VideoSampleEntry = VideoSampleEntryHVC1
+	if withEntryID := DeterministicPlanIDV3("attempt-sample-entry", 42, 42, plan); withEntryID == withoutEntryID {
+		t.Fatal("sample-entry change did not alter the deterministic plan id")
+	}
+	if withEntryKey := PlanAttemptKeyV3(plan, "output-1", nil); withEntryKey == withoutEntryKey {
+		t.Fatal("sample-entry change did not alter the plan-attempt key")
+	}
+}
+
 func TestProtocolV3ConformanceMatrixCoversReleaseTrain(t *testing.T) {
 	var matrix ConformanceMatrixV3
 	body, err := os.ReadFile("testdata/protocol_v3/conformance_matrix.json")
@@ -976,17 +994,18 @@ func TestHLSVideoSampleEntryV3ScopesAndroidMedia3NativeRecipes(t *testing.T) {
 	tests := []struct {
 		name         string
 		platform     string
+		appBuild     string
 		deviceQuirks bool
 		nativeHLS    bool
 		dvProfile    int
 		dvStrip      bool
 		want         string
 	}{
-		{name: "Android plain HEVC", platform: "android", deviceQuirks: true, want: VideoSampleEntryHVC1V3},
-		{name: "Android Profile 7 strip", platform: "android", deviceQuirks: true, dvProfile: 7, dvStrip: true, want: VideoSampleEntryHVC1V3},
-		{name: "Android Profile 8 preserve", platform: "android", deviceQuirks: true, dvProfile: 8, want: VideoSampleEntryDVH1V3},
-		{name: "unscoped Android client", platform: "android", dvProfile: 8, want: VideoSampleEntryHEV1V3},
-		{name: "web hls.js", platform: "web", deviceQuirks: true, dvProfile: 7, dvStrip: true, want: VideoSampleEntryHEV1V3},
+		{name: "Android plain HEVC", platform: "android", appBuild: legacyAndroidMedia3HLSBuildV3, deviceQuirks: true, want: VideoSampleEntryHVC1V3},
+		{name: "Android Profile 7 strip", platform: "android", appBuild: legacyAndroidMedia3HLSBuildV3, deviceQuirks: true, dvProfile: 7, dvStrip: true, want: VideoSampleEntryHVC1V3},
+		{name: "Android Profile 8 preserve", platform: "android", appBuild: legacyAndroidMedia3HLSBuildV3, deviceQuirks: true, dvProfile: 8, want: VideoSampleEntryDVH1V3},
+		{name: "unscoped Android client", platform: "android", dvProfile: 8, want: ""},
+		{name: "web hls.js", platform: "web", deviceQuirks: true, dvProfile: 7, dvStrip: true, want: ""},
 		{name: "Apple native Profile 7 strip", platform: "tvos", nativeHLS: true, dvProfile: 7, dvStrip: true, want: VideoSampleEntryHVC1V3},
 		{name: "Apple native Profile 8 preserve", platform: "tvos", nativeHLS: true, dvProfile: 8, want: VideoSampleEntryDVH1V3},
 	}
@@ -994,6 +1013,7 @@ func TestHLSVideoSampleEntryV3ScopesAndroidMedia3NativeRecipes(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			req := validStartRequestV3()
 			req.ClientPlaybackContext.Device.Platform = test.platform
+			req.ClientPlaybackContext.AppBuild = test.appBuild
 			if test.deviceQuirks {
 				req.ClientFeatures = append(req.ClientFeatures, FeatureDeviceQuirksV3)
 			}
@@ -1010,7 +1030,7 @@ func TestHLSVideoSampleEntryV3ScopesAndroidMedia3NativeRecipes(t *testing.T) {
 	}
 }
 
-func TestPlanPlaybackV3AndroidMedia3HLSRecipesAcrossSourceQualities(t *testing.T) {
+func TestPlanPlaybackV3AndroidMedia3HLSRecipesAcrossSourceQualitiesWithExplicitLegacyScope(t *testing.T) {
 	profiles := []struct {
 		name           string
 		profile        int
@@ -1038,10 +1058,13 @@ func TestPlanPlaybackV3AndroidMedia3HLSRecipesAcrossSourceQualities(t *testing.T
 
 				req := validStartRequestV3()
 				req.QualityPreference = quality
+				req.ClientPlaybackContext.Device.Platform = "android"
+				req.ClientPlaybackContext.AppBuild = legacyAndroidMedia3HLSBuildV3
 				req.ClientFeatures = append(req.ClientFeatures, FeatureDeviceQuirksV3)
 				req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
 				req.Capabilities.HDRDetails = profile.hdr
 				req.ClientPlaybackContext.Output.HDRDetails = profile.hdr
+				delete(req.ClientPlaybackContext.Deliveries, DeliveryClassOriginalHTTPV3)
 				delete(req.ClientPlaybackContext.Deliveries, DeliveryClassProgressiveV3)
 				hls := req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3]
 				hls.VideoCodecs = []string{"hevc"}
@@ -1131,8 +1154,8 @@ func TestPlanPlaybackV3WebHLSJSKeepsProgressiveDolbyRouteFirst(t *testing.T) {
 			if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxProgressiveV3 || result.Plan.EffectiveRecipe.DynamicRange != DynamicRangeHDR10V3 {
 				t.Fatalf("result = %s", ExplainPlannerResultV3(result))
 			}
-			if result.Plan.EffectiveRecipe.VideoSampleEntry != VideoSampleEntryHVC1V3 {
-				t.Fatalf("progressive sample entry = %q, want hvc1", result.Plan.EffectiveRecipe.VideoSampleEntry)
+			if result.Plan.EffectiveRecipe.VideoSampleEntry != "" {
+				t.Fatalf("progressive sample entry = %q, want empty", result.Plan.EffectiveRecipe.VideoSampleEntry)
 			}
 			if result.PlayMethod != PlayRemux || result.Plan.EffectiveRecipe.VideoCodec != "hevc" || result.Plan.EffectiveMediaFileID != file.ID {
 				t.Fatalf("the first browser route did not keep the 4K HEVC remux: %#v", result)
@@ -1146,13 +1169,112 @@ func TestPlanPlaybackV3WebHLSJSKeepsProgressiveDolbyRouteFirst(t *testing.T) {
 			if fallback.Plan == nil || fallback.Plan.Delivery != DeliveryRemuxHLSV3 || fallback.Plan.EffectiveMediaFileID != file.ID {
 				t.Fatalf("the same-file HLS recovery route was lost: %#v", fallback)
 			}
-			if fallback.Plan.EffectiveRecipe.VideoSampleEntry != VideoSampleEntryHEV1V3 {
-				t.Fatalf("hls.js recovery sample entry = %q, want hev1", fallback.Plan.EffectiveRecipe.VideoSampleEntry)
+			if fallback.Plan.EffectiveRecipe.VideoSampleEntry != "" {
+				t.Fatalf("hls.js recovery sample entry = %q, want empty", fallback.Plan.EffectiveRecipe.VideoSampleEntry)
 			}
 			if !fallback.DropInitialLeadingPictures || len(fallback.Plan.AppliedQuirks) != 2 || fallback.Plan.AppliedQuirks[0].ID != QuirkFirefoxMatroskaAACTimingV3 || fallback.Plan.AppliedQuirks[1].ID != QuirkFirefoxHEVCOpenGOPV3 {
 				t.Fatalf("Firefox HLS audio and resume recipes were not frozen: %#v", fallback)
 			}
 		})
+	}
+}
+
+func TestHLSVideoSampleEntryV3ScopesNativeRecipes(t *testing.T) {
+	tests := []struct {
+		name         string
+		platform     string
+		appBuild     string
+		deviceQuirks bool
+		nativeHLS    bool
+		dvProfile    int
+		dvStrip      bool
+		want         string
+	}{
+		{name: "legacy Android plain HEVC", platform: "android", appBuild: legacyAndroidMedia3HLSBuildV3, deviceQuirks: true, want: VideoSampleEntryHVC1},
+		{name: "legacy Android Profile 7 strip", platform: "android", appBuild: legacyAndroidMedia3HLSBuildV3, deviceQuirks: true, dvProfile: 7, dvStrip: true, want: VideoSampleEntryHVC1},
+		{name: "legacy Android Profile 8 preserve", platform: "android", appBuild: legacyAndroidMedia3HLSBuildV3, deviceQuirks: true, dvProfile: 8, want: VideoSampleEntryDVH1},
+		{name: "Android quirks without legacy build", platform: "android", deviceQuirks: true, dvProfile: 8, want: ""},
+		{name: "Android quirks on another build", platform: "android", appBuild: "16", deviceQuirks: true, dvProfile: 8, want: ""},
+		{name: "unscoped Android legacy build", platform: "android", appBuild: legacyAndroidMedia3HLSBuildV3, dvProfile: 8, want: ""},
+		{name: "web MediaSource", platform: "web", deviceQuirks: true, dvProfile: 7, dvStrip: true, want: ""},
+		{name: "explicit native HLS Profile 7 strip", platform: "tvos", nativeHLS: true, dvProfile: 7, dvStrip: true, want: VideoSampleEntryHVC1},
+		{name: "explicit native HLS Profile 8 preserve", platform: "tvos", nativeHLS: true, dvProfile: 8, want: VideoSampleEntryDVH1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := validStartRequestV3()
+			req.ClientPlaybackContext.Device.Platform = test.platform
+			req.ClientPlaybackContext.AppBuild = test.appBuild
+			if test.deviceQuirks {
+				req.ClientFeatures = append(req.ClientFeatures, FeatureDeviceQuirksV3)
+			}
+			if test.nativeHLS {
+				hls := req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3]
+				hls.Features = append(hls.Features, ClientNativeHLSPlaybackV3)
+				req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3] = hls
+			}
+			source := SourceDescriptorV3{VideoCodec: "hevc", DVProfile: test.dvProfile}
+			if got := hlsVideoSampleEntryV3(source, req, test.dvStrip); got != test.want {
+				t.Fatalf("sample entry = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPlanPlaybackV3AndroidMedia3HLSRecipesAcrossSourceQualities(t *testing.T) {
+	profiles := []struct {
+		name           string
+		profile        int
+		compatibility  int
+		videoRangeType string
+		hdr            *HDRCapabilitiesV3
+		wantEntry      string
+	}{
+		{name: "Profile 7 strip", profile: 7, compatibility: 6, videoRangeType: "DOVIWithEL", hdr: &HDRCapabilitiesV3{HDR10: true}, wantEntry: VideoSampleEntryHVC1},
+		{name: "Profile 8 preserve", profile: 8, compatibility: 1, videoRangeType: "DOVIWithHDR10", hdr: &HDRCapabilitiesV3{DolbyVisionProfiles: []int{8}, DolbyVisionProfileLevels: []DolbyVisionProfileCapabilityV3{{Profile: 8, MaxLevel: 6, BLCompatibilityIDs: []int{1}}}}, wantEntry: VideoSampleEntryDVH1},
+	}
+	for _, profile := range profiles {
+		for _, quality := range []string{"auto", QualityOriginalV3, "2160p"} {
+			t.Run(profile.name+"/"+quality, func(t *testing.T) {
+				file := detailedFixtureFileV3()
+				file.CodecAudio = "truehd"
+				file.AudioChannels = 8
+				file.AudioTracks[0] = models.AudioTrack{Codec: "truehd", Channels: 8, Layout: "7.1", Default: true}
+				file.VideoTracks[0].DVProfile = profile.profile
+				file.VideoTracks[0].DVBLCompatID = profile.compatibility
+				file.VideoTracks[0].DVLevel = 6
+				file.VideoTracks[0].ColorTransfer = "smpte2084"
+				file.VideoTracks[0].VideoRange = "DolbyVision"
+				file.VideoTracks[0].VideoRangeType = profile.videoRangeType
+
+				req := validStartRequestV3()
+				req.QualityPreference = quality
+				req.ClientPlaybackContext.Device.Platform = "android"
+				req.ClientPlaybackContext.AppBuild = legacyAndroidMedia3HLSBuildV3
+				req.ClientFeatures = append(req.ClientFeatures, FeatureDeviceQuirksV3)
+				req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
+				req.Capabilities.HDRDetails = profile.hdr
+				req.ClientPlaybackContext.Output.HDRDetails = profile.hdr
+				delete(req.ClientPlaybackContext.Deliveries, DeliveryClassOriginalHTTPV3)
+				delete(req.ClientPlaybackContext.Deliveries, DeliveryClassProgressiveV3)
+				hls := req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3]
+				hls.VideoCodecs = []string{"hevc"}
+				hls.AudioDecodeCodecs = []string{"aac"}
+				hls.HDRDetails = profile.hdr
+				req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3] = hls
+
+				result := PlanPlaybackV3(PlannerInputV3{
+					Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0,
+					Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: testTransformationRegistryV3(),
+				})
+				if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxHLSV3 || result.TargetVideoCodec != "copy" || !result.TranscodeAudio {
+					t.Fatalf("result = %s", ExplainPlannerResultV3(result))
+				}
+				if got := result.Plan.EffectiveRecipe.VideoSampleEntry; got != profile.wantEntry {
+					t.Fatalf("sample entry = %q, want %q", got, profile.wantEntry)
+				}
+			})
+		}
 	}
 }
 
@@ -1960,16 +2082,16 @@ func TestPlanPlaybackV3Profile7StripFallsBackToValidatedHLSCopy(t *testing.T) {
 	if first.Plan == nil || first.Plan.Delivery != DeliveryRemuxProgressiveV3 || len(first.Plan.Transformations) != 1 {
 		t.Fatalf("first = %#v", first)
 	}
-	if first.Plan.EffectiveRecipe.VideoSampleEntry != VideoSampleEntryHVC1V3 {
-		t.Fatalf("progressive strip sample entry = %q, want hvc1", first.Plan.EffectiveRecipe.VideoSampleEntry)
+	if first.Plan.EffectiveRecipe.VideoSampleEntry != "" {
+		t.Fatalf("progressive strip sample entry = %q, want empty", first.Plan.EffectiveRecipe.VideoSampleEntry)
 	}
 	failedKey := PlanAttemptKeyV3(*first.Plan, req.ClientPlaybackContext.Output.OutputContextID, nil)
 	second := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: registry, AttemptedKeys: []string{failedKey}})
 	if second.Plan == nil || second.Plan.Delivery != DeliveryRemuxHLSV3 || second.TargetVideoCodec != "copy" || len(second.Plan.Transformations) != 1 || second.Plan.Transformations[0].Name != "server_dv7_to_hdr10" {
 		t.Fatalf("second = %#v", second)
 	}
-	if second.Plan.EffectiveRecipe.VideoSampleEntry != VideoSampleEntryHEV1V3 {
-		t.Fatalf("hls.js fallback sample entry = %q, want hev1", second.Plan.EffectiveRecipe.VideoSampleEntry)
+	if second.Plan.EffectiveRecipe.VideoSampleEntry != "" {
+		t.Fatalf("hls.js fallback sample entry = %q, want empty", second.Plan.EffectiveRecipe.VideoSampleEntry)
 	}
 	if second.Plan.RequestedMediaFileID != file.ID || second.Plan.EffectiveMediaFileID != file.ID {
 		t.Fatalf("fallback changed source: requested=%d effective=%d", second.Plan.RequestedMediaFileID, second.Plan.EffectiveMediaFileID)
@@ -3978,7 +4100,7 @@ func TestPlanPlaybackV3WebAudioNormalizationMatrix(t *testing.T) {
 		if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxProgressiveV3 || result.PlayMethod != PlayRemux || !result.TranscodeAudio || result.TargetAudioCodec != "aac" {
 			t.Fatalf("result = %s", ExplainPlannerResultV3(result))
 		}
-		if result.Plan.EffectiveRecipe.VideoCodec != "hevc" || result.Plan.EffectiveRecipe.VideoSampleEntry != VideoSampleEntryDVH1V3 || result.Plan.EffectiveRecipe.DynamicRange != DynamicRangeDolbyVisionV3 {
+		if result.Plan.EffectiveRecipe.VideoCodec != "hevc" || result.Plan.EffectiveRecipe.VideoSampleEntry != "" || result.Plan.EffectiveRecipe.DynamicRange != DynamicRangeDolbyVisionV3 {
 			t.Fatalf("copied Dolby Vision recipe = %#v", result.Plan.EffectiveRecipe)
 		}
 		if len(result.Plan.Transformations) != 1 || result.Plan.Transformations[0].Name != TransformationAudioToAACV3 || len(result.Plan.AppliedQuirks) != 1 || result.Plan.AppliedQuirks[0].ID != QuirkWindowsWebAudioNormalizeV3 {

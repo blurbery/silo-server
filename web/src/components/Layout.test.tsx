@@ -88,15 +88,18 @@ vi.mock("@/components/AppSidebar", () => ({
 import Layout from "./Layout";
 import {
   useSidebarItemDetailsReady,
+  useSidebarItemEnteredFromHome,
   useSidebarItemNavigation,
 } from "./sidebarItemNavigationContext";
 
 function Harness() {
   const begin = useSidebarItemNavigation();
   const ready = useSidebarItemDetailsReady();
+  const enteredFromHome = useSidebarItemEnteredFromHome();
   return (
     <>
       <output aria-label="details-ready">{String(ready)}</output>
+      <output aria-label="entered-from-home">{String(enteredFromHome)}</output>
       <button
         onClick={() => {
           mocks.beginResult = begin?.({
@@ -129,8 +132,8 @@ function renderLayout() {
   );
 }
 
-function setRoute(pathname: string, key: string) {
-  mocks.location = { pathname, search: "", key };
+function setRoute(pathname: string, key: string, search = "") {
+  mocks.location = { pathname, search, key };
 }
 
 beforeEach(() => {
@@ -255,6 +258,9 @@ describe("Layout item navigation", () => {
     expect(mocks.prefetchQuery).toHaveBeenCalledWith(
       expect.objectContaining({ queryKey: catalogKeys.itemDetail("movie-1", 2) }),
     );
+    expect(mocks.getQueryData.mock.invocationCallOrder[0]!).toBeLessThan(
+      mocks.prefetchQuery.mock.invocationCallOrder[0]!,
+    );
     expect(mocks.prefetchQuery.mock.invocationCallOrder[0]!).toBeLessThan(
       mocks.navigate.mock.invocationCallOrder[0]!,
     );
@@ -319,16 +325,17 @@ describe("Layout detail reveal", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("keeps cached Home item re-entry light until the sidebar carry settles", () => {
+  it("renders cached Home item entries immediately without replaying their reveal animation", () => {
     mocks.getQueryData.mockImplementation((queryKey: unknown) =>
-      JSON.stringify(queryKey) === JSON.stringify(catalogKeys.itemDetail("movie-1", undefined))
+      JSON.stringify(queryKey) === JSON.stringify(catalogKeys.itemDetail("movie-1", 2))
         ? { content_id: "movie-1" }
         : undefined,
     );
     const view = renderLayout();
 
     const enterCachedItem = (key: string) => {
-      setRoute("/item/movie-1", key);
+      fireEvent.click(screen.getByRole("button", { name: "begin item" }));
+      setRoute("/item/movie-1", key, "?libraryId=2");
       act(() =>
         view.rerender(
           <MemoryRouter>
@@ -341,15 +348,10 @@ describe("Layout detail reveal", () => {
     };
 
     enterCachedItem("item-first");
-    expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("false");
-    expect(document.documentElement).toHaveAttribute("data-home-item-entry", "true");
-
-    const surface = screen.getByTestId("sidebar-surface");
-    surface.setAttribute("data-collapsed", "true");
-    fireEvent.transitionEnd(surface, { propertyName: "transform" });
     expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("true");
-    expect(document.documentElement).toHaveAttribute("data-home-item-entry", "true");
-    surface.removeAttribute("data-collapsed");
+    expect(screen.getByRole("status", { name: "entered-from-home" })).toHaveTextContent("true");
+    expect(document.documentElement).not.toHaveAttribute("data-home-item-entry");
+    expect(vi.getTimerCount()).toBe(0);
 
     setRoute("/", "home-again");
     act(() =>
@@ -365,13 +367,32 @@ describe("Layout detail reveal", () => {
 
     enterCachedItem("item-repeat");
     expect(document.documentElement).not.toHaveAttribute("data-home-item-return");
-    expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("false");
-
-    screen.getByTestId("sidebar-surface").setAttribute("data-collapsed", "true");
-    fireEvent.transitionEnd(screen.getByTestId("sidebar-surface"), {
-      propertyName: "transform",
-    });
     expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("true");
+    expect(document.documentElement).not.toHaveAttribute("data-home-item-entry");
+  });
+
+  it("does not mistake a prefetch that completes before route commit for a cache hit", () => {
+    mocks.getQueryData.mockReturnValueOnce(undefined);
+    mocks.prefetchQuery.mockImplementation(() => {
+      mocks.getQueryData.mockReturnValue({ content_id: "movie-1" });
+      return Promise.resolve();
+    });
+    const view = renderLayout();
+
+    fireEvent.click(screen.getByRole("button", { name: "begin item" }));
+    setRoute("/item/movie-1", "item", "?libraryId=2");
+    act(() =>
+      view.rerender(
+        <MemoryRouter>
+          <Layout>
+            <Harness />
+          </Layout>
+        </MemoryRouter>,
+      ),
+    );
+
+    expect(screen.getByRole("status", { name: "details-ready" })).toHaveTextContent("false");
+    expect(document.documentElement).toHaveAttribute("data-home-item-entry", "true");
   });
 
   it("reveals as soon as the surface settles", () => {

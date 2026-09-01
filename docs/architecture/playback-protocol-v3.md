@@ -533,14 +533,14 @@ a token-bearing proxy path, and no proxy or transcode-node origin is returned.
 A pooled transcode node may still execute HLS behind the API server; the API
 relays its manifest and segments over the same authenticated client route.
 Direct-play and progressive-remux proxy routes are bypassed because those
-nodes accept a signed URL token rather than the user's API credential, so the
-normal local-remux fallback policy still applies. On a server that disables
-`playback.local_transcode_fallback`, a progressive remux needing a server
-transformation therefore has no executor at all: the server plans the same
-recipe as `server_remux_hls` instead, which a pooled transcode node can run
-behind the API. A client that advertises no HLS delivery gets the non-retryable
-terminal `local_transcode_disabled` rather than a retryable capacity error it
-could only retry forever.
+nodes accept a signed URL token rather than the user's API credential. The
+shared node-routing resolver then applies the workload's execution and egress
+policy. For example, `remux_execution=worker_only` makes an API-executed
+progressive remux illegal, so the server plans the same recipe as
+`server_remux_hls` when the client supports HLS; a pooled transcode node can
+execute that recipe while the API remains the media origin. A progressive-only
+client receives a non-retryable `local_transcode_disabled` terminal because
+retrying cannot create a legal route.
 
 **Authorized media origins.** A client that also sends
 `authorized_media_origins_v1` promises something further: it will fetch media
@@ -563,9 +563,13 @@ origin — the URLs above are an addition a plan may make, never one a client ma
 assume. The escalation described just above therefore applies only when no proxy
 origin is available to run the remux.
 
-Only media moves. Start, replan, route events, progress and every other
-control-plane call stay on the API origin, and the attempt's plan remains the
-sole authority for which URL to fetch.
+Only the primary audio/video transport moves. Start, replan, route events,
+progress and every other control-plane call stay on the API origin, and the
+attempt's plan remains the sole authority for which URL to fetch. Subtitle
+artifacts and font bundles are authenticated auxiliary resources: their
+inventory URLs remain API-relative even when node routing assigns the primary
+file, manifest, and segments to a proxy origin. Jellyfin-compatible subtitle
+`DeliveryUrl` values follow the same API-origin rule.
 
 The client must attach its current `Authorization: Bearer ...` header to the
 manifest/file request and every derived request, including HLS segments,
@@ -973,9 +977,15 @@ HDR, 4K, or transcode-policy reason — deselecting the subtitle restores playba
 `invalid_seek_position`, `invalid_replan`, `seek_reanchor_route_changed`,
 `seek_reanchor_recipe_unavailable`,
 `seek_reanchor_intent_mismatch`, `seek_failure_recovery_intent_mismatch`,
-`policy_unavailable`, `policy_denied`. A policy evaluation infrastructure
-failure is retryable `policy_unavailable`; only an evaluated policy decision
-whose result is deny uses non-retryable `policy_denied`.
+`policy_unavailable`, `policy_denied`, `routing_policy_unsatisfied`,
+`route_capacity_unavailable`. A policy evaluation infrastructure failure is
+retryable `policy_unavailable`; only an evaluated policy decision whose result
+is deny uses non-retryable `policy_denied`.
+The last two come from the node-routing resolver:
+`routing_policy_unsatisfied` means no route shape is legal under the configured
+execution and egress policy and is never retryable, while
+`route_capacity_unavailable` means a legal shape exists but no node could serve
+it right now and is always retryable.
 
 ### 7.4 Route event names
 

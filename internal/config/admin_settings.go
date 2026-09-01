@@ -32,8 +32,8 @@ const (
 // Shared server-setting keys used by playback and prepared-download policy
 // readers. Keep them here with the effective admin-setting defaults.
 const (
-	PlaybackLocalTranscodeFallbackSettingKey = "playback.local_transcode_fallback"
 	Allow4KTranscodeSettingKey               = "allow_4k_transcode"
+	DownloadLocalTranscodeFallbackSettingKey = "download.local_transcode_fallback"
 )
 
 // ArtworkStorageReconcileCheckpointKey is machine-managed task state. It is
@@ -85,24 +85,28 @@ var adminSettingDefaults = map[string]string{
 	"markers.mode":                         "local",
 	"markers.lazy_playback":                "false",
 
-	"playback.ffmpeg_path":                     "",
-	playbackTranscodeDirSettingKey:             DefaultTranscodeDir,
-	playbackSegmentRetentionSettingKey:         "600",
-	"playback.hw_accel":                        "auto",
-	"playback.transcode_enabled":               "true",
-	PlaybackLocalTranscodeFallbackSettingKey:   "true",
-	"playback.chapter_thumbnail_workers":       "1",
-	"playback.chapter_thumbnail_execution":     "local",
-	"playback.chapter_thumbnail_node_capacity": "1",
-	"playback.chapter_thumbnail_hdr_policy":    "best_effort",
-	chapterThumbnailSoftwareToneMapKey:         "false",
-	PlaybackTranscodeHardwareToneMapSettingKey: "false",
-	PlaybackTranscodeSoftwareToneMapSettingKey: "false",
-	"playback.watched_threshold":               "90",
-	"playback.min_resume_threshold":            "5",
-	Allow4KTranscodeSettingKey:                 "false",
-	"enable_transcode_throttle":                "false",
-	"transcode_throttle_seconds":               "300",
+	"playback.ffmpeg_path":                           "",
+	playbackTranscodeDirSettingKey:                   DefaultTranscodeDir,
+	playbackSegmentRetentionSettingKey:               "600",
+	"playback.hw_accel":                              "auto",
+	"playback.transcode_enabled":                     "true",
+	PlaybackRoutingDirectPlayEgressSettingKey:        string(PlaybackEgressPreferProxy),
+	PlaybackRoutingRemuxExecutionSettingKey:          string(PlaybackExecutionPreferWorker),
+	PlaybackRoutingRemuxEgressSettingKey:             string(PlaybackEgressPreferProxy),
+	PlaybackRoutingVideoTranscodeExecutionSettingKey: string(PlaybackExecutionPreferWorker),
+	PlaybackRoutingVideoTranscodeEgressSettingKey:    string(PlaybackEgressPreferProxy),
+	"playback.chapter_thumbnail_workers":             "1",
+	"playback.chapter_thumbnail_execution":           "local",
+	"playback.chapter_thumbnail_node_capacity":       "1",
+	"playback.chapter_thumbnail_hdr_policy":          "best_effort",
+	chapterThumbnailSoftwareToneMapKey:               "false",
+	PlaybackTranscodeHardwareToneMapSettingKey:       "false",
+	PlaybackTranscodeSoftwareToneMapSettingKey:       "false",
+	"playback.watched_threshold":                     "90",
+	"playback.min_resume_threshold":                  "5",
+	Allow4KTranscodeSettingKey:                       "false",
+	"enable_transcode_throttle":                      "false",
+	"transcode_throttle_seconds":                     "300",
 
 	"audiobookshelf_compat.enabled":           "true",
 	"jellyfin_compat.enabled":                 "true",
@@ -142,15 +146,16 @@ var adminSettingDefaults = map[string]string{
 	"metadata_ai.enabled":                 "false",
 	"metadata_ai.on_view":                 "off",
 
-	"download.enabled":                 "false",
-	"download.server_bandwidth_mbps":   "0",
-	"download.user_bandwidth_mbps":     "0",
-	"download.max_concurrent_per_user": "3",
-	"download.max_per_period":          "0",
-	"download.period_duration":         "24h",
-	"download.transcode_enabled":       "false",
-	"download.max_concurrent_prepares": "2",
-	"download.artifact_max_bytes":      "0",
+	"download.enabled":                       "false",
+	"download.server_bandwidth_mbps":         "0",
+	"download.user_bandwidth_mbps":           "0",
+	"download.max_concurrent_per_user":       "3",
+	"download.max_per_period":                "0",
+	"download.period_duration":               "24h",
+	"download.transcode_enabled":             "false",
+	DownloadLocalTranscodeFallbackSettingKey: "true",
+	"download.max_concurrent_prepares":       "2",
+	"download.artifact_max_bytes":            "0",
 
 	"policy.editor_enabled":                 "false",
 	"policy.decision_log_verbosity":         "digest",
@@ -316,13 +321,14 @@ func NormalizeAdminSetting(key, raw string) (string, error) {
 	value := strings.TrimSpace(raw)
 
 	switch key {
-	case "metadata.cache_images", "playback.transcode_enabled", PlaybackLocalTranscodeFallbackSettingKey,
+	case "metadata.cache_images", "playback.transcode_enabled",
 		chapterThumbnailSoftwareToneMapKey, PlaybackTranscodeHardwareToneMapSettingKey,
 		PlaybackTranscodeSoftwareToneMapSettingKey,
 		Allow4KTranscodeSettingKey, "enable_transcode_throttle", "audiobookshelf_compat.enabled",
 		"jellyfin_compat.enabled", "jellyfin_compat.web_enabled", "recommendations.enabled",
 		"subtitle_ai.enabled", "subtitle_ai.transcribe_enabled", "metadata_ai.enabled",
-		"download.enabled", "download.transcode_enabled", "email.enabled", "signup.enabled",
+		"download.enabled", "download.transcode_enabled", DownloadLocalTranscodeFallbackSettingKey,
+		"email.enabled", "signup.enabled",
 		"scanner.empty_trash_after_scan", "matcher.enable_tv_series_root_queue",
 		"matcher.enable_tv_series_group_queue", "policy.editor_enabled",
 		"overlays.enabled", "notifications.release_events_enabled", "notifications.fanout_enabled",
@@ -453,6 +459,15 @@ func NormalizeAdminSetting(key, raw string) (string, error) {
 		return normalizeAdminEnum(key, value, "postgres", "sqlite")
 	case "playback.hw_accel":
 		return normalizeAdminEnum(key, value, "auto", "qsv", "vaapi", "nvenc", "videotoolbox", "none")
+	case PlaybackRoutingRemuxExecutionSettingKey, PlaybackRoutingVideoTranscodeExecutionSettingKey:
+		return normalizeAdminEnum(key, value,
+			string(PlaybackExecutionPreferWorker), string(PlaybackExecutionWorkerOnly),
+			string(PlaybackExecutionPreferAPI), string(PlaybackExecutionAPIOnly))
+	case PlaybackRoutingDirectPlayEgressSettingKey, PlaybackRoutingRemuxEgressSettingKey,
+		PlaybackRoutingVideoTranscodeEgressSettingKey:
+		return normalizeAdminEnum(key, value,
+			string(PlaybackEgressPreferProxy), string(PlaybackEgressProxyOnly),
+			string(PlaybackEgressPreferAPI), string(PlaybackEgressAPIOnly))
 	case "playback.chapter_thumbnail_execution":
 		return normalizeAdminEnum(key, value, "local", "prefer_transcode_nodes", "transcode_nodes_only")
 	case "playback.chapter_thumbnail_hdr_policy":

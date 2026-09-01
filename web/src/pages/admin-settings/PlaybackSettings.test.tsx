@@ -101,7 +101,7 @@ describe("PlaybackSettings layout", () => {
       return labelId ? (container.querySelector(`[id="${labelId}"]`)?.textContent ?? "") : "";
     });
 
-    expect(headings).toEqual(["Transcoding", "Watch behavior"]);
+    expect(headings).toEqual(["Transcoding", "Node routing", "Watch behavior"]);
   });
 
   it("opens with the title alone: no breadcrumb, lede, or status strip", () => {
@@ -133,6 +133,7 @@ describe("PlaybackSettings layout", () => {
     const keys: string[] = useSettingsFormMock.mock.calls[0]?.[0]?.keys ?? [];
 
     expect(keys).toContain("playback.transcode_enabled");
+    expect(keys).toContain("playback.routing.video_transcode_egress");
     expect(keys).toContain("playback.watched_threshold");
     expect(keys.some((key) => key.startsWith("download."))).toBe(false);
     // Hidden tier: still saved and readable through the API, no UI.
@@ -166,6 +167,53 @@ describe("PlaybackSettings layout", () => {
     const badges = container.querySelectorAll("[aria-label='Takes effect after a server restart']");
 
     expect(badges).toHaveLength(1);
+  });
+});
+
+describe("PlaybackSettings node routing", () => {
+  const standardRouting = {
+    "playback.routing.direct_play_egress": "prefer_proxy",
+    "playback.routing.remux_execution": "prefer_worker",
+    "playback.routing.remux_egress": "prefer_proxy",
+    "playback.routing.video_transcode_execution": "prefer_worker",
+    "playback.routing.video_transcode_egress": "prefer_proxy",
+  };
+
+  it("stages every primitive setting when a preset is selected", async () => {
+    const form = makeForm({ "playback.hw_accel": "none", ...standardRouting });
+    useSettingsFormMock.mockReturnValue(form);
+
+    render(<PlaybackSettings />);
+    await userEvent.click(screen.getByRole("button", { name: "GPU offload" }));
+
+    expect(form.setValue.mock.calls).toEqual([
+      ["playback.routing.direct_play_egress", "prefer_api"],
+      ["playback.routing.remux_execution", "prefer_api"],
+      ["playback.routing.remux_egress", "prefer_api"],
+      ["playback.routing.video_transcode_execution", "prefer_worker"],
+      ["playback.routing.video_transcode_egress", "prefer_proxy"],
+    ]);
+    expect(form.save).not.toHaveBeenCalled();
+  });
+
+  it("warns when hard routes lack nodes or universal client-origin support", () => {
+    useAdminNodesMock.mockReturnValue({
+      data: [transcodeNode({ healthy: false })],
+      isSuccess: true,
+    });
+    useSettingsFormMock.mockReturnValue(
+      makeForm({
+        "playback.hw_accel": "none",
+        ...standardRouting,
+        "playback.routing.direct_play_egress": "proxy_only",
+        "playback.routing.remux_execution": "worker_only",
+      }),
+    );
+
+    const text = parse(renderToStaticMarkup(<PlaybackSettings />)).textContent ?? "";
+
+    expect(text).toContain("no healthy supporting node");
+    expect(text).toContain("requires every native client to support authorized media origins");
   });
 });
 

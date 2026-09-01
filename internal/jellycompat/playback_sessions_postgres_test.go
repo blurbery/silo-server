@@ -182,6 +182,17 @@ func TestMarshalPlaybackSessionStripsNestedNUL(t *testing.T) {
 	}
 }
 
+func TestNegotiatedPlaybackScopeIsPostgresSafeAndUnambiguous(t *testing.T) {
+	left := negotiatedPlaybackScope("ab", "c\x00", "d")
+	right := negotiatedPlaybackScope("a", "bc", "d")
+	if strings.ContainsRune(left, '\x00') {
+		t.Fatalf("scope contains PostgreSQL-invalid NUL: %q", left)
+	}
+	if left == right {
+		t.Fatalf("scope aliases distinct field tuples: %q", left)
+	}
+}
+
 func newCompatTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("SILO_TEST_DATABASE_URL")

@@ -107,6 +107,18 @@ func (s *Server) authorizeGrant(w http.ResponseWriter, r *http.Request) (*playba
 		writeGrantError(w, http.StatusForbidden, "forbidden", "Session belongs to another user")
 		return nil, false
 	}
+	nodeID, nodeIDKnown := s.currentNodeRowID()
+	if status := proxyEgressStatusV3(
+		card.RoutingWorkload, card.RoutingExecution, card.RoutingEgress,
+		card.RoutingEgressNodeID, nodeID, nodeIDKnown,
+	); status != 0 {
+		if status == http.StatusConflict {
+			writeGrantError(w, status, "playback_route_unbound", "Request a new playback plan before serving media")
+		} else {
+			writeGrantError(w, status, "routing_policy_unsatisfied", "The media request does not match the route bound by the playback plan")
+		}
+		return nil, false
+	}
 	return card, true
 }
 
@@ -136,10 +148,13 @@ func (s *Server) handleGrantIdentity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := card.ToClaims()
-	switch card.PlayMethod {
-	case playback.PlayRemux:
+	if !requireGrantPlaybackEndpointV3(w, &claims, proxyPlaybackEndpointIdentityV3) {
+		return
+	}
+	switch {
+	case card.PlayMethod == playback.PlayRemux:
 		s.serveRemuxClaims(w, r, &claims)
-	case playback.PlayTranscode:
+	case card.IsTranscodeRecipe():
 		writeGrantError(w, http.StatusBadRequest, "bad_request", "Transcode streams use manifest/segment endpoints")
 	default:
 		s.serveDirectPlayClaims(w, r, &claims)
@@ -152,6 +167,9 @@ func (s *Server) handleGrantTranscodeManifest(w http.ResponseWriter, r *http.Req
 		return
 	}
 	claims := card.ToClaims()
+	if !requireGrantPlaybackEndpointV3(w, &claims, proxyPlaybackEndpointTranscodeV3) {
+		return
+	}
 	s.touchTranscodeSession(r, &claims)
 	s.relayGrantToTranscodeNode(w, r, &claims, "/transcode/"+transcodeTransportIDFromClaims(&claims)+"/master.m3u8")
 }
@@ -162,8 +180,22 @@ func (s *Server) handleGrantTranscodeSegment(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	claims := card.ToClaims()
+	if !requireGrantPlaybackEndpointV3(w, &claims, proxyPlaybackEndpointTranscodeV3) {
+		return
+	}
 	s.touchTranscodeSession(r, &claims)
 	s.relayGrantToTranscodeNode(w, r, &claims, "/transcode/"+transcodeTransportIDFromClaims(&claims)+"/segment/"+chi.URLParam(r, "name"))
+}
+
+func requireGrantPlaybackEndpointV3(w http.ResponseWriter, claims *streamtoken.Claims, endpoint proxyPlaybackEndpointV3) bool {
+	if proxyPlaybackEndpointStatusV3(claims, endpoint) == 0 {
+		return true
+	}
+	writeGrantError(
+		w, http.StatusServiceUnavailable, "routing_policy_unsatisfied",
+		"The media request does not match the route bound by the playback plan",
+	)
+	return false
 }
 
 // relayGrantToTranscodeNode forwards to the transcode node exactly as the token

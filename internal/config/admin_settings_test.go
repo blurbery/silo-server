@@ -303,6 +303,72 @@ func TestNormalizeAdminSettingAcceptsVideoToolbox(t *testing.T) {
 	}
 }
 
+func TestNormalizeAdminSettingAcceptsPlaybackRoutingEnums(t *testing.T) {
+	tests := map[string]string{
+		PlaybackRoutingRemuxExecutionSettingKey:          "worker_only",
+		PlaybackRoutingVideoTranscodeExecutionSettingKey: "prefer_api",
+		PlaybackRoutingDirectPlayEgressSettingKey:        "proxy_only",
+		PlaybackRoutingRemuxEgressSettingKey:             "api_only",
+		PlaybackRoutingVideoTranscodeEgressSettingKey:    "prefer_proxy",
+	}
+	for key, value := range tests {
+		got, err := NormalizeAdminSetting(key, "  "+value+"  ")
+		if err != nil {
+			t.Fatalf("NormalizeAdminSetting(%q): %v", key, err)
+		}
+		if got != value {
+			t.Fatalf("NormalizeAdminSetting(%q) = %q, want %q", key, got, value)
+		}
+	}
+	if _, err := NormalizeAdminSetting(PlaybackRoutingRemuxExecutionSettingKey, "sometimes_worker"); err == nil {
+		t.Fatal("invalid execution preference was accepted")
+	}
+	if _, err := NormalizeAdminSetting(PlaybackRoutingRemuxEgressSettingKey, "worker"); err == nil {
+		t.Fatal("invalid egress preference was accepted")
+	}
+}
+
+func TestPlaybackRoutingDefaultsMatchCurrentClusterBehavior(t *testing.T) {
+	cfg, err := LoadFromDB(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := DefaultPlaybackRoutingPolicy()
+	if cfg.Playback.Routing != want {
+		t.Fatalf("routing = %#v, want %#v", cfg.Playback.Routing, want)
+	}
+}
+
+func TestValidateAdminSettingsRejectsImpossibleHardPlaybackRoute(t *testing.T) {
+	values := map[string]string{
+		PlaybackRoutingRemuxExecutionSettingKey: "api_only",
+		PlaybackRoutingRemuxEgressSettingKey:    "proxy_only",
+	}
+	if err := ValidateAdminSettings(values); err == nil {
+		t.Fatal("API-only remux with proxy-only egress was accepted")
+	}
+	values = map[string]string{
+		PlaybackRoutingVideoTranscodeExecutionSettingKey: "api_only",
+		PlaybackRoutingVideoTranscodeEgressSettingKey:    "proxy_only",
+	}
+	if err := ValidateAdminSettings(values); err == nil {
+		t.Fatal("API-only video transcode with proxy-only egress was accepted")
+	}
+}
+
+func TestLoadFromDBRejectsInvalidStoredPlaybackRoutingEnums(t *testing.T) {
+	for key, value := range map[string]string{
+		PlaybackRoutingRemuxExecutionSettingKey:   "sometimes_worker",
+		PlaybackRoutingDirectPlayEgressSettingKey: "worker",
+	} {
+		t.Run(key, func(t *testing.T) {
+			if _, err := LoadFromDB(map[string]string{key: value}); err == nil {
+				t.Fatalf("LoadFromDB() accepted %s=%q", key, value)
+			}
+		})
+	}
+}
+
 func TestValidateAdminSettingsChecksProspectiveRelationships(t *testing.T) {
 	values := map[string]string{
 		"auth.access_token_expiry":      "48h",

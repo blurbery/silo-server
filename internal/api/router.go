@@ -2995,6 +2995,7 @@ func NewRouter(deps Dependencies) chi.Router {
 								Redis:     deps.RedisClient,
 							}).HandleGetStreamTelemetryParity)
 							r.Get("/sessions/capabilities", adminHandler.HandleGetSessionsCapabilities)
+							r.Get("/playback-routing/capabilities", adminHandler.HandleGetPlaybackRoutingCapabilities)
 							r.Get("/playback-history", adminHandler.HandleListPlaybackHistory)
 							r.Get("/unmatched", adminHandler.HandleListUnmatched)
 							r.Get("/stats", adminHandler.HandleGetStats)

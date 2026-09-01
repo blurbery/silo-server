@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Silo-Server/silo-server/internal/nodepool"
+	"github.com/Silo-Server/silo-server/internal/noderouting"
 	"github.com/Silo-Server/silo-server/internal/playback"
 	"github.com/Silo-Server/silo-server/internal/transcodenode"
 )
@@ -68,7 +69,7 @@ func authorizedOriginsModeV3() mediaAuthModeV3 {
 func TestPrepareTransportV3AuthorizedOriginsRestoreDirectPlayProxyEgress(t *testing.T) {
 	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0))
 	handler.JWTSecret = "test-secret"
-	planner := &recordingNodePlannerV3{plan: nodepool.Plan{ProxyNode: &nodepool.Node{URL: "http://proxy-1"}}}
+	planner := &recordingNodePlannerV3{plan: nodepool.Plan{ProxyNode: &nodepool.Node{ID: 51, URL: "http://proxy-1"}}}
 	handler.NodePlanner = planner
 	grants := &recordingRecipeCardStoreV3{}
 	handler.ProxyGrantStore = grants
@@ -98,6 +99,9 @@ func TestPrepareTransportV3AuthorizedOriginsRestoreDirectPlayProxyEgress(t *test
 	}
 	if card.UserID != 7 || card.PlayMethod != playback.PlayDirect {
 		t.Fatalf("grant identity = %#v, want the session's owner and play method", card)
+	}
+	if card.RoutingEgressNodeID != 51 {
+		t.Fatalf("grant egress node ID = %d, want 51", card.RoutingEgressNodeID)
 	}
 
 	// A transport that never reaches the client must not leave a live grant
@@ -278,10 +282,13 @@ func TestPrepareTransportV3AuthorizedOriginsFallBackToTheAPIWhenTheGrantFails(t 
 
 // The grant-failure fallback lands on the API server, which is ffmpeg work for
 // a remux carrying a server transformation. An operator who disabled
-// playback.local_transcode_fallback disabled exactly that, so the fallback has
+// worker-only remux routing forbids exactly that, so the fallback has
 // to honor the same gate the no-origins mode enforces rather than quietly
 // spawning an encoder. Escalation cannot cover this: it was legitimately
 // skipped at plan time because the pool does offer a proxy.
+//
+// The pool offering one is also why the refusal is retryable: the policy is
+// satisfiable and only this attempt's grant write failed.
 func TestPrepareTransportV3AuthorizedOriginsRefuseLocalRemuxWhenTheGrantFails(t *testing.T) {
 	handler, _, result := escalationFixtureV3(t, true)
 	proxy := capableProxyStubV3(t)
@@ -299,8 +306,43 @@ func TestPrepareTransportV3AuthorizedOriginsRefuseLocalRemuxWhenTheGrantFails(t 
 		transport.rollback()
 		t.Fatalf("grant failure produced an API-local remux at %q; local fallback is disabled", transport.url)
 	}
-	if transportErr.reason != "capacity_unavailable" || !transportErr.retryable {
-		t.Fatalf("transport error = %#v, want a retryable capacity_unavailable", transportErr)
+	if transportErr.reason != string(noderouting.OutcomeCapacityUnavailable) || !transportErr.retryable {
+		t.Fatalf("transport error = %#v, want a retryable proxy-egress capacity failure", transportErr)
+	}
+	if len(planner.released) != 1 {
+		t.Fatalf("planner releases = %v, want the unusable proxy reservation released", planner.released)
+	}
+}
+
+func TestPrepareTransportV3AuthorizedOriginsDoNotFallBackToAnIncapableAPI(t *testing.T) {
+	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0))
+	handler.JWTSecret = "test-secret"
+	stubCopySeekAnchorV3(handler)
+	presetLocalRegistryV3(handler, playback.NewTransformationRegistryV3([]playback.TransformationSpecV3{{
+		Name: playback.TransformationAudioToAACV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3,
+	}}))
+	proxy := capableProxyStubV3(t)
+	planner := &recordingNodePlannerV3{plan: nodepool.Plan{ProxyNode: &nodepool.Node{URL: proxy.URL}}}
+	handler.NodePlanner = planner
+	handler.ProxyGrantStore = &recordingRecipeCardStoreV3{putErr: errors.New("redis is down")}
+
+	transport, transportErr := handler.prepareTransportV3(
+		httptest.NewRequest(http.MethodPost, "/", nil),
+		&playback.Session{ID: "session-origin-incapable-api", UserID: 7, ProfileID: "profile-1"},
+		v3HandlerFixtureFile(t),
+		playback.PlannerResultV3{
+			Plan: identityProxyPlanV3(playback.DeliveryRemuxProgressiveV3, playback.TransformationV3{
+				Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3,
+				RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3,
+			}),
+			PlayMethod: playback.PlayRemux, TranscodeAudio: true, TargetAudioCodec: "aac",
+		}, authorizedOriginsModeV3())
+	if transportErr == nil {
+		transport.rollback()
+		t.Fatalf("grant failure produced an API-local remux at %q even though the API lacks the recipe", transport.url)
+	}
+	if transportErr.reason != string(noderouting.OutcomeCapacityUnavailable) || !transportErr.retryable {
+		t.Fatalf("transport error = %#v, want a retryable proxy-egress capacity failure", transportErr)
 	}
 	if len(planner.released) != 1 {
 		t.Fatalf("planner releases = %v, want the unusable proxy reservation released", planner.released)
@@ -359,7 +401,7 @@ func TestPrepareTransportV3AuthorizedOriginsPublishGrantBackedHLSManifest(t *tes
 
 	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0))
 	handler.JWTSecret = "test-secret"
-	planner := &recordingNodePlannerV3{plan: nodepool.Plan{TranscodeNode: &nodepool.Node{URL: node.URL}, ProxyNode: &nodepool.Node{URL: "http://proxy-1"}}}
+	planner := &recordingNodePlannerV3{plan: nodepool.Plan{TranscodeNode: &nodepool.Node{URL: node.URL}, ProxyNode: &nodepool.Node{ID: 52, URL: "http://proxy-1"}}}
 	handler.NodePlanner = planner
 	grants := &recordingRecipeCardStoreV3{}
 	handler.ProxyGrantStore = grants
@@ -395,6 +437,9 @@ func TestPrepareTransportV3AuthorizedOriginsPublishGrantBackedHLSManifest(t *tes
 	if card.TranscodeTransportID != transport.transportID {
 		t.Fatalf("grant transport id = %q, want the plan-scoped transport %q", card.TranscodeTransportID, transport.transportID)
 	}
+	if card.RoutingEgressNodeID != 52 {
+		t.Fatalf("grant egress node ID = %d, want 52", card.RoutingEgressNodeID)
+	}
 }
 
 // The escalation exists because header-authenticated identity work had no
@@ -402,7 +447,7 @@ func TestPrepareTransportV3AuthorizedOriginsPublishGrantBackedHLSManifest(t *tes
 // available must keep the route the planner chose.
 func TestEscalateRefusedProgressiveRemuxV3SkipsEscalationWhenOriginsHaveAProxy(t *testing.T) {
 	handler, input, result := escalationFixtureV3(t, true)
-	handler.NodePlanner = &recordingNodePlannerV3{plan: nodepool.Plan{ProxyNode: &nodepool.Node{URL: "http://proxy-1"}}}
+	handler.NodePlanner.(*recordingNodePlannerV3).plan.ProxyNode = &nodepool.Node{URL: "http://proxy-1"}
 	handler.ProxyGrantStore = &recordingRecipeCardStoreV3{}
 
 	escalated, transportErr := handler.escalateRefusedProgressiveRemuxV3(context.Background(), authorizedOriginsModeV3(), func() playback.PlannerInputV3 { return input }, result)
@@ -418,7 +463,6 @@ func TestEscalateRefusedProgressiveRemuxV3SkipsEscalationWhenOriginsHaveAProxy(t
 // escalation must be too — otherwise the attempt plans a route nothing can run.
 func TestEscalateRefusedProgressiveRemuxV3StillEscalatesWithoutAnyProxyOrigin(t *testing.T) {
 	handler, input, result := escalationFixtureV3(t, true)
-	handler.NodePlanner = &recordingNodePlannerV3{}
 	handler.ProxyGrantStore = &recordingRecipeCardStoreV3{}
 
 	escalated, transportErr := handler.escalateRefusedProgressiveRemuxV3(context.Background(), authorizedOriginsModeV3(), func() playback.PlannerInputV3 { return input }, result)
@@ -445,7 +489,7 @@ func TestEscalateRefusedProgressiveRemuxV3StillEscalatesWithoutAUsableGrantStore
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			handler, input, result := escalationFixtureV3(t, true)
-			handler.NodePlanner = &recordingNodePlannerV3{plan: nodepool.Plan{ProxyNode: &nodepool.Node{URL: "http://proxy-1"}}}
+			handler.NodePlanner.(*recordingNodePlannerV3).plan.ProxyNode = &nodepool.Node{URL: "http://proxy-1"}
 			handler.ProxyGrantStore = test.store
 
 			escalated, transportErr := handler.escalateRefusedProgressiveRemuxV3(context.Background(), authorizedOriginsModeV3(), func() playback.PlannerInputV3 { return input }, result)

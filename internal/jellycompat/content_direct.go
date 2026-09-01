@@ -1292,6 +1292,10 @@ func mediaItemToListItem(mi *models.MediaItem) upstreamListItem {
 }
 
 func itemDetailToUpstream(d *catalog.ItemDetail) upstreamItemDetail {
+	versions := append([]catalog.FileVersion(nil), d.Versions...)
+	sort.SliceStable(versions, func(i, j int) bool {
+		return compatPrimaryVideoTrack(versions[i]).Width > compatPrimaryVideoTrack(versions[j]).Width
+	})
 	detail := upstreamItemDetail{
 		ContentID:     d.ContentID,
 		Type:          d.Type,
@@ -1320,7 +1324,7 @@ func itemDetailToUpstream(d *catalog.ItemDetail) upstreamItemDetail {
 		AirDate:       compatPremiereDatePtr(d.ReleaseDate, d.FirstAirDate, d.AirDate),
 		IsSpecials:    d.IsSpecials,
 		UserData:      d.SeasonUserData,
-		Versions:      d.Versions,
+		Versions:      versions,
 		Cast:          d.Cast,
 		Crew:          d.Crew,
 		Videos:        d.Videos,

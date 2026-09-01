@@ -1270,11 +1270,78 @@ func TestAudioRecipeRequestAndStartAttestationFailClosed(t *testing.T) {
 	}
 }
 
+func TestCopyFMP4RecipeRequestAndStartAttestationFailClosed(t *testing.T) {
+	current := TranscodeStartRequest{
+		SessionID: "copy-fmp4", InputPath: "/media/movie.mkv",
+		TargetCodecVideo:      "copy",
+		CopyFMP4RecipeVersion: playback.CopyFMP4RecipeVersion,
+	}
+	if err := validateCopyFMP4RecipeRequest(current); err != nil {
+		t.Fatalf("current copy recipe rejected: %v", err)
+	}
+	if err := ValidateCopyFMP4RecipeAttestation(current, TranscodeStartResponse{CopyFMP4RecipeVersion: current.CopyFMP4RecipeVersion}); err != nil {
+		t.Fatalf("current copy attestation rejected: %v", err)
+	}
+	if err := ValidateCopyFMP4RecipeAttestation(current, TranscodeStartResponse{}); !errors.Is(err, ErrCopyFMP4RecipeAttestationMismatch) {
+		t.Fatalf("old-node response error = %v, want attestation mismatch", err)
+	}
+
+	legacyCopy := current
+	legacyCopy.CopyFMP4RecipeVersion = ""
+	if err := validateCopyFMP4RecipeRequest(legacyCopy); !errors.Is(err, ErrCopyFMP4RecipeAttestationMismatch) {
+		t.Fatalf("unversioned copy request error = %v, want attestation mismatch", err)
+	}
+	encoded := TranscodeStartRequest{SessionID: "encoded", InputPath: "/media/movie.mkv", TargetCodecVideo: "h264"}
+	if err := ValidateCopyFMP4RecipeAttestation(encoded, TranscodeStartResponse{}); err != nil {
+		t.Fatalf("ordinary encoded response rejected: %v", err)
+	}
+}
+
+func TestCopyFMP4RecipeCardsFailClosedBeforeNodeReconstruction(t *testing.T) {
+	current := playback.NewRecipeCard(7, "profile-1", 42, "http://node", playback.TranscodeOpts{
+		SessionID: "copy-fmp4", TargetCodecVideo: "copy", SegmentDuration: 2,
+	})
+	if !recipeServesTransport(current, current.SessionID) || !recipeIsComplete(current) {
+		t.Fatalf("current copy recipe was not accepted: %+v", current)
+	}
+
+	legacy := current
+	legacy.PlayMethod = playback.PlayTranscode
+	legacy.CopyFMP4RecipeVersion = ""
+	if recipeServesTransport(legacy, legacy.SessionID) {
+		t.Fatal("legacy unversioned copy recipe was accepted for reconstruction")
+	}
+
+	identity := playback.RecipeCardFromClaims(&streamtoken.Claims{
+		SessionID: "copy-fmp4", PlayMethod: streamtoken.PlayMethodCopyFMP4Transcode,
+		CopyFMP4RecipeVersion: playback.CopyFMP4RecipeVersion,
+	})
+	if !recipeServesTransport(identity, identity.SessionID) || recipeIsComplete(identity) {
+		t.Fatalf("current identity-only copy recipe marker was not accepted for store lookup: %+v", identity)
+	}
+}
+
 func TestHandleStartRejectsUnversionedSourceAudioRecipeBeforeExecution(t *testing.T) {
 	server := newTestServer(t)
 	body, err := json.Marshal(TranscodeStartRequest{
 		SessionID: "unversioned-downmix", InputPath: "/media/movie.mkv",
 		SourceAudioChannels: 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	server.handleStart(recorder, httptest.NewRequest(http.MethodPost, "/transcode/start", bytes.NewReader(body)))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %s)", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestHandleStartRejectsUnversionedCopyFMP4RecipeBeforeExecution(t *testing.T) {
+	server := newTestServer(t)
+	body, err := json.Marshal(TranscodeStartRequest{
+		SessionID: "unversioned-copy", InputPath: "/media/movie.mkv",
+		TargetCodecVideo: "copy",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1319,6 +1386,43 @@ func TestHandleStartAttestsStereoDownmixRecipe(t *testing.T) {
 	server.mu.RUnlock()
 	if session == nil {
 		t.Fatal("attested session was not registered")
+	}
+	_ = session.CloseProcess()
+}
+
+func TestHandleStartAttestsCopyFMP4Recipe(t *testing.T) {
+	server := newTestServer(t)
+	server.tracker = nodesessions.NewTracker(nil, "http://node", "node", "transcode")
+	ffmpegPath := filepath.Join(t.TempDir(), "looping-ffmpeg.sh")
+	if err := os.WriteFile(ffmpegPath, []byte("#!/bin/sh\nwhile :; do sleep 0.1; done\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	server.watcher.Config().Playback.FFmpegPath = ffmpegPath
+	body, err := json.Marshal(TranscodeStartRequest{
+		SessionID: "attested-copy", InputPath: "/media/movie.mkv",
+		SourceVideoCodec: "hevc", TargetCodecVideo: "copy", TargetCodecAudio: "copy",
+		CopyFMP4RecipeVersion: playback.CopyFMP4RecipeVersion, SegmentDuration: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	server.handleStart(recorder, httptest.NewRequest(http.MethodPost, "/transcode/start", bytes.NewReader(body)))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (body %s)", recorder.Code, recorder.Body.String())
+	}
+	var response TranscodeStartResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.CopyFMP4RecipeVersion != playback.CopyFMP4RecipeVersion {
+		t.Fatalf("copy recipe receipt = %q, want %q", response.CopyFMP4RecipeVersion, playback.CopyFMP4RecipeVersion)
+	}
+	server.mu.RLock()
+	session := server.sessions["attested-copy"]
+	server.mu.RUnlock()
+	if session == nil {
+		t.Fatal("attested copy session was not registered")
 	}
 	_ = session.CloseProcess()
 }
@@ -1676,12 +1780,13 @@ func TestHandleStartDistinctReplacementFailurePreservesPredecessor(t *testing.T)
 	}
 	server.watcher.Config().Playback.FFmpegPath = ffmpegPath
 	requestBody, err := json.Marshal(TranscodeStartRequest{
-		SessionID:        "public-session-legacy-replacement",
-		InputPath:        "/media/movie.mkv",
-		TargetCodecVideo: "copy",
-		TargetCodecAudio: "aac",
-		SegmentDuration:  2,
-		RequireReady:     true,
+		SessionID:             "public-session-legacy-replacement",
+		InputPath:             "/media/movie.mkv",
+		TargetCodecVideo:      "copy",
+		TargetCodecAudio:      "aac",
+		SegmentDuration:       2,
+		RequireReady:          true,
+		CopyFMP4RecipeVersion: playback.CopyFMP4RecipeVersion,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2631,6 +2736,7 @@ func TestHandleStartPreservesVideoSampleEntry(t *testing.T) {
 		SessionID: "sample-entry-start-1", InputPath: "/media/movie.mkv",
 		SourceVideoCodec: "hevc", VideoSampleEntry: playback.VideoSampleEntryHVC1,
 		TargetCodecVideo: "copy", TargetCodecAudio: "copy", SegmentDuration: 2,
+		CopyFMP4RecipeVersion: playback.CopyFMP4RecipeVersion,
 	})
 	if err != nil {
 		t.Fatal(err)

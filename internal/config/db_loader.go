@@ -352,6 +352,10 @@ func LoadFromDB(m map[string]string) (*Config, error) {
 		return nil, err
 	}
 	cfg.Playback.TranscodeEnabled = transcodeEnabled
+	cfg.Playback.Routing = playbackRoutingPolicyFromSettings(m)
+	if err := validatePlaybackRoutingPolicy(cfg.Playback.Routing); err != nil {
+		return nil, err
+	}
 
 	// Redis
 	cfg.Redis.URL = stringOr(m, "redis.url", "")

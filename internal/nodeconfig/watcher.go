@@ -109,6 +109,16 @@ func (w *Watcher) rememberedNodeRowID() (int, bool) {
 	return w.nodeRowID, w.nodeRowID > 0
 }
 
+// NodeRowID returns the stable database identity this node resolved during
+// registration. Proxy stream artifacts bind to this identity so sibling nodes
+// cannot serve work reserved for one another.
+func (w *Watcher) NodeRowID() (int, bool) {
+	if w == nil {
+		return 0, false
+	}
+	return w.rememberedNodeRowID()
+}
+
 // forgetNodeRowID drops a remembered row that no longer exists.
 func (w *Watcher) forgetNodeRowID() {
 	w.mu.Lock()
