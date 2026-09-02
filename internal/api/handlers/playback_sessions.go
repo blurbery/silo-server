@@ -133,7 +133,7 @@ type playbackSessionsCapabilitiesResponse struct {
 func (h *AdminHandler) HandleGetSessionsCapabilities(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, playbackSessionsCapabilitiesResponse{
 		EffectivePlayMethod:       true,
-		EffectivePlayMethodValues: []string{"direct", "remux", "transcode", "audio"},
+		EffectivePlayMethodValues: []string{"direct", "remux", "direct_stream", "transcode"},
 		IsJellyfinClient:          true,
 		TranscodeHWAccel:          true,
 		ToneMapMode:               true,
@@ -460,7 +460,7 @@ func sessionComponentDecision(playMethod string, transcodeAudio bool, targetVide
 // and an audio-only re-encode reports "remux" — the decisions carry what
 // actually costs CPU.
 //   - video re-encoded        -> "transcode"
-//   - only audio re-encoded   -> "audio"
+//   - only audio re-encoded   -> "direct_stream"
 //   - streams only repackaged -> "remux"
 //   - nothing touched         -> "direct"
 //
@@ -474,7 +474,7 @@ func effectivePlayMethod(videoDecision, audioDecision string) string {
 	case videoDecision == "transcode":
 		return "transcode"
 	case audioDecision == "transcode":
-		return "audio"
+		return "direct_stream"
 	case videoDecision == "direct" && audioDecision == "direct":
 		return "direct"
 	default:

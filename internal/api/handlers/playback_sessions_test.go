@@ -36,11 +36,11 @@ func TestEffectivePlayMethodBuckets(t *testing.T) {
 	}{
 		{"direct play", "direct", false, "", "direct"},
 		{"plain remux", "remux", false, "", "remux"},
-		{"audio-only re-encode via remux", "remux", true, "", "audio"},
+		{"audio-only re-encode via remux", "remux", true, "", "direct_stream"},
 		{"full video transcode", "transcode", true, "h264", "transcode"},
 		{"video transcode with copied audio", "transcode", false, "h264", "transcode"},
 		{"video-copy HLS repackage", "transcode", false, "copy", "remux"},
-		{"video-copy HLS with audio re-encode", "transcode", true, "copy", "audio"},
+		{"video-copy HLS with audio re-encode", "transcode", true, "copy", "direct_stream"},
 		// Unknown play_method (stale row from an older node): the bucket must
 		// stay empty rather than inventing a method from transcode_audio.
 		{"unknown method with transcode_audio set", "hls", true, "", ""},
@@ -75,7 +75,7 @@ func TestSessionsCapabilitiesAdvertisesActivityFields(t *testing.T) {
 		!resp.ClientBuild || !resp.ClientChannel || !resp.TargetAudioChannels || !resp.NodeRouting {
 		t.Fatalf("capabilities must advertise every additive field: %+v", resp)
 	}
-	want := []string{"direct", "remux", "transcode", "audio"}
+	want := []string{"direct", "remux", "direct_stream", "transcode"}
 	if len(resp.EffectivePlayMethodValues) != len(want) {
 		t.Fatalf("bucket vocabulary = %v, want %v", resp.EffectivePlayMethodValues, want)
 	}

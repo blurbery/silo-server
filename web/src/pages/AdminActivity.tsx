@@ -388,7 +388,7 @@ export default function AdminActivity() {
                     <span
                       className={`inline-block h-2 w-2 rounded-full ${activityMethodMeta(method).swatchClass}`}
                     />
-                    <span className="font-medium capitalize">{method}</span>
+                    <span className="font-medium">{activityMethodMeta(method).label}</span>
                     <span className="text-muted-foreground tabular-nums">{count}</span>
                   </button>
                 ))}
@@ -819,9 +819,9 @@ function StreamRow({
               ) : null}
             </Link>
             <span
-              className={`inline-flex flex-shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-semibold capitalize ${activityMethodMeta(activityMethod).badgeClass}`}
+              className={`inline-flex flex-shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-semibold ${activityMethodMeta(activityMethod).badgeClass}`}
             >
-              {activityMethod}
+              {activityMethodMeta(activityMethod).label}
             </span>
             <JellyfinSessionPill session={session} />
           </div>

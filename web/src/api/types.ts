@@ -2582,7 +2582,7 @@ export interface AdminSession {
   requested_video_resolution?: string;
   video_decision?: string;
   audio_decision?: string;
-  /** Server-computed activity bucket: direct | remux | transcode | audio.
+  /** Server-computed activity bucket: direct | remux | direct_stream | transcode.
    * Absent when the per-stream decisions are unknown. */
   effective_play_method?: string;
   /** Server-side identification of Jellyfin-ecosystem clients (the JF pill). */

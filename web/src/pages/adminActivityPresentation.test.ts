@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AdminSession } from "@/api/types";
 import {
+  activityMethodMeta,
   classifyActivityMethod,
   compareActivityMethods,
+  decisionBadgeClass,
   isJellyfinSession,
   formatAudioDetail,
   formatAudioSummary,
@@ -10,6 +12,7 @@ import {
   formatDeliveredAudioSummary,
   formatDeliveredContainerSummary,
   formatDeliveredVideoSummary,
+  formatDecisionLabel,
   formatPlaybackDecisionSummary,
   formatSourceContainerSummary,
   formatToneMapSummary,
@@ -81,6 +84,59 @@ function makeSession(overrides: Partial<AdminSession> = {}): AdminSession {
 }
 
 describe("adminActivityPresentation", () => {
+  it("presents the four Jellyfin-style session scopes distinctly", () => {
+    expect(
+      ["direct", "remux", "direct_stream", "transcode"].map(
+        (method) => activityMethodMeta(method).label,
+      ),
+    ).toEqual(["Direct Play", "Remux", "Direct Stream", "Transcode"]);
+    expect(activityMethodMeta("direct_stream").badgeClass).not.toBe(
+      activityMethodMeta("transcode").badgeClass,
+    );
+  });
+
+  it("keeps bit-for-bit stream copy explicit without changing remux aggregation", () => {
+    expect(formatDecisionLabel("copy")).toBe("Copy");
+    expect(decisionBadgeClass("copy")).toBe(activityMethodMeta("remux").badgeClass);
+    expect(normalizeStreamDecision("copy")).toBe("copy");
+    expect(normalizeStreamDecision("remux")).toBe("copy");
+    expect(
+      classifyActivityMethod(
+        makeSession({
+          play_method: "remux",
+          video_decision: "copy",
+          audio_decision: "copy",
+          transcode_audio: false,
+        }),
+      ),
+    ).toBe("remux");
+    expect(formatDecisionLabel("remux")).toBe("Remux");
+    expect(decisionBadgeClass("remux")).toBe(activityMethodMeta("remux").badgeClass);
+  });
+
+  it("keeps copied streams explicit in component summaries", () => {
+    expect(
+      formatPlaybackDecisionSummary(
+        makeSession({
+          play_method: "remux",
+          video_decision: "copy",
+          audio_decision: "copy",
+          transcode_audio: false,
+        }),
+      ),
+    ).toBe("copy");
+    expect(
+      formatPlaybackDecisionSummary(
+        makeSession({
+          play_method: "remux",
+          video_decision: "remux",
+          audio_decision: "remux",
+          transcode_audio: false,
+        }),
+      ),
+    ).toBe("copy");
+  });
+
   it("uses the effective source as the primary video summary", () => {
     expect(formatVideoSummary(makeSession())).toBe("H.264 · 1080p");
   });
@@ -231,7 +287,7 @@ describe("adminActivityPresentation", () => {
   });
 
   it("buckets activity sessions by the backend's per-stream decisions", () => {
-    // Only the audio stream re-encoded (video copied) → "audio".
+    // Only the audio stream re-encoded (video copied) → "direct_stream".
     expect(
       classifyActivityMethod(
         makeSession({
@@ -241,7 +297,7 @@ describe("adminActivityPresentation", () => {
           transcode_audio: true,
         }),
       ),
-    ).toBe("audio");
+    ).toBe("direct_stream");
     // Same audio-only shape reported via the HLS path (play_method "transcode",
     // video copied) still counts as an audio transcode, not video.
     expect(
@@ -253,7 +309,7 @@ describe("adminActivityPresentation", () => {
           transcode_audio: true,
         }),
       ),
-    ).toBe("audio");
+    ).toBe("direct_stream");
 
     // Full video transcode (with or without audio) stays in the "transcode" bucket.
     expect(
@@ -343,11 +399,11 @@ describe("adminActivityPresentation", () => {
     ).toBe("unknown");
   });
 
-  it("orders activity buckets with audio after video transcode", () => {
-    const sorted = ["audio", "unknown", "transcode", "direct", "remux"].sort(
+  it("orders Jellyfin-style activity buckets from lowest to highest server work", () => {
+    const sorted = ["direct_stream", "unknown", "transcode", "direct", "remux"].sort(
       compareActivityMethods,
     );
-    expect(sorted).toEqual(["direct", "remux", "transcode", "audio", "unknown"]);
+    expect(sorted).toEqual(["direct", "remux", "direct_stream", "transcode", "unknown"]);
   });
 
   it("tags Jellyfin-ecosystem clients for the JF pill", () => {
@@ -511,7 +567,20 @@ describe("adminActivityPresentation", () => {
     expect(normalizeStreamDecision(session.video_decision)).toBe("copy");
     expect(normalizeStreamDecision(session.audio_decision)).toBe("transcode");
     expect(formatDeliveredContainerSummary(session)).toBe("HLS");
-    expect(formatVideoDetail(session)).toBe("Video stream copied");
+    expect(formatDecisionLabel(normalizeStreamDecision(session.video_decision))).toBe("Copy");
+    expect(formatVideoDetail(session)).toBe("Copied bit-for-bit");
+  });
+
+  it("keeps copied audio explicit in the stream details", () => {
+    const copied = makeSession({
+      play_method: "remux",
+      video_decision: "remux",
+      audio_decision: "remux",
+      transcode_audio: false,
+    });
+
+    expect(formatDecisionLabel(normalizeStreamDecision(copied.audio_decision))).toBe("Copy");
+    expect(formatAudioDetail(copied)).toBe("Copied bit-for-bit");
   });
 
   it("keeps exact client build/channel and tone-map mode in expanded activity details", () => {
