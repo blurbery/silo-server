@@ -48,22 +48,23 @@ const (
 // (uid/pid/mfid) are lookup keys re-resolved against the authority on
 // reconstruct; they are never trusted on their own.
 type Claims struct {
-	SessionID            string `json:"sid"`
-	MediaPath            string `json:"path"`
-	PlayMethod           string `json:"method"`
-	TranscodeAudio       bool   `json:"ta,omitempty"`
-	TranscodeNode        string `json:"tnode,omitempty"`
-	TranscodeTransportID string `json:"tid,omitempty"`
-	RoutingWorkload      string `json:"rwl,omitempty"`
-	RoutingExecution     string `json:"rex,omitempty"`
-	RoutingEgress        string `json:"reg,omitempty"`
-	RoutingEgressNodeID  int    `json:"renid,omitempty"`
-	TargetCodec          string `json:"tc,omitempty"`
-	TargetRes            string `json:"tres,omitempty"`
-	AudioCodec           string `json:"ac,omitempty"`
-	AudioChannels        int    `json:"ach,omitempty"`
-	AudioTrackIndex      int    `json:"ati,omitempty"`
-	AudioOnly            bool   `json:"ao,omitempty"`
+	SessionID              string `json:"sid"`
+	MediaPath              string `json:"path"`
+	PlayMethod             string `json:"method"`
+	TranscodeAudio         bool   `json:"ta,omitempty"`
+	TranscodeNode          string `json:"tnode,omitempty"`
+	TranscodeTransportID   string `json:"tid,omitempty"`
+	RoutingWorkload        string `json:"rwl,omitempty"`
+	RoutingExecution       string `json:"rex,omitempty"`
+	RoutingExecutionNodeID int    `json:"rxnid,omitzero"`
+	RoutingEgress          string `json:"reg,omitempty"`
+	RoutingEgressNodeID    int    `json:"renid,omitempty"`
+	TargetCodec            string `json:"tc,omitempty"`
+	TargetRes              string `json:"tres,omitempty"`
+	AudioCodec             string `json:"ac,omitempty"`
+	AudioChannels          int    `json:"ach,omitempty"`
+	AudioTrackIndex        int    `json:"ati,omitempty"`
+	AudioOnly              bool   `json:"ao,omitempty"`
 	// DVProfile is the file's Dolby Vision profile (0 = none); remux nodes use
 	// it with the frozen mode to preserve Dolby Vision or isolate a compatible
 	// base layer. Absent in older tokens, which decodes as 0 (legacy behavior).
