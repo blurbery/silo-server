@@ -6,7 +6,11 @@ export function formatDecisionLabel(decision?: string): string {
     case "direct":
       return "Direct";
     case "copy":
-      return "Copy";
+      // "copy" is the transport's internal decision for a stream that is
+      // passed through bit-for-bit while its container or a sibling stream is
+      // adapted. At the per-stream UI level that is direct delivery: no codec
+      // conversion occurred.
+      return "Direct";
     case "remux":
       return "Remux";
     case "hls":
@@ -35,8 +39,8 @@ export function normalizeContainerDecision(playMethod?: string): string {
 export function normalizeStreamDecision(decision?: string): string {
   switch (decision?.trim()) {
     case "direct":
-      return "direct";
     case "copy":
+      return "direct";
     case "remux":
       return "copy";
     case "transcode":
@@ -149,12 +153,15 @@ export function activityMethodMeta(method: string): ActivityMethodMeta {
 }
 
 /**
- * Badge classes for a per-stream decision value (direct/copy/remux/hls/
- * transcode). Copy and HLS are repackaging, so they share the remux tint.
+ * Badge classes for a component decision value (direct/copy/remux/hls/
+ * transcode). A copied elementary stream is delivered bit-for-bit, so its
+ * per-stream badge uses the direct tint; container remux and HLS retain the
+ * remux tint.
  */
 export function decisionBadgeClass(decision: string): string {
   switch (decision) {
     case "copy":
+      return activityMethodMeta("direct").badgeClass;
     case "hls":
       return activityMethodMeta("remux").badgeClass;
     default:
@@ -180,13 +187,13 @@ export function formatPlaybackDecisionSummary(session: AdminSession): string {
   );
 
   if (videoDecision && videoDecision === audioDecision) {
-    return videoDecision;
+    return videoDecision === "copy" ? "direct" : videoDecision;
   }
   if (videoDecision === "transcode" || audioDecision === "transcode") {
     return "transcode";
   }
   if (videoDecision === "copy" || audioDecision === "copy") {
-    return "copy";
+    return "direct";
   }
   return videoDecision || audioDecision || session.play_method || "";
 }
@@ -429,10 +436,7 @@ export function formatVideoDetail(session: AdminSession): string {
   if (decision === "transcode") {
     return target ? `Output → ${target}` : "Transcoding";
   }
-  if (decision === "copy") {
-    return "Video stream copied";
-  }
-  if (decision === "direct") {
+  if (decision === "copy" || decision === "direct") {
     return "No video conversion";
   }
   return "—";
@@ -483,10 +487,7 @@ export function formatAudioDetail(session: AdminSession): string {
     const target = formatTargetAudio(session);
     return target ? `→ ${target}` : "Audio Transcode";
   }
-  if (decision === "copy") {
-    return "Audio stream copied";
-  }
-  if (decision === "direct") {
+  if (decision === "copy" || decision === "direct") {
     return "No audio conversion";
   }
   return "—";

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AdminSession } from "@/api/types";
 import {
+  activityMethodMeta,
   classifyActivityMethod,
   compareActivityMethods,
+  decisionBadgeClass,
   isJellyfinSession,
   formatAudioDetail,
   formatAudioSummary,
@@ -10,6 +12,7 @@ import {
   formatDeliveredAudioSummary,
   formatDeliveredContainerSummary,
   formatDeliveredVideoSummary,
+  formatDecisionLabel,
   formatPlaybackDecisionSummary,
   formatSourceContainerSummary,
   formatToneMapSummary,
@@ -81,6 +84,48 @@ function makeSession(overrides: Partial<AdminSession> = {}): AdminSession {
 }
 
 describe("adminActivityPresentation", () => {
+  it("presents bit-for-bit stream copy as direct without changing remux aggregation", () => {
+    expect(formatDecisionLabel("copy")).toBe("Direct");
+    expect(decisionBadgeClass("copy")).toBe(activityMethodMeta("direct").badgeClass);
+    expect(normalizeStreamDecision("copy")).toBe("direct");
+    expect(normalizeStreamDecision("remux")).toBe("copy");
+    expect(
+      classifyActivityMethod(
+        makeSession({
+          play_method: "remux",
+          video_decision: "copy",
+          audio_decision: "copy",
+          transcode_audio: false,
+        }),
+      ),
+    ).toBe("direct");
+    expect(formatDecisionLabel("remux")).toBe("Remux");
+    expect(decisionBadgeClass("remux")).toBe(activityMethodMeta("remux").badgeClass);
+  });
+
+  it("reduces copied streams to the direct playback summary", () => {
+    expect(
+      formatPlaybackDecisionSummary(
+        makeSession({
+          play_method: "remux",
+          video_decision: "copy",
+          audio_decision: "copy",
+          transcode_audio: false,
+        }),
+      ),
+    ).toBe("direct");
+    expect(
+      formatPlaybackDecisionSummary(
+        makeSession({
+          play_method: "remux",
+          video_decision: "remux",
+          audio_decision: "remux",
+          transcode_audio: false,
+        }),
+      ),
+    ).toBe("direct");
+  });
+
   it("uses the effective source as the primary video summary", () => {
     expect(formatVideoSummary(makeSession())).toBe("H.264 · 1080p");
   });
@@ -497,7 +542,7 @@ describe("adminActivityPresentation", () => {
     ]);
   });
 
-  it("labels HLS copy-original sessions as container HLS with copied video", () => {
+  it("labels HLS copy-original sessions as container HLS with direct video", () => {
     const session = makeSession({
       play_method: "transcode",
       video_decision: "remux",
@@ -511,7 +556,20 @@ describe("adminActivityPresentation", () => {
     expect(normalizeStreamDecision(session.video_decision)).toBe("copy");
     expect(normalizeStreamDecision(session.audio_decision)).toBe("transcode");
     expect(formatDeliveredContainerSummary(session)).toBe("HLS");
-    expect(formatVideoDetail(session)).toBe("Video stream copied");
+    expect(formatDecisionLabel(normalizeStreamDecision(session.video_decision))).toBe("Direct");
+    expect(formatVideoDetail(session)).toBe("No video conversion");
+  });
+
+  it("presents copied audio with the same direct details as untouched audio", () => {
+    const copied = makeSession({
+      play_method: "remux",
+      video_decision: "remux",
+      audio_decision: "remux",
+      transcode_audio: false,
+    });
+
+    expect(formatDecisionLabel(normalizeStreamDecision(copied.audio_decision))).toBe("Direct");
+    expect(formatAudioDetail(copied)).toBe("No audio conversion");
   });
 
   it("keeps exact client build/channel and tone-map mode in expanded activity details", () => {
