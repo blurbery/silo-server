@@ -128,20 +128,32 @@ type playbackSessionsCapabilitiesResponse struct {
 	NodeRouting bool `json:"node_routing"`
 }
 
+const (
+	effectivePlayMethodDirect       = "direct"
+	effectivePlayMethodRemux        = "remux"
+	effectivePlayMethodDirectStream = "direct_stream"
+	effectivePlayMethodTranscode    = "transcode"
+)
+
 // HandleGetSessionsCapabilities exposes additive feature support for the live
 // admin session payload (GET /admin/sessions/capabilities).
 func (h *AdminHandler) HandleGetSessionsCapabilities(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, playbackSessionsCapabilitiesResponse{
-		EffectivePlayMethod:       true,
-		EffectivePlayMethodValues: []string{"direct", "remux", "direct_stream", "transcode"},
-		IsJellyfinClient:          true,
-		TranscodeHWAccel:          true,
-		ToneMapMode:               true,
-		ToneMapModeValues:         []string{string(tonemap.ModeHardware), string(tonemap.ModeSoftware)},
-		ClientBuild:               true,
-		ClientChannel:             true,
-		TargetAudioChannels:       true,
-		NodeRouting:               true,
+		EffectivePlayMethod: true,
+		EffectivePlayMethodValues: []string{
+			effectivePlayMethodDirect,
+			effectivePlayMethodRemux,
+			effectivePlayMethodDirectStream,
+			effectivePlayMethodTranscode,
+		},
+		IsJellyfinClient:    true,
+		TranscodeHWAccel:    true,
+		ToneMapMode:         true,
+		ToneMapModeValues:   []string{string(tonemap.ModeHardware), string(tonemap.ModeSoftware)},
+		ClientBuild:         true,
+		ClientChannel:       true,
+		TargetAudioChannels: true,
+		NodeRouting:         true,
 	})
 }
 
@@ -472,13 +484,13 @@ func effectivePlayMethod(videoDecision, audioDecision string) string {
 	case videoDecision == "" && audioDecision == "":
 		return ""
 	case videoDecision == "transcode":
-		return "transcode"
+		return effectivePlayMethodTranscode
 	case audioDecision == "transcode":
-		return "direct_stream"
+		return effectivePlayMethodDirectStream
 	case videoDecision == "direct" && audioDecision == "direct":
-		return "direct"
+		return effectivePlayMethodDirect
 	default:
-		return "remux"
+		return effectivePlayMethodRemux
 	}
 }
 
