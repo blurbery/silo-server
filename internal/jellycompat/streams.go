@@ -2220,8 +2220,8 @@ func (h *PlaybackHandler) reviveUpstreamForReport(ctx context.Context, session *
 		return nil
 	}
 	source := findMediaSource(playSession, mediaSourceID)
-	if source == nil {
-		source = firstMediaSource(playSession)
+	if source == nil && (mediaSourceID == "" || mediaSourceIDsEqual(mediaSourceID, playSession.RouteItemID)) {
+		source = defaultPlaybackMediaSource(playSession)
 	}
 	if source == nil {
 		return nil
@@ -3184,7 +3184,7 @@ func (h *PlaybackHandler) resolvePlaybackRoute(r *http.Request, compatSession *S
 			// empty or item-id mediaSourceId.
 			source := findMediaSource(playSession, mediaSourceID)
 			if source == nil && (mediaSourceID == "" || mediaSourceIDsEqual(mediaSourceID, routeID)) {
-				source = firstMediaSource(playSession)
+				source = defaultPlaybackMediaSource(playSession)
 			}
 			if !staticPlaybackRouteMatches(r, compatSession, playSession, source) {
 				return nil, nil, ErrSessionNotFound
@@ -3213,7 +3213,7 @@ func (h *PlaybackHandler) resolvePlaybackRoute(r *http.Request, compatSession *S
 			mediaSourceIDsEqual(playSession.RouteItemID, routeID) {
 			source := findMediaSource(playSession, mediaSourceID)
 			if source == nil && (mediaSourceID == "" || mediaSourceIDsEqual(mediaSourceID, routeID)) {
-				source = firstMediaSource(playSession)
+				source = defaultPlaybackMediaSource(playSession)
 			}
 			if !staticPlaybackRouteMatches(r, compatSession, playSession, source) {
 				return nil, nil, ErrSessionNotFound
@@ -3238,7 +3238,7 @@ func (h *PlaybackHandler) resolvePlaybackRoute(r *http.Request, compatSession *S
 		source = findMediaSource(playSession, mediaSourceID)
 	}
 	if source == nil {
-		source = firstMediaSource(playSession)
+		source = defaultPlaybackMediaSource(playSession)
 	}
 	if !staticPlaybackRouteMatches(r, compatSession, playSession, source) {
 		return nil, nil, ErrSessionNotFound
@@ -3262,6 +3262,20 @@ func firstMediaSource(session *PlaybackSession) *PlaybackMediaSource {
 	}
 	source := session.MediaSources[0]
 	return &source
+}
+
+// A resumed play keeps its selected edition when the client omits a source or
+// uses Jellyfin's item-as-source alias. Never substitute another known edition.
+func defaultPlaybackMediaSource(session *PlaybackSession) *PlaybackMediaSource {
+	if session != nil && session.SelectedMediaFileID > 0 {
+		for _, source := range session.MediaSources {
+			if source.FileID == session.SelectedMediaFileID {
+				return &source
+			}
+		}
+		return nil
+	}
+	return firstMediaSource(session)
 }
 
 func findMediaSource(session *PlaybackSession, mediaSourceID string) *PlaybackMediaSource {

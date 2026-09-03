@@ -120,6 +120,32 @@ func TestHandlePlaybackReport_DeviceAliasIgnoresUnresolvedLegacyRecords(t *testi
 	}
 }
 
+func TestHandlePlaybackReport_ReviveSelectedEdition(t *testing.T) {
+	for _, selected := range []int{43, 99} {
+		handler, mgr, routeID, _ := newReportLivenessHandler("expired-native", false)
+		if err := handler.playbackStore.Update("play-1", func(s *PlaybackSession) error {
+			second := s.MediaSources[0]
+			second.ID, second.FileID, second.Version.FileID = "second-edition", 43, 43
+			s.MediaSources = append(s.MediaSources, second)
+			s.SelectedMediaFileID = selected
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		rec := postProgressReport(handler, `{"PlaySessionId":"play-1","ItemId":"`+routeID+`","MediaSourceId":"`+routeID+`","PositionTicks":600000000}`)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("status = %d", rec.Code)
+		}
+		if selected == 43 {
+			if got := mgr.sessions["upstream-started"]; got == nil || got.MediaFileID != 43 {
+				t.Fatal("recovery substituted the first edition")
+			}
+		} else if mgr.startCalls != 0 {
+			t.Fatal("missing selected edition was replaced by another file")
+		}
+	}
+}
+
 // TestHandlePlaybackReport_ClientPlaySessionIDFallsBackToItemRoute proves a
 // progress report whose PlaySessionId is unknown to the server (the client
 // generated it because Static=true direct play skipped PlaybackInfo) still
