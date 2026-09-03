@@ -16,6 +16,14 @@ import (
 	"github.com/Silo-Server/silo-server/internal/tonemap"
 )
 
+// Transport output facts are independent of the whole-session play method.
+const (
+	OutputContainerFMP4   = "fmp4"
+	OutputContainerMPEGTS = "mpegts"
+	OutputProtocolHLS     = "hls"
+	OutputProtocolHTTP    = "http"
+)
+
 // Session represents an active playback session.
 type Session struct {
 	ID                         string

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"sort"
 	"time"
+
+	"github.com/Silo-Server/silo-server/internal/playback"
 )
 
 // ResolveClientPlaySessionID preserves a storage failure for callers that may
@@ -68,7 +70,7 @@ func legacyStaticDuplicateGroup(sessions []PlaybackSession) (string, []string) {
 	}
 	for _, s := range sessions {
 		if s.Terminal || s.SupersededBy != "" || s.StaticPlaybackKey != "" || s.Recipe != nil || s.TranscodeStarted ||
-			s.UpstreamPlayMethod != "direct" || s.UpstreamSessionID == "" ||
+			s.UpstreamPlayMethod != string(playback.PlayDirect) || s.UpstreamSessionID == "" ||
 			s.ClientPlaySessionID == "" || s.ClientPlaySessionID == s.ID ||
 			s.CompatToken != first.CompatToken || s.UserID != first.UserID || s.ClientDeviceID != first.ClientDeviceID ||
 			s.ClientPlaySessionID != first.ClientPlaySessionID || s.ItemID != first.ItemID ||

@@ -685,9 +685,9 @@ func (m *TranscodeManager) reconstructSession(ctx context.Context, sessionID str
 	}
 	if card.IsTranscodeRecipe() {
 		s.OutputContainer = HLSOutputContainer(card.TranscodeOpts("", "", nil))
-		s.OutputProtocol = "hls"
+		s.OutputProtocol = OutputProtocolHLS
 	} else if method == PlayRemux {
-		s.OutputContainer, s.OutputProtocol = "fmp4", "http"
+		s.OutputContainer, s.OutputProtocol = OutputContainerFMP4, OutputProtocolHTTP
 	}
 	// Enforce the same per-user concurrency caps a fresh StartSession would, so a
 	// replayed token cannot reconstruct past the user's limit. Reconstructing the

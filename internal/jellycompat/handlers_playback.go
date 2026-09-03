@@ -220,7 +220,7 @@ func (h *PlaybackHandler) recordNodeRoutingAssignment(ctx context.Context, playS
 // activity views as a full video transcode. Shared by the local
 // (ensureTranscodeSession) and remote (startRemoteTranscode) paths.
 func (h *PlaybackHandler) recordTranscodeStreamDetails(ctx context.Context, upstreamSessionID string, opts playback.TranscodeOpts) {
-	h.recordOutputFormat(upstreamSessionID, playback.HLSOutputContainer(opts), "hls")
+	h.recordOutputFormat(upstreamSessionID, playback.HLSOutputContainer(opts), playback.OutputProtocolHLS)
 	setter, ok := h.sessionMgr.(transcodeStreamDetailsSetter)
 	if !ok {
 		return

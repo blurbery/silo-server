@@ -962,9 +962,9 @@ func appendStreamSelectionArgs(args []string, opts TranscodeOpts) []string {
 // reporting so copied MPEG-2/forced-TS streams cannot be mislabeled as fMP4.
 func HLSOutputContainer(opts TranscodeOpts) string {
 	if copyVideoUsesFMP4(opts) {
-		return "fmp4"
+		return OutputContainerFMP4
 	}
-	return "mpegts"
+	return OutputContainerMPEGTS
 }
 
 // copyVideoUsesFMP4 reports whether copied video is packaged as fragmented MP4

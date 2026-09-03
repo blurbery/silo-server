@@ -473,7 +473,7 @@ func (h *PlaybackHandler) HandleVideoStream(w http.ResponseWriter, r *http.Reque
 	// no upstream id yet. Now it does, and no byte has been written.
 	attachCompatStream(r.Context(), session, playSession, source.FileID)
 	if method == "remux" {
-		h.recordOutputFormat(playSession.UpstreamSessionID, "fmp4", "http")
+		h.recordOutputFormat(playSession.UpstreamSessionID, playback.OutputContainerFMP4, playback.OutputProtocolHTTP)
 	}
 
 	if h.fileResolver == nil {
