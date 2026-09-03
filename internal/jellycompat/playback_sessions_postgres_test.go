@@ -215,6 +215,93 @@ func newCompatTestPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
+func TestDurableCompatPlaybackStoreStaticReservationAcrossInstances(t *testing.T) {
+	pool := newCompatTestPool(t)
+	ctx := context.Background()
+	token := fmt.Sprintf("static-reservation-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		if _, err := pool.Exec(ctx, `DELETE FROM jellycompat_playback_sessions WHERE compat_token = $1`, token); err != nil {
+			t.Errorf("clean static reservation fixtures: %v", err)
+		}
+	})
+	const requests = 12
+	type result struct {
+		session *PlaybackSession
+		err     error
+	}
+	results := make(chan result, requests)
+	start := make(chan struct{})
+	for i := range requests {
+		go func() {
+			store := NewDurableCompatPlaybackStore(pool, time.Hour, nil)
+			<-start
+			session, err := store.GetOrCreateStatic(ctx, PlaybackSession{
+				ID: fmt.Sprintf("%s-%d", token, i), CompatToken: token, StaticPlaybackKey: "same-play",
+			})
+			results <- result{session, err}
+		}()
+	}
+	close(start)
+	var firstID string
+	for range requests {
+		got := <-results
+		if got.err != nil {
+			t.Errorf("reserve across instances: %v", got.err)
+			continue
+		}
+		if firstID == "" {
+			firstID = got.session.ID
+		}
+		if got.session.ID != firstID {
+			t.Error("different API instances reserved different sessions for one play")
+		}
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM jellycompat_playback_sessions WHERE compat_token = $1`, token).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("durable rows = %d, want 1", count)
+	}
+	store := NewDurableCompatPlaybackStore(pool, time.Hour, nil)
+	if err := store.Update(firstID, func(session *PlaybackSession) error {
+		session.UpstreamSessionID = "attached-upstream"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	candidate := PlaybackSession{ID: token + "-retry", CompatToken: token, StaticPlaybackKey: "same-play"}
+	got, err := NewDurableCompatPlaybackStore(pool, time.Hour, nil).GetOrCreateStatic(ctx, candidate)
+	if err != nil || got.ID != firstID || got.UpstreamSessionID != "attached-upstream" {
+		t.Fatalf("retry did not preserve the live session: %v", err)
+	}
+	if err := store.Update(firstID, func(session *PlaybackSession) error {
+		session.Terminal = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.GetOrCreateStatic(ctx, candidate)
+	if err != nil || got.ID != candidate.ID {
+		t.Fatalf("terminal session was reused: %v", err)
+	}
+}
+
+func TestDurableCompatPlaybackStoreStaticReservationFailureLeavesNoLocalRow(t *testing.T) {
+	pool := newCompatTestPool(t)
+	pool.Close()
+	store := NewDurableCompatPlaybackStore(pool, time.Hour, nil)
+	_, err := store.GetOrCreateStatic(context.Background(), PlaybackSession{
+		ID: "failed-static", CompatToken: "token", StaticPlaybackKey: "play",
+	})
+	if err == nil {
+		t.Fatal("closed database unexpectedly accepted a reservation")
+	}
+	if _, ok := store.mem.Get("failed-static"); ok {
+		t.Fatal("persistence failure left an uncoordinated local session")
+	}
+}
+
 // A session written by one store instance must be reloadable by a fresh instance
 // (empty cache) — i.e. it survived in Postgres, as it would across a restart.
 func TestDurableCompatPlaybackStore_SurvivesRestart(t *testing.T) {

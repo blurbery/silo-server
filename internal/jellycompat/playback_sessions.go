@@ -33,7 +33,10 @@ type PlaybackSession struct {
 	// when it differs from ours (Static=true direct play skips PlaybackInfo,
 	// so the client never learns the server id). Playback reports carrying
 	// that id resolve to this session directly instead of by ambiguous route.
-	ClientPlaySessionID        string
+	ClientPlaySessionID string
+	// StaticPlaybackKey identifies one caller/device/play/item/source tuple.
+	// It is a hash, not a credential or a client-visible session identifier.
+	StaticPlaybackKey          string
 	UserID                     string
 	InitialSeekSeconds         float64
 	MediaSources               []PlaybackMediaSource
@@ -112,6 +115,9 @@ type CompatPlaybackStore interface {
 	// PutNegotiated stores a PlaybackInfo negotiation and atomically replaces
 	// older, still-unstarted negotiations for the same client device and item.
 	PutNegotiated(session PlaybackSession)
+	// GetOrCreateStatic atomically reserves one live session for a static play.
+	// Persistence failure must not create an uncoordinated local session.
+	GetOrCreateStatic(ctx context.Context, session PlaybackSession) (*PlaybackSession, error)
 	// Get returns a session when it exists and is not expired.
 	Get(id string) (*PlaybackSession, bool)
 	// Delete removes a session.
@@ -203,6 +209,27 @@ func (s *PlaybackSessionStore) Put(session PlaybackSession) {
 // publishing a stale pause.
 func (s *PlaybackSessionStore) PutNegotiated(session PlaybackSession) {
 	s.putNegotiatedNormalized(session)
+}
+
+func (s *PlaybackSessionStore) GetOrCreateStatic(ctx context.Context, session PlaybackSession) (*PlaybackSession, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if session.CompatToken == "" || session.StaticPlaybackKey == "" {
+		return nil, ErrSessionNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, existing := range s.sessions {
+		if existing.CompatToken == session.CompatToken && existing.StaticPlaybackKey == session.StaticPlaybackKey &&
+			!existing.Terminal && existing.ExpiresAt.After(s.now()) {
+			return &existing, nil
+		}
+	}
+	stored := s.normalizeSession(session)
+	s.sessions[stored.ID] = stored
+	return &stored, nil
 }
 
 // putNormalized stores or replaces a compat playback session and returns the

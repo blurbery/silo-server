@@ -2,6 +2,8 @@ package jellycompat
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -258,6 +260,149 @@ func TestHandleVideoStream_StaticDirectPlayReusesSessionAcrossRequests(t *testin
 
 	if mgr.startCalls != 1 {
 		t.Fatalf("StartSession ran %d times across 3 Static requests with the same PlaySessionId; want 1 (sessions must be reused, not leaked)", mgr.startCalls)
+	}
+}
+
+func TestCreateStaticPlaySessionConcurrentRequestsShareReservation(t *testing.T) {
+	handler, routeID, _ := newStaticDirectPlayHandler(t)
+	caller := &Session{Token: "static-test-token", ProfileID: "profile"}
+	const requests = 16
+	start := make(chan struct{})
+	type result struct {
+		session *PlaybackSession
+		err     error
+	}
+	results := make(chan result, requests)
+	for range requests {
+		go func() {
+			<-start
+			session, _, err := handler.createStaticPlaySession(context.Background(), caller, routeID, "", "client-play", "device")
+			results <- result{session, err}
+		}()
+	}
+	close(start)
+	var sessionID string
+	for range requests {
+		got := <-results
+		if got.err != nil {
+			t.Fatalf("reserve static playback: %v", got.err)
+		}
+		if sessionID == "" {
+			sessionID = got.session.ID
+		}
+		if got.session.ID != sessionID {
+			t.Fatalf("simultaneous requests created different sessions")
+		}
+	}
+	if got := len(handler.playbackStore.(*PlaybackSessionStore).sessions); got != 1 {
+		t.Fatalf("stored %d sessions for one static play, want 1", got)
+	}
+	if err := handler.playbackStore.Update(sessionID, func(session *PlaybackSession) error {
+		session.UpstreamSessionID = "active-upstream"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := handler.createStaticPlaySession(context.Background(), caller, routeID, "", "client-play", "device")
+	if err != nil || got.UpstreamSessionID != "active-upstream" {
+		t.Fatalf("reservation overwrote the active upstream attachment: %v", err)
+	}
+}
+
+func TestStaticPlaybackKeySeparatesPlaybackIdentities(t *testing.T) {
+	baseline := staticPlaybackKey(&Session{Token: "token", ProfileID: "profile"}, "device", "play", "item", "source")
+	variants := []struct{ token, profile, device, play, item, source string }{
+		{"other-token", "profile", "device", "play", "item", "source"},
+		{"token", "other-profile", "device", "play", "item", "source"},
+		{"token", "profile", "other-device", "play", "item", "source"},
+		{"token", "profile", "device", "other-play", "item", "source"},
+		{"token", "profile", "device", "play", "other-item", "source"},
+		{"token", "profile", "device", "play", "item", "other-source"},
+	}
+	store := NewPlaybackSessionStore(time.Hour, nil)
+	for i, variant := range variants {
+		key := staticPlaybackKey(&Session{Token: variant.token, ProfileID: variant.profile}, variant.device, variant.play, variant.item, variant.source)
+		if key == baseline {
+			t.Fatalf("identity field %d did not affect the reservation key", i)
+		}
+		candidate := PlaybackSession{ID: fmt.Sprintf("distinct-%d", i), CompatToken: variant.token, StaticPlaybackKey: key}
+		got, err := store.GetOrCreateStatic(context.Background(), candidate)
+		if err != nil || got.ID != candidate.ID {
+			t.Fatalf("distinct playback %d was merged: %v", i, err)
+		}
+	}
+	if left, right := staticPlaybackKey(&Session{Token: "ab"}, "c", "", "", ""), staticPlaybackKey(&Session{Token: "a"}, "bc", "", "", ""); left == right {
+		t.Fatal("reservation keys lost field boundaries")
+	}
+}
+
+func TestPlaybackSessionStoreStaticReservationSkipsTerminalAndExpired(t *testing.T) {
+	now := time.Now()
+	store := NewPlaybackSessionStore(time.Minute, func() time.Time { return now })
+	first := PlaybackSession{ID: "first", CompatToken: "token", StaticPlaybackKey: "scope"}
+	if _, err := store.GetOrCreateStatic(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HideFromRouting(first.ID, first.CompatToken); err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.ID = "second"
+	got, err := store.GetOrCreateStatic(context.Background(), second)
+	if err != nil || got.ID != second.ID {
+		t.Fatalf("terminal reservation was reused: %v", err)
+	}
+	now = now.Add(2 * time.Minute)
+	third := first
+	third.ID = "third"
+	got, err = store.GetOrCreateStatic(context.Background(), third)
+	if err != nil || got.ID != third.ID {
+		t.Fatalf("expired reservation was reused: %v", err)
+	}
+}
+
+func TestHandleVideoStreamStaticKeepsDistinctClientPlays(t *testing.T) {
+	handler, routeID, _ := newStaticDirectPlayHandler(t)
+	for _, playID := range []string{"play-a", "play-b", "play-a", "play-b"} {
+		if response := serveStaticStream(handler, routeID, "Static=true&PlaySessionId="+playID); response.Code != 200 {
+			t.Fatalf("static play failed: %d", response.Code)
+		}
+	}
+	if got := handler.sessionMgr.(*testCompatSessionManager).startCalls; got != 2 {
+		t.Fatalf("started %d upstream sessions for two distinct plays, want 2", got)
+	}
+	if got := len(handler.playbackStore.(*PlaybackSessionStore).sessions); got != 2 {
+		t.Fatalf("stored %d sessions, want 2", got)
+	}
+}
+
+func TestHandleVideoStreamStaticKeepsDistinctDevicesWithoutClientPlayID(t *testing.T) {
+	handler, routeID, _ := newStaticDirectPlayHandler(t)
+	for _, deviceID := range []string{"device-a", "device-b", "device-a", "device-b"} {
+		if response := serveStaticStream(handler, routeID, "static=true&DeviceId="+deviceID); response.Code != 200 {
+			t.Fatalf("static play failed: %d", response.Code)
+		}
+	}
+	if got := handler.sessionMgr.(*testCompatSessionManager).startCalls; got != 2 {
+		t.Fatalf("started %d upstream sessions for two devices, want 2", got)
+	}
+}
+
+type failingStaticReservationStore struct{ CompatPlaybackStore }
+
+func (s failingStaticReservationStore) GetOrCreateStatic(context.Context, PlaybackSession) (*PlaybackSession, error) {
+	return nil, errors.New("reservation unavailable")
+}
+
+func TestHandleVideoStreamStaticReservationFailureDoesNotStartPlayback(t *testing.T) {
+	handler, routeID, _ := newStaticDirectPlayHandler(t)
+	handler.playbackStore = failingStaticReservationStore{handler.playbackStore}
+	response := serveStaticStream(handler, routeID, "Static=true&PlaySessionId=play")
+	if response.Code != 503 {
+		t.Fatalf("response = %d, want retryable 503", response.Code)
+	}
+	if handler.sessionMgr.(*testCompatSessionManager).startCalls != 0 {
+		t.Fatal("persistence failure started an uncoordinated playback session")
 	}
 }
 

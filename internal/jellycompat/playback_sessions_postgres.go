@@ -327,6 +327,63 @@ func negotiatedPlaybackScope(compatToken, clientDeviceID, routeItemID string) st
 	)
 }
 
+// GetOrCreateStatic serializes the initial lookup and insert across API nodes.
+// The existing token index bounds the lookup to this caller's playback rows.
+func (d *DurableCompatPlaybackStore) GetOrCreateStatic(ctx context.Context, session PlaybackSession) (*PlaybackSession, error) {
+	if d.pool == nil {
+		return d.mem.GetOrCreateStatic(ctx, session)
+	}
+	if session.CompatToken == "" || session.StaticPlaybackKey == "" {
+		return nil, ErrSessionNotFound
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	// Domain-separate static reservations from PlaybackInfo negotiation locks.
+	if err := acquireNegotiatedSessionAdvisoryLock(ctx, tx, session.CompatToken, "static-playback-reservation", session.StaticPlaybackKey); err != nil {
+		return nil, err
+	}
+	var data []byte
+	err = tx.QueryRow(ctx, `
+		SELECT data FROM jellycompat_playback_sessions
+		WHERE compat_token = $1 AND data->>'StaticPlaybackKey' = $2
+			AND expires_at > $3
+			AND COALESCE((data->>'Terminal')::boolean, false) = false
+		ORDER BY created_at, id LIMIT 1 FOR UPDATE
+	`, session.CompatToken, session.StaticPlaybackKey, d.now()).Scan(&data)
+	if errors.Is(err, pgx.ErrNoRows) {
+		session = d.mem.normalizeSession(session)
+		data, err = marshalPlaybackSession(session)
+		if err == nil {
+			_, err = tx.Exec(ctx, `
+				INSERT INTO jellycompat_playback_sessions (id, compat_token, user_id, data, expires_at)
+				VALUES ($1, $2, $3, $4, $5)
+			`, session.ID, session.CompatToken, session.UserID, data, session.ExpiresAt)
+		}
+	} else if err == nil {
+		err = json.Unmarshal(data, &session)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	// Reload through the normal generation-aware cache path. Applying the
+	// transaction's snapshot directly could overwrite a concurrent upstream
+	// attachment, progress update, or terminal marker after the commit.
+	d.invalidateValidation(session.ID, session.CompatToken)
+	stored, ok := d.Get(session.ID)
+	if !ok {
+		return nil, ErrSessionNotFound
+	}
+	return stored, nil
+}
+
 // Get periodically revalidates the durable row before returning an active
 // session. Query failures preserve a still-valid cache entry: a temporary DB
 // outage must not interrupt an already-playing stream.
