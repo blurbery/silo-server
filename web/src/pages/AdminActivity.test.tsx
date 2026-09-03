@@ -94,7 +94,7 @@ describe("activity playback scopes", () => {
     expect(screen.getAllByText("Transcode", { exact: true })).toHaveLength(2);
     expect(screen.getAllByText("AAC 5.1", { exact: true })).toHaveLength(2);
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Details" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Details" })[0]!);
     expect(screen.getByText("Audio Transcode")).toBeInTheDocument();
     expect(screen.getByText("Copied bit-for-bit")).toBeInTheDocument();
     expect(screen.queryByText("MKV → Remux")).not.toBeInTheDocument();
@@ -140,7 +140,7 @@ describe("activity playback scopes", () => {
     expect(bar.children).toHaveLength(4);
   });
 
-  it("keeps unknown scopes unknown and preserves hardware details for video transcodes", () => {
+  it("keeps unknown scopes unknown and puts encoder and tone-map modes in expanded details", () => {
     mocks.sessions = [
       makeSession({ session_id: "unknown", effective_play_method: "future-method" }),
       makeSession({
@@ -148,14 +148,20 @@ describe("activity playback scopes", () => {
         effective_play_method: "transcode",
         video_decision: "transcode",
         transcode_hw_accel: "qsv",
+        tone_map_mode: "hardware",
       }),
     ];
     renderActivity();
 
     expect(screen.getAllByLabelText("Playback method: Unknown")).toHaveLength(2);
     expect(screen.getAllByLabelText("Playback method: Transcode")).toHaveLength(2);
-    expect(screen.getAllByText("HW QSV")).toHaveLength(2);
+    expect(screen.queryByText("HW QSV")).not.toBeInTheDocument();
+    expect(screen.queryByText("HW Tone map")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Playback method: Direct Play")).not.toBeInTheDocument();
+    const badge = screen.getAllByLabelText("Playback method: Transcode")[0]!;
+    fireEvent.click(within(badge.parentElement!).getByRole("button", { name: "Details" }));
+    expect(screen.getByText("HW QSV")).toBeInTheDocument();
+    expect(screen.getByText("Hardware")).toBeInTheDocument();
   });
 
   it("does not collapse distinct server sessions just because their display fields match", () => {
