@@ -2021,11 +2021,18 @@ func (h *PlaybackHandler) handlePlaybackReport(w http.ResponseWriter, r *http.Re
 		// route-scoped lookup the stream path uses (see resolvePlaybackRoute).
 		// Without either, these reports silently no-op, the admin activity view
 		// position freezes, and stale cleanup drops the still-active session.
-		if stop {
+		var resolveErr error
+		playSession, resolveErr = h.resolveDevicePlaybackAlias(r, session.Token, req.PlaySessionID, req.ItemID, req.MediaSourceID, stop)
+		if resolveErr != nil && !errors.Is(resolveErr, ErrSessionNotFound) {
+			writeError(w, http.StatusServiceUnavailable, "ServiceUnavailable", "Playback session could not be resolved")
+			return
+		}
+		ok = resolveErr == nil
+		if !ok && stop {
 			playSession, ok = h.playbackStore.FindFinalizableByClientPlaySessionID(
 				session.Token, req.PlaySessionID, req.ItemID, req.MediaSourceID,
 			)
-		} else {
+		} else if !ok {
 			playSession, ok = h.playbackStore.FindByClientPlaySessionID(session.Token, req.PlaySessionID)
 		}
 		if ok && !reportMatchesPlaySession(playSession, req) {
@@ -2043,6 +2050,10 @@ func (h *PlaybackHandler) handlePlaybackReport(w http.ResponseWriter, r *http.Re
 			}
 			playSession, ok = nil, false
 		}
+	}
+	deviceID := staticPlaybackClientDeviceID(r)
+	if ok && deviceID != "" && playSession.ClientDeviceID != "" && playSession.ClientDeviceID != deviceID {
+		ok = false
 	}
 	if !ok || playSession.UpstreamSessionID == "" {
 		w.WriteHeader(http.StatusNoContent)
@@ -2195,7 +2206,7 @@ func reportMatchesPlaySession(playSession *PlaybackSession, req sessionReportReq
 	if req.ItemID != "" && !mediaSourceIDsEqual(playSession.RouteItemID, req.ItemID) {
 		return false
 	}
-	if req.MediaSourceID != "" && findMediaSource(playSession, req.MediaSourceID) == nil {
+	if req.MediaSourceID != "" && !mediaSourceIDsEqual(req.MediaSourceID, playSession.RouteItemID) && findMediaSource(playSession, req.MediaSourceID) == nil {
 		return false
 	}
 	return true
@@ -3122,6 +3133,21 @@ func staticPlaybackClientDeviceID(r *http.Request) string {
 	))
 }
 
+func (h *PlaybackHandler) resolveDevicePlaybackAlias(r *http.Request, token, playID, routeID, sourceID string, includeTerminal bool) (*PlaybackSession, error) {
+	if sourceID != "" && mediaSourceIDsEqual(sourceID, routeID) {
+		sourceID = "" // Jellyfin's MediaSource.Id == Item.Id convention.
+	}
+	deviceID := staticPlaybackClientDeviceID(r)
+	if deviceID != "" {
+		if resolver, ok := h.playbackStore.(interface {
+			ResolveDeviceClientPlaySessionID(string, string, string, string, string, bool) (*PlaybackSession, error)
+		}); ok {
+			return resolver.ResolveDeviceClientPlaySessionID(token, playID, deviceID, routeID, sourceID, includeTerminal)
+		}
+	}
+	return nil, ErrSessionNotFound
+}
+
 func staticPlaybackKey(session *Session, deviceID, clientPlayID, contentID, sourceID string) string {
 	// JSON framing preserves field boundaries even when client IDs contain
 	// separators. Content/source IDs come from the catalog, not URL spelling.
@@ -3167,18 +3193,20 @@ func (h *PlaybackHandler) resolvePlaybackRoute(r *http.Request, compatSession *S
 		}
 		// Static clients use their own ID on subsequent range requests. Resolve
 		// it before route fallback so concurrent plays of one item stay distinct.
-		var playSession *PlaybackSession
-		var ok bool
+		playSession, resolveErr := h.resolveDevicePlaybackAlias(r, compatSession.Token, clientPlaySessionID, routeID, mediaSourceID, false)
+		if resolveErr != nil && !errors.Is(resolveErr, ErrSessionNotFound) {
+			return nil, nil, resolveErr
+		}
+		ok := resolveErr == nil
 		if resolver, supported := h.playbackStore.(interface {
 			ResolveClientPlaySessionID(string, string) (*PlaybackSession, error)
-		}); supported {
-			var resolveErr error
+		}); !ok && supported {
 			playSession, resolveErr = resolver.ResolveClientPlaySessionID(compatSession.Token, clientPlaySessionID)
 			if resolveErr != nil && !errors.Is(resolveErr, ErrSessionNotFound) {
 				return nil, nil, resolveErr
 			}
 			ok = resolveErr == nil
-		} else {
+		} else if !ok {
 			playSession, ok = h.playbackStore.FindByClientPlaySessionID(compatSession.Token, clientPlaySessionID)
 		}
 		if ok &&

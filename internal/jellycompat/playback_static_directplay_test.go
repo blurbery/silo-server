@@ -405,6 +405,31 @@ func TestLegacyStaticDuplicatesRequireSameSelectedEdition(t *testing.T) {
 	}
 }
 
+func TestDevicePlaybackAliasRequiresExactUniqueIdentity(t *testing.T) {
+	store := NewPlaybackSessionStore(time.Hour, nil)
+	first, second := legacyStaticPair("token", time.Now())
+	first.ClientDeviceID, second.ClientDeviceID = "first-device", "second-device"
+	store.Put(first)
+	store.Put(second)
+	if _, err := store.ResolveDeviceClientPlaySessionID("token", "client-play", "", "route", "source", false); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatal("absent device guessed a playback")
+	}
+	if _, err := store.ResolveDeviceClientPlaySessionID("other-token", "client-play", "first-device", "route", "source", false); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatal("foreign token matched")
+	}
+	if _, err := store.ResolveDeviceClientPlaySessionID("token", "client-play", "first-device", "route", "other-source", false); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatal("different source matched")
+	}
+	if got, err := store.ResolveDeviceClientPlaySessionID("token", "client-play", "second-device", "route", "source", false); err != nil || got.ID != second.ID {
+		t.Fatal("exact device did not resolve")
+	}
+	second.ClientDeviceID = first.ClientDeviceID
+	store.Put(second)
+	if _, err := store.ResolveDeviceClientPlaySessionID("token", "client-play", "first-device", "route", "source", false); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatal("ambiguous device guessed a playback")
+	}
+}
+
 func TestStaticPlaybackKeySeparatesPlaybackIdentities(t *testing.T) {
 	baseline := staticPlaybackKey(&Session{Token: "token", ProfileID: "profile"}, "device", "play", "item", "source")
 	variants := []struct{ token, profile, device, play, item, source string }{

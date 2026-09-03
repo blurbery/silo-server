@@ -368,6 +368,37 @@ func TestDurableLegacyStaticDuplicatesFailureDoesNotChangeCache(t *testing.T) {
 	}
 }
 
+func TestDurableLegacyStaticDuplicatesDeviceRecoveryWithoutNativeSnapshot(t *testing.T) {
+	pool := newCompatTestPool(t)
+	ctx := context.Background()
+	token := fmt.Sprintf("device-recovery-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM jellycompat_playback_sessions WHERE compat_token=$1`, token)
+	})
+	first, second := legacyStaticPair(token, time.Now())
+	first.ClientDeviceID, second.ClientDeviceID = "", ""
+	first.MediaSources = append(first.MediaSources, PlaybackMediaSource{ID: "other", FileID: 43})
+	second.MediaSources = append(second.MediaSources, PlaybackMediaSource{ID: "other", FileID: 43})
+	current := first
+	current.ID, current.ClientDeviceID, current.StaticPlaybackKey = token+"-current", "current-device", "reservation"
+	seed := NewDurableCompatPlaybackStore(pool, time.Hour, nil)
+	for _, session := range []PlaybackSession{first, second, current} {
+		seed.Put(session)
+	}
+	fresh := NewDurableCompatPlaybackStore(pool, time.Hour, nil)
+	got, err := fresh.ResolveDeviceClientPlaySessionID(token, "client-play", "current-device", "route", "source", false)
+	if err != nil || got == nil || got.ID != current.ID {
+		t.Fatalf("device recovery failed: %v", err)
+	}
+	var active int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM jellycompat_playback_sessions WHERE compat_token=$1 AND COALESCE((data->>'Terminal')::boolean,false)=false`, token).Scan(&active); err != nil {
+		t.Fatal(err)
+	}
+	if active != 3 {
+		t.Fatal("unproven historical records were modified")
+	}
+}
+
 func TestDurableCompatPlaybackStoreStaticReservationFailureLeavesNoLocalRow(t *testing.T) {
 	pool := newCompatTestPool(t)
 	pool.Close()

@@ -76,6 +76,50 @@ func postProgressReport(handler *PlaybackHandler, body string) *httptest.Respons
 	return rec
 }
 
+func TestHandlePlaybackReport_DeviceAliasIgnoresUnresolvedLegacyRecords(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		t.Run(map[bool]string{false: "progress", true: "stop"}[stop], func(t *testing.T) {
+			handler, mgr, routeID, sourceID := newReportLivenessHandler("current-native", true)
+			if err := handler.playbackStore.Update("play-1", func(s *PlaybackSession) error {
+				s.ClientPlaySessionID, s.ClientDeviceID, s.StaticPlaybackKey = "client-play", "current-device", "reservation"
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			first, second := legacyStaticPair("token-1", time.Now())
+			for _, old := range []PlaybackSession{first, second} {
+				old.ClientDeviceID, old.RouteItemID = "", routeID
+				old.MediaSources = []PlaybackMediaSource{{ID: sourceID, FileID: 42}, {ID: "another-edition", FileID: 43}}
+				handler.playbackStore.Put(old)
+			}
+			reportSourceID := sourceID
+			if !stop {
+				reportSourceID = routeID // Jellyfin's item-as-source convention.
+			}
+			req := httptest.NewRequest(http.MethodPost, "/Sessions/Playing/Progress", strings.NewReader(`{"PlaySessionId":"client-play","ItemId":"`+routeID+`","MediaSourceId":"`+reportSourceID+`","PositionTicks":600000000}`))
+			req.Header.Set("X-Emby-Authorization", `MediaBrowser DeviceId="current-device"`)
+			req = req.WithContext(context.WithValue(req.Context(), compatSessionKey, &Session{Token: "token-1", StreamAppUserID: 1, ProfileID: "profile-1"}))
+			rec := httptest.NewRecorder()
+			handler.handlePlaybackReport(rec, req, stop)
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d", rec.Code)
+			}
+			if stop {
+				if len(mgr.stopCalls) != 1 || mgr.stopCalls[0] != "current-native" {
+					t.Fatal("stop did not resolve the exact device playback")
+				}
+			} else if len(mgr.progressUpdates) != 1 || mgr.progressUpdates[0].sessionID != "current-native" {
+				t.Fatal("unresolved historical aliases blocked current progress")
+			}
+			for _, old := range []PlaybackSession{first, second} {
+				if _, ok := handler.playbackStore.Get(old.ID); !ok {
+					t.Fatal("unproven historical record was modified")
+				}
+			}
+		})
+	}
+}
+
 // TestHandlePlaybackReport_ClientPlaySessionIDFallsBackToItemRoute proves a
 // progress report whose PlaySessionId is unknown to the server (the client
 // generated it because Static=true direct play skipped PlaybackInfo) still

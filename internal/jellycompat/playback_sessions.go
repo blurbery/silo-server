@@ -602,6 +602,13 @@ func (s *PlaybackSessionStore) findByClientPlaySessionID(
 	mediaSourceID string,
 	includeTerminal bool,
 ) (*PlaybackSession, bool) {
+	return s.findDeviceClientPlaySessionID(compatToken, clientPlaySessionID, "", routeItemID, mediaSourceID, includeTerminal)
+}
+
+func (s *PlaybackSessionStore) findDeviceClientPlaySessionID(
+	compatToken, clientPlaySessionID, deviceID, routeItemID, mediaSourceID string,
+	includeTerminal bool,
+) (*PlaybackSession, bool) {
 	if clientPlaySessionID == "" {
 		return nil, false
 	}
@@ -615,6 +622,9 @@ func (s *PlaybackSessionStore) findByClientPlaySessionID(
 			continue
 		}
 		if session.CompatToken != compatToken {
+			continue
+		}
+		if deviceID != "" && session.ClientDeviceID != deviceID {
 			continue
 		}
 		if routeItemID != "" && !mediaSourceIDsEqual(session.RouteItemID, routeItemID) {

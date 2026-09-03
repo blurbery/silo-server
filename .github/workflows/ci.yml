@@ -137,7 +137,7 @@ jobs:
         run: |
           sed '/^-- +goose Down/,$d' migrations/sql/20260618053223_add_jellycompat_playback_sessions.sql | psql -h localhost -U silo_test -d silo_test -v ON_ERROR_STOP=1
           psql -h localhost -U silo_test -d silo_test -v ON_ERROR_STOP=1 -c 'CREATE TABLE playback_sessions_sync (session_id text PRIMARY KEY, media_file_id integer)'
-          go test -race ./internal/jellycompat -run 'TestDurableCompatPlaybackStoreStaticReservation|TestDurableLegacyStaticDuplicates|TestLegacyStaticDuplicates|TestCreateStaticPlaySessionConcurrent|TestStaticPlaybackKey|TestPlaybackSessionStoreStaticReservation|TestHandleVideoStream.*Static' -count=1
+          go test -race ./internal/jellycompat -run 'TestDurableCompatPlaybackStoreStaticReservation|TestDurableLegacyStaticDuplicates|TestLegacyStaticDuplicates|TestDevicePlaybackAlias|TestHandlePlaybackReport_DeviceAlias|TestCreateStaticPlaySessionConcurrent|TestStaticPlaybackKey|TestPlaybackSessionStoreStaticReservation|TestHandleVideoStream.*Static' -count=1
           go test ./internal/worker -run TestReconcilerOutputFormatPostgres -count=1
 
   web:
