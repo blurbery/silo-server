@@ -114,6 +114,16 @@ describe("adminActivityPresentation", () => {
     expect(decisionBadgeClass("remux")).toBe(activityMethodMeta("remux").badgeClass);
   });
 
+  it("does not present a remux operation as the name of the delivered container", () => {
+    const session = makeSession({ play_method: "remux", source_container: "mkv" });
+
+    expect(formatDecisionLabel(normalizeContainerDecision(session.play_method))).toBe("Remux");
+    expect(formatDeliveredContainerSummary(session)).toBe("Unknown output container");
+    expect(formatContainerDetail(session)).toBe(
+      "Repackaged for streaming; output container not reported",
+    );
+  });
+
   it("keeps copied streams explicit in component summaries", () => {
     expect(
       formatPlaybackDecisionSummary(

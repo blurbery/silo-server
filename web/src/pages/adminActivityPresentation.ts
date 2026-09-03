@@ -104,6 +104,8 @@ export function compareActivityMethods(a: string, b: string): number {
 export interface ActivityMethodMeta {
   /** Human label ("Direct Play"); the bucket key itself is the short tag. */
   label: string;
+  /** Explain the whole-session scope without implying every stream is direct. */
+  description: string;
   /** Solid swatch class for distribution bars and legend dots. */
   swatchClass: string;
   /** Tinted badge classes for the per-row method tag. */
@@ -117,21 +119,25 @@ export interface ActivityMethodMeta {
 const ACTIVITY_METHOD_META: Record<string, ActivityMethodMeta> = {
   direct: {
     label: "Direct Play",
+    description: "The original file is delivered without modification.",
     swatchClass: "bg-success",
     badgeClass: "bg-success/10 text-success border-success/15",
   },
   remux: {
     label: "Remux",
+    description: "Audio and video are copied into a streaming container without re-encoding.",
     swatchClass: "bg-info",
     badgeClass: "bg-info/10 text-info border-info/15",
   },
   direct_stream: {
     label: "Direct Stream",
+    description: "Video is copied without re-encoding; audio is transcoded.",
     swatchClass: "bg-warning",
     badgeClass: "bg-warning/10 text-warning border-warning/15",
   },
   transcode: {
     label: "Transcode",
+    description: "Video is re-encoded; audio may be copied or transcoded.",
     swatchClass: "bg-destructive",
     badgeClass: "bg-destructive/10 text-destructive border-destructive/15",
   },
@@ -139,6 +145,7 @@ const ACTIVITY_METHOD_META: Record<string, ActivityMethodMeta> = {
 
 const UNKNOWN_ACTIVITY_METHOD_META: ActivityMethodMeta = {
   label: "Unknown",
+  description: "The server has not reported a recognized playback method.",
   swatchClass: "bg-muted-foreground",
   badgeClass: "bg-surface text-muted-foreground border-border",
 };
@@ -366,7 +373,7 @@ export function formatDeliveredContainerSummary(session: AdminSession): string {
     case "direct":
       return formatSourceContainerSummary(session);
     case "remux":
-      return "Remux";
+      return "Unknown output container";
     case "hls":
       return "HLS";
     default:
@@ -380,7 +387,7 @@ export function formatContainerDetail(session: AdminSession): string {
     case "direct":
       return "Original container";
     case "remux":
-      return `${source} → Remux`;
+      return "Repackaged for streaming; output container not reported";
     case "hls":
       return `${source} → HLS`;
     default:

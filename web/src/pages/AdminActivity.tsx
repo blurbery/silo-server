@@ -361,14 +361,19 @@ export default function AdminActivity() {
           {/* Method distribution bar */}
           <div className="mb-3">
             <div className="text-muted-foreground mb-2 text-[10px] font-semibold tracking-wider uppercase">
-              Play Method
+              Playback Method
             </div>
-            <div className="flex h-1.5 overflow-hidden rounded-full">
+            <div
+              role="img"
+              aria-label="Playback method distribution"
+              className="flex h-1.5 overflow-hidden rounded-full"
+            >
               {Object.entries(methods)
                 .sort(([a], [b]) => compareActivityMethods(a, b))
                 .map(([method, count]) => (
                   <div
                     key={method}
+                    title={`${activityMethodMeta(method).label}: ${count}`}
                     className={`transition-all duration-500 ${activityMethodMeta(method).swatchClass}`}
                     style={{ width: `${(count / sessions.length) * 100}%` }}
                   />
@@ -380,6 +385,10 @@ export default function AdminActivity() {
                 .map(([method, count]) => (
                   <button
                     key={method}
+                    type="button"
+                    title={activityMethodMeta(method).description}
+                    aria-label={`${activityMethodMeta(method).label} ${count}`}
+                    aria-pressed={methodFilter === method}
                     onClick={() => setMethodFilter(methodFilter === method ? null : method)}
                     className={`flex items-center gap-1.5 text-[11px] transition-opacity ${
                       methodFilter && methodFilter !== method ? "opacity-30" : ""
@@ -693,7 +702,10 @@ function StreamRow({
         {/* Playback */}
         <div className="min-w-0">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            {transcodeMode ? <TranscodeModeBadge label={transcodeMode} /> : null}
+            <ActivityMethodBadge method={activityMethod} />
+            {videoDecision === "transcode" && transcodeMode ? (
+              <TranscodeModeBadge label={transcodeMode} />
+            ) : null}
             {toneMap ? <ToneMapModeBadge summary={toneMap} /> : null}
             <button
               type="button"
@@ -818,11 +830,6 @@ function StreamRow({
                 </span>
               ) : null}
             </Link>
-            <span
-              className={`inline-flex flex-shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-semibold ${activityMethodMeta(activityMethod).badgeClass}`}
-            >
-              {activityMethodMeta(activityMethod).label}
-            </span>
             <JellyfinSessionPill session={session} />
           </div>
           <div className="text-muted-foreground mt-0.5 flex items-center gap-1.5 text-[11px]">
@@ -887,7 +894,10 @@ function StreamRow({
           </div>
           <div className="mt-2 rounded-md border border-white/6 bg-white/[0.03] px-2 py-1.5">
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-              {transcodeMode ? <TranscodeModeBadge label={transcodeMode} /> : null}
+              <ActivityMethodBadge method={activityMethod} />
+              {videoDecision === "transcode" && transcodeMode ? (
+                <TranscodeModeBadge label={transcodeMode} />
+              ) : null}
               {toneMap ? <ToneMapModeBadge summary={toneMap} /> : null}
               <button
                 type="button"
@@ -1000,6 +1010,19 @@ function PlaybackSummaryLine({
       </span>
       <span className="truncate font-medium">{value}</span>
     </div>
+  );
+}
+
+function ActivityMethodBadge({ method }: { method: string }) {
+  const meta = activityMethodMeta(method);
+  return (
+    <span
+      aria-label={`Playback method: ${meta.label}`}
+      title={meta.description}
+      className={`inline-flex shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-semibold ${meta.badgeClass}`}
+    >
+      {meta.label}
+    </span>
   );
 }
 
