@@ -4071,6 +4071,22 @@ func (h *PlaybackHandler) v3SessionStreamState(ctx context.Context, session *pla
 	}
 	if result.Plan != nil && (result.Plan.Delivery == playback.DeliveryTranscodeHLSV3 || result.Plan.Delivery == playback.DeliveryRemuxHLSV3) {
 		state.SegmentDuration = playback.DefaultSegmentDuration
+		state.OutputProtocol = "hls"
+		videoCodec := result.TargetVideoCodec
+		if result.Plan.Delivery == playback.DeliveryRemuxHLSV3 {
+			videoCodec = "copy"
+		}
+		state.TargetVideoCodec = videoCodec
+		state.OutputContainer = playback.HLSOutputContainer(playback.TranscodeOpts{
+			TargetCodecVideo: videoCodec,
+			SourceVideoCodec: sourceExecutionMetadataV3(file, result).VideoCodec,
+		})
+	}
+	if result.Plan != nil && result.Plan.Delivery == playback.DeliveryRemuxProgressiveV3 {
+		state.OutputContainer, state.OutputProtocol = "fmp4", "http"
+	}
+	if result.Plan != nil && result.Plan.Delivery == playback.DeliveryOriginalHTTPV3 && file != nil {
+		state.OutputContainer, state.OutputProtocol = file.Container, "http"
 	}
 	if state.StreamBitrateKbps <= 0 {
 		state.StreamBitrateKbps = result.TargetAudioBitrateKbps

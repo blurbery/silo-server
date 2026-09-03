@@ -61,6 +61,8 @@ type Session struct {
 	StreamBitrateKbps      int          // currently delivered bitrate, when known
 	TargetResolution       string       // requested output resolution for transcodes
 	TargetVideoCodec       string       // requested output video codec for transcodes
+	OutputContainer        string       // selected muxer/segment container; empty when unreported
+	OutputProtocol         string       // hls or http, independent of the container
 	TargetAudioCodec       string       // requested output audio codec when audio is transcoded
 	SourceAudioChannels    int          // selected source track channels; zero means unknown/legacy
 	TargetAudioChannels    int          // requested encoded audio channel count
@@ -112,6 +114,8 @@ type SessionStreamState struct {
 	StreamBitrateKbps          int
 	TargetResolution           string
 	TargetVideoCodec           string
+	OutputContainer            string
+	OutputProtocol             string
 	TargetAudioCodec           string
 	SourceAudioChannels        int
 	TargetAudioChannels        int
@@ -956,6 +960,8 @@ func applySessionStreamStateLocked(s *Session, state SessionStreamState) {
 	}
 	s.AudioTrackIndex = state.AudioTrackIndex
 	if state.TranscodeRouteSet {
+		s.OutputContainer = state.OutputContainer
+		s.OutputProtocol = state.OutputProtocol
 		// These fields are one byte-affecting audio recipe. A full route snapshot
 		// owns the whole tuple and can deliberately clear it; legacy partial
 		// updates must not leave a frozen surround source paired with zero-value
@@ -1037,6 +1043,8 @@ func snapshotSessionStreamStateLocked(s *Session) SessionStreamState {
 		StreamBitrateKbps:          s.StreamBitrateKbps,
 		TargetResolution:           s.TargetResolution,
 		TargetVideoCodec:           s.TargetVideoCodec,
+		OutputContainer:            s.OutputContainer,
+		OutputProtocol:             s.OutputProtocol,
 		TargetAudioCodec:           s.TargetAudioCodec,
 		SourceAudioChannels:        s.SourceAudioChannels,
 		TargetAudioChannels:        s.TargetAudioChannels,
@@ -1078,6 +1086,8 @@ func restoreSessionStreamStateLocked(s *Session, state SessionStreamState) {
 	s.TargetResolution = state.TargetResolution
 	s.TargetVideoCodec = state.TargetVideoCodec
 	s.TargetAudioCodec = state.TargetAudioCodec
+	s.OutputContainer = state.OutputContainer
+	s.OutputProtocol = state.OutputProtocol
 	s.SourceAudioChannels = state.SourceAudioChannels
 	s.TargetAudioChannels = state.TargetAudioChannels
 	s.TargetAudioBitrateKbps = state.TargetAudioBitrateKbps
@@ -1214,6 +1224,21 @@ func (m *SessionManager) SetTranscodeStreamDetails(sessionID, targetVideoCodec, 
 	s.TranscodeAudio = transcodeAudio
 	s.TranscodeHWAccel = hwAccel
 	s.ToneMapMode = toneMapMode
+	m.touchSessionLocked(s)
+	return nil
+}
+
+// SetOutputFormat records the format selected by the serving transport, not
+// a guess based on a codec or a whole-session playback classification.
+func (m *SessionManager) SetOutputFormat(sessionID, container, protocol string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[sessionID]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	s.OutputContainer = container
+	s.OutputProtocol = protocol
 	m.touchSessionLocked(s)
 	return nil
 }

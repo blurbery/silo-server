@@ -2570,6 +2570,8 @@ export interface AdminSession {
   transcode_hw_accel?: string;
   tone_map_mode?: string;
   source_container?: string;
+  output_container?: string;
+  output_protocol?: string;
   source_bitrate_kbps: number | null;
   source_video_codec?: string;
   source_video_resolution?: string;

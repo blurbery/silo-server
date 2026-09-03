@@ -60,6 +60,8 @@ type playbackSessionRow struct {
 	TranscodeNodeURL     string    `json:"-"`
 	TargetResolution     string    `json:"target_resolution,omitempty"`
 	TargetVideoCodec     string    `json:"target_video_codec,omitempty"`
+	OutputContainer      string    `json:"output_container,omitempty"`
+	OutputProtocol       string    `json:"output_protocol,omitempty"`
 	TargetAudioCodec     string    `json:"target_audio_codec,omitempty"`
 	// TargetAudioChannels is the channel count the transcode actually encodes.
 	// Absent when the reporting node did not know it — clients must then show
@@ -123,6 +125,8 @@ type playbackSessionsCapabilitiesResponse struct {
 	// absent on a row then means the reporting node did not know the encoded
 	// layout.
 	TargetAudioChannels bool `json:"target_audio_channels"`
+	// OutputFormat reports container and delivery protocol independently.
+	OutputFormat bool `json:"output_format"`
 	// NodeRouting reports that rows may carry workload/execution/egress route
 	// assignment fields when the active session has resolved them.
 	NodeRouting bool `json:"node_routing"`
@@ -153,6 +157,7 @@ func (h *AdminHandler) HandleGetSessionsCapabilities(w http.ResponseWriter, _ *h
 		ClientBuild:         true,
 		ClientChannel:       true,
 		TargetAudioChannels: true,
+		OutputFormat:        true,
 		NodeRouting:         true,
 	})
 }
@@ -287,7 +292,9 @@ func (l *PlaybackSessionsLoader) Load(
 			COALESCE(execution_node.name, ''),
 			COALESCE(s.routing_egress, ''),
 			s.routing_egress_node_id,
-			COALESCE(egress_node.name, '')
+			COALESCE(egress_node.name, ''),
+			COALESCE(s.output_container, ''),
+			COALESCE(s.output_protocol, '')
 		 FROM playback_sessions_sync s
 		 LEFT JOIN users u ON u.id = s.user_id
 		 LEFT JOIN media_files mf ON mf.id = s.media_file_id
@@ -336,6 +343,7 @@ func (l *PlaybackSessionsLoader) Load(
 			&s.SourceAudioCodec, &sourceAudioChannels, &audioTracksJSON, &s.RequestedVideoCodec, &s.RequestedVideoResolution,
 			&s.CompatOrigin, &s.RoutingWorkload, &s.RoutingExecution, &s.RoutingExecutionNodeID,
 			&s.RoutingExecutionNodeName, &s.RoutingEgress, &s.RoutingEgressNodeID, &s.RoutingEgressNodeName,
+			&s.OutputContainer, &s.OutputProtocol,
 		); err != nil {
 			return nil, fmt.Errorf("scanning playback session: %w", err)
 		}
@@ -378,6 +386,10 @@ func enrichPlaybackSessionRow(row *playbackSessionRow, audioTracksJSON []byte) {
 
 	row.VideoDecision, row.AudioDecision = sessionComponentDecision(row.PlayMethod, row.TranscodeAudio, row.TargetVideoCodec)
 	row.EffectivePlayMethod = effectivePlayMethod(row.VideoDecision, row.AudioDecision)
+	if row.PlayMethod == "direct" {
+		row.OutputContainer = row.SourceContainer
+		row.OutputProtocol = "http"
+	}
 	row.IsJellyfinClient = row.CompatOrigin || isJellyfinEcosystemClient(row.ClientName, row.ClientUserAgent)
 
 	var audioTracks []models.AudioTrack

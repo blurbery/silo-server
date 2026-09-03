@@ -595,6 +595,9 @@ func (d *DurableCompatPlaybackStore) stageTerminalDB(
 	if err := json.Unmarshal(raw, &session); err != nil {
 		return nil, err
 	}
+	if session.SupersededBy != "" {
+		return nil, ErrSessionNotFound
+	}
 	if !session.TerminalAuthoritative || authoritative {
 		eventCopy := event
 		session.TerminalScrobbleEvent = &eventCopy
@@ -1011,15 +1014,8 @@ func (d *DurableCompatPlaybackStore) FindFinalizableByRoute(
 // rows from Postgres into the cache (same bounded fallback as FindByRoute; the
 // alias uniqueness check runs against the repopulated cache).
 func (d *DurableCompatPlaybackStore) FindByClientPlaySessionID(compatToken, clientPlaySessionID string) (*PlaybackSession, bool) {
-	if compatToken == "" {
-		return d.mem.FindByClientPlaySessionID(compatToken, clientPlaySessionID)
-	}
-	cached, cachedOK := d.mem.FindByClientPlaySessionID(compatToken, clientPlaySessionID)
-	if cachedOK && !d.shouldRevalidateToken(compatToken) {
-		return cached, true
-	}
-	_ = d.loadByCompatToken(compatToken)
-	return d.mem.FindByClientPlaySessionID(compatToken, clientPlaySessionID)
+	session, err := d.ResolveClientPlaySessionID(compatToken, clientPlaySessionID)
+	return session, err == nil
 }
 
 // FindFinalizableByClientPlaySessionID is the terminal-aware alias lookup used
@@ -1027,20 +1023,21 @@ func (d *DurableCompatPlaybackStore) FindByClientPlaySessionID(compatToken, clie
 func (d *DurableCompatPlaybackStore) FindFinalizableByClientPlaySessionID(
 	compatToken, clientPlaySessionID, routeItemID, mediaSourceID string,
 ) (*PlaybackSession, bool) {
-	if compatToken == "" {
+	if compatToken == "" || d.pool == nil {
 		return d.mem.FindFinalizableByClientPlaySessionID(
 			compatToken, clientPlaySessionID, routeItemID, mediaSourceID,
 		)
 	}
-	cached, cachedOK := d.mem.FindFinalizableByClientPlaySessionID(
-		compatToken, clientPlaySessionID, routeItemID, mediaSourceID,
+	_, _ = d.ResolveClientPlaySessionID(compatToken, clientPlaySessionID)
+	cached, cachedOK := d.mem.findByClientPlaySessionID(
+		compatToken, clientPlaySessionID, routeItemID, mediaSourceID, true,
 	)
 	if cachedOK && !d.shouldRevalidateToken(compatToken) {
 		return cached, true
 	}
 	_ = d.loadByCompatToken(compatToken)
-	return d.mem.FindFinalizableByClientPlaySessionID(
-		compatToken, clientPlaySessionID, routeItemID, mediaSourceID,
+	return d.mem.findByClientPlaySessionID(
+		compatToken, clientPlaySessionID, routeItemID, mediaSourceID, true,
 	)
 }
 

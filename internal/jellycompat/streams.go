@@ -426,7 +426,7 @@ func (h *PlaybackHandler) HandleVideoStream(w http.ResponseWriter, r *http.Reque
 	mediaSourceID := firstNonEmpty(r.URL.Query().Get("mediaSourceId"), r.URL.Query().Get("MediaSourceId"))
 	staticRequest := strings.EqualFold(newCaseInsensitiveQuery(r.URL.Query()).Get("Static"), "true")
 	playSession, source, err := h.resolvePlaybackRoute(r, session, routeID, mediaSourceID)
-	if err != nil && staticRequest {
+	if errors.Is(err, ErrSessionNotFound) && staticRequest {
 		// Infuse uses Static=true for direct play without calling PlaybackInfo first.
 		// Create an on-the-fly play session so the stream can proceed. The key
 		// lookup must be case-insensitive: SenPlayer sends "static=true"
@@ -472,6 +472,9 @@ func (h *PlaybackHandler) HandleVideoStream(w http.ResponseWriter, r *http.Reque
 	// The attach above is a no-op on the first request of a session, which has
 	// no upstream id yet. Now it does, and no byte has been written.
 	attachCompatStream(r.Context(), session, playSession, source.FileID)
+	if method == "remux" {
+		h.recordOutputFormat(playSession.UpstreamSessionID, "fmp4", "http")
+	}
 
 	if h.fileResolver == nil {
 		writeError(w, http.StatusInternalServerError, "ServerError", "File resolver not available")
@@ -2360,6 +2363,7 @@ func (h *PlaybackHandler) ensureUpstreamPlayback(ctx context.Context, compatSess
 			return errUpstreamReplaced
 		}
 		current.UpstreamSessionID = session.ID
+		current.SelectedMediaFileID = source.FileID
 		current.UpstreamPlayMethod = method
 		current.TranscodeStarted = false
 		// A new upstream session has no committed HLS route yet. Retaining the
@@ -3163,7 +3167,21 @@ func (h *PlaybackHandler) resolvePlaybackRoute(r *http.Request, compatSession *S
 		}
 		// Static clients use their own ID on subsequent range requests. Resolve
 		// it before route fallback so concurrent plays of one item stay distinct.
-		if playSession, ok := h.playbackStore.FindByClientPlaySessionID(compatSession.Token, clientPlaySessionID); ok &&
+		var playSession *PlaybackSession
+		var ok bool
+		if resolver, supported := h.playbackStore.(interface {
+			ResolveClientPlaySessionID(string, string) (*PlaybackSession, error)
+		}); supported {
+			var resolveErr error
+			playSession, resolveErr = resolver.ResolveClientPlaySessionID(compatSession.Token, clientPlaySessionID)
+			if resolveErr != nil && !errors.Is(resolveErr, ErrSessionNotFound) {
+				return nil, nil, resolveErr
+			}
+			ok = resolveErr == nil
+		} else {
+			playSession, ok = h.playbackStore.FindByClientPlaySessionID(compatSession.Token, clientPlaySessionID)
+		}
+		if ok &&
 			mediaSourceIDsEqual(playSession.RouteItemID, routeID) {
 			source := findMediaSource(playSession, mediaSourceID)
 			if source == nil && (mediaSourceID == "" || mediaSourceIDsEqual(mediaSourceID, routeID)) {

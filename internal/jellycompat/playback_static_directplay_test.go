@@ -309,6 +309,102 @@ func TestCreateStaticPlaySessionConcurrentRequestsShareReservation(t *testing.T)
 	}
 }
 
+func legacyStaticPair(token string, now time.Time) (PlaybackSession, PlaybackSession) {
+	first := PlaybackSession{
+		ID: token + "-first", CompatToken: token, UserID: "profile-user", ClientDeviceID: "device",
+		ClientPlaySessionID: "client-play", ItemID: "item", RouteItemID: "route",
+		UpstreamSessionID: "native-first", UpstreamPlayMethod: "direct",
+		CreatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour),
+		MediaSources: []PlaybackMediaSource{{ID: "source", FileID: 42}},
+	}
+	second := first
+	second.ID, second.UpstreamSessionID = token+"-second", "native-second"
+	second.CreatedAt = first.CreatedAt.Add(4 * time.Millisecond)
+	return first, second
+}
+
+func TestLegacyStaticDuplicatesResolveToOneStableSession(t *testing.T) {
+	now := time.Now()
+	first, second := legacyStaticPair("token", now)
+	store := NewPlaybackSessionStore(time.Hour, func() time.Time { return now })
+	store.Put(first)
+	store.Put(second)
+	results := make(chan *PlaybackSession, 16)
+	for range 16 {
+		go func() { session, _ := store.ResolveClientPlaySessionID("token", "client-play"); results <- session }()
+	}
+	for range 16 {
+		got := <-results
+		if got == nil || got.ID != first.ID || got.UpstreamSessionID != first.UpstreamSessionID {
+			t.Fatal("the canonical playback changed under concurrent lookup")
+		}
+	}
+	if _, ok := store.Get(second.ID); ok {
+		t.Fatal("duplicate remained routable")
+	}
+	if _, ok := store.GetFinalizable(second.ID, "token"); ok {
+		t.Fatal("duplicate remained finalizable")
+	}
+	if got, ok := store.FindFinalizableByClientPlaySessionID("token", "client-play", "route", "source"); !ok || got.ID != first.ID {
+		t.Fatal("a final report could not identify the canonical playback")
+	}
+	store.Delete(first.ID)
+	if _, err := store.ResolveClientPlaySessionID("token", "client-play"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatal("old duplicate revived after canonical stop")
+	}
+	if _, _, ok := store.FindByRoute("token", "route"); ok {
+		t.Fatal("route fallback revived a duplicate")
+	}
+	if len(store.sessions) != 1 || store.sessions[second.ID].SupersededBy != first.ID {
+		t.Fatal("the superseded record should be retained, not deleted")
+	}
+}
+
+func TestLegacyStaticDuplicatesDoNotMergeDistinctPlays(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*PlaybackSession)
+	}{
+		{"device", func(s *PlaybackSession) { s.ClientDeviceID = "other-device" }},
+		{"profile", func(s *PlaybackSession) { s.UserID = "other-profile" }},
+		{"token", func(s *PlaybackSession) { s.CompatToken = "other-token" }},
+		{"client-play", func(s *PlaybackSession) { s.ClientPlaySessionID = "other-play" }},
+		{"later-play", func(s *PlaybackSession) { s.CreatedAt = s.CreatedAt.Add(time.Minute) }},
+		{"multiple-sources", func(s *PlaybackSession) {
+			s.MediaSources = append(s.MediaSources, PlaybackMediaSource{ID: "other", FileID: 43})
+		}},
+		{"new-reservation", func(s *PlaybackSession) { s.StaticPlaybackKey = "reserved" }},
+		{"transcode", func(s *PlaybackSession) { s.UpstreamPlayMethod = "transcode" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first, second := legacyStaticPair("token", time.Now())
+			tc.change(&second)
+			if _, ids := legacyStaticDuplicateGroup([]PlaybackSession{first, second}); len(ids) != 0 {
+				t.Fatal("independent playback was classified as a legacy duplicate")
+			}
+		})
+	}
+}
+
+func TestLegacyStaticDuplicatesRequireSameSelectedEdition(t *testing.T) {
+	for _, selected := range []int{0, 42, 43, 99} {
+		t.Run(fmt.Sprintf("second-selected-%d", selected), func(t *testing.T) {
+			first, second := legacyStaticPair("token", time.Now())
+			first.MediaSources = append(first.MediaSources, PlaybackMediaSource{ID: "edition", FileID: 43})
+			second.MediaSources = append(second.MediaSources, PlaybackMediaSource{ID: "edition", FileID: 43})
+			first.SelectedMediaFileID, second.SelectedMediaFileID = 43, selected
+			winner, ids := legacyStaticDuplicateGroup([]PlaybackSession{second, first})
+			if selected == 43 {
+				if winner != first.ID || len(ids) != 1 || ids[0] != second.ID {
+					t.Fatal("proven duplicate of the selected edition was not reconciled")
+				}
+			} else if len(ids) != 0 {
+				t.Fatal("unknown or different selected edition was merged")
+			}
+		})
+	}
+}
+
 func TestStaticPlaybackKeySeparatesPlaybackIdentities(t *testing.T) {
 	baseline := staticPlaybackKey(&Session{Token: "token", ProfileID: "profile"}, "device", "play", "item", "source")
 	variants := []struct{ token, profile, device, play, item, source string }{

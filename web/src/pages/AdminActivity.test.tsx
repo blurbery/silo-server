@@ -50,6 +50,8 @@ function makeSession(overrides: Partial<AdminSession> = {}): AdminSession {
     stream_bitrate_kbps: null,
     target_bitrate_kbps: null,
     source_container: "mkv",
+    output_container: "fmp4",
+    output_protocol: "hls",
     source_video_codec: "hevc",
     source_video_resolution: "2160p",
     source_audio_codec: "truehd",
@@ -96,7 +98,9 @@ describe("activity playback scopes", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: "Details" })[0]!);
     expect(screen.getByText("Audio Transcode")).toBeInTheDocument();
-    expect(screen.getByText("Copied bit-for-bit")).toBeInTheDocument();
+    expect(screen.getByText("Copied without re-encoding")).toBeInTheDocument();
+    expect(screen.getByText("MKV → fMP4 (HLS)")).toBeInTheDocument();
+    expect(screen.queryByText("Unknown output container")).not.toBeInTheDocument();
     expect(screen.queryByText("MKV → Remux")).not.toBeInTheDocument();
   });
 

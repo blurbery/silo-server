@@ -67,6 +67,8 @@ function makeSession(overrides: Partial<AdminSession> = {}): AdminSession {
     transcode_hw_accel: overrides.transcode_hw_accel,
     tone_map_mode: overrides.tone_map_mode,
     source_container: overrides.source_container ?? "mkv",
+    output_container: overrides.output_container,
+    output_protocol: overrides.output_protocol,
     source_bitrate_kbps: overrides.source_bitrate_kbps ?? 9000,
     source_video_codec: overrides.source_video_codec ?? "h264",
     source_video_resolution: overrides.source_video_resolution ?? "1080p",
@@ -84,6 +86,31 @@ function makeSession(overrides: Partial<AdminSession> = {}): AdminSession {
 }
 
 describe("adminActivityPresentation", () => {
+  it.each([
+    ["fmp4", "hls", "fMP4 (HLS)"],
+    ["mpegts", "hls", "MPEG-TS (HLS)"],
+    ["fmp4", "http", "fMP4"],
+  ])("uses the reported %s container over %s", (container, protocol, label) => {
+    const session = makeSession({
+      play_method: "remux",
+      output_container: container,
+      output_protocol: protocol,
+    });
+    expect(formatDeliveredContainerSummary(session)).toBe(label);
+    expect(formatContainerDetail(session)).toBe(`MKV → ${label}`);
+    expect(classifyActivityMethod(session)).toBe("direct_stream");
+  });
+
+  it("does not carry a previous output container into direct play", () => {
+    const session = makeSession({
+      play_method: "direct",
+      output_container: "fmp4",
+      output_protocol: "hls",
+    });
+    expect(formatDeliveredContainerSummary(session)).toBe("MKV");
+    expect(formatContainerDetail(session)).toBe("Original container");
+  });
+
   it("presents the four Jellyfin-style session scopes distinctly", () => {
     expect(
       ["direct", "remux", "direct_stream", "transcode"].map(
@@ -578,7 +605,7 @@ describe("adminActivityPresentation", () => {
     expect(normalizeStreamDecision(session.audio_decision)).toBe("transcode");
     expect(formatDeliveredContainerSummary(session)).toBe("HLS");
     expect(formatDecisionLabel(normalizeStreamDecision(session.video_decision))).toBe("Copy");
-    expect(formatVideoDetail(session)).toBe("Copied bit-for-bit");
+    expect(formatVideoDetail(session)).toBe("Copied without re-encoding");
   });
 
   it("keeps copied audio explicit in the stream details", () => {
@@ -590,7 +617,7 @@ describe("adminActivityPresentation", () => {
     });
 
     expect(formatDecisionLabel(normalizeStreamDecision(copied.audio_decision))).toBe("Copy");
-    expect(formatAudioDetail(copied)).toBe("Copied bit-for-bit");
+    expect(formatAudioDetail(copied)).toBe("Copied without re-encoding");
   });
 
   it("keeps exact client build/channel and tone-map mode in expanded activity details", () => {

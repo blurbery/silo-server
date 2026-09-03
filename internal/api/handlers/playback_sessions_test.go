@@ -24,6 +24,19 @@ func TestSessionComponentDecisionLabelsCopiedAudioDuringHLSAsRemux(t *testing.T)
 	}
 }
 
+func TestActivityOutputFormatIsIndependentOfSessionScope(t *testing.T) {
+	row := playbackSessionRow{PlayMethod: "remux", TranscodeAudio: true, SourceContainer: "mkv", OutputContainer: "fmp4", OutputProtocol: "hls"}
+	enrichPlaybackSessionRow(&row, nil)
+	if row.EffectivePlayMethod != "direct_stream" || row.OutputContainer != "fmp4" || row.OutputProtocol != "hls" {
+		t.Fatal("output format changed the session classification")
+	}
+	row.PlayMethod = "direct"
+	enrichPlaybackSessionRow(&row, nil)
+	if row.OutputContainer != "mkv" || row.OutputProtocol != "http" {
+		t.Fatal("direct play must report the original file's container")
+	}
+}
+
 // TestEffectivePlayMethodBuckets pins the bucket for every decision pair
 // sessionComponentDecision can produce, plus the unknown case.
 func TestEffectivePlayMethodBuckets(t *testing.T) {
@@ -72,7 +85,7 @@ func TestSessionsCapabilitiesAdvertisesActivityFields(t *testing.T) {
 		t.Fatalf("decode capabilities: %v", err)
 	}
 	if !resp.EffectivePlayMethod || !resp.IsJellyfinClient || !resp.TranscodeHWAccel || !resp.ToneMapMode ||
-		!resp.ClientBuild || !resp.ClientChannel || !resp.TargetAudioChannels || !resp.NodeRouting {
+		!resp.ClientBuild || !resp.ClientChannel || !resp.TargetAudioChannels || !resp.NodeRouting || !resp.OutputFormat {
 		t.Fatalf("capabilities must advertise every additive field: %+v", resp)
 	}
 	want := []string{"direct", "remux", "direct_stream", "transcode"}

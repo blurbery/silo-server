@@ -369,6 +369,19 @@ export function formatSourceContainerSummary(session: AdminSession): string {
 }
 
 export function formatDeliveredContainerSummary(session: AdminSession): string {
+  if (normalizeContainerDecision(session.play_method) === "direct") {
+    return formatSourceContainerSummary(session);
+  }
+  const container = session.output_container?.trim().toLowerCase();
+  if (container) {
+    const label =
+      container === "fmp4"
+        ? "fMP4"
+        : container === "mpegts"
+          ? "MPEG-TS"
+          : formatContainer(container) || "Unknown output container";
+    return session.output_protocol === "hls" ? `${label} (HLS)` : label;
+  }
   switch (normalizeContainerDecision(session.play_method)) {
     case "direct":
       return formatSourceContainerSummary(session);
@@ -383,6 +396,9 @@ export function formatDeliveredContainerSummary(session: AdminSession): string {
 
 export function formatContainerDetail(session: AdminSession): string {
   const source = formatSourceContainerSummary(session);
+  if (session.output_container && normalizeContainerDecision(session.play_method) !== "direct") {
+    return `${source} → ${formatDeliveredContainerSummary(session)}`;
+  }
   switch (normalizeContainerDecision(session.play_method)) {
     case "direct":
       return "Original container";
@@ -437,7 +453,7 @@ export function formatVideoDetail(session: AdminSession): string {
     return target ? `Output → ${target}` : "Transcoding";
   }
   if (decision === "copy") {
-    return "Copied bit-for-bit";
+    return "Copied without re-encoding";
   }
   if (decision === "direct") {
     return "No video conversion";
@@ -491,7 +507,7 @@ export function formatAudioDetail(session: AdminSession): string {
     return target ? `→ ${target}` : "Audio Transcode";
   }
   if (decision === "copy") {
-    return "Copied bit-for-bit";
+    return "Copied without re-encoding";
   }
   if (decision === "direct") {
     return "No audio conversion";

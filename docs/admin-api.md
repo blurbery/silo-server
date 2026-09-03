@@ -128,6 +128,16 @@ Rows from `GET /api/v1/admin/sessions` may then include
 `routing_egress_node_name`. Node fields are absent for the integrated API
 process and for direct play's `none` executor.
 
+The capability `output_format: true` advertises optional `output_container`
+and `output_protocol` fields on session rows. The serving transport supplies
+the container (`fmp4`, `mpegts`, or the original source container) independently
+from the protocol (`hls` or `http`). HLS is not itself a container. Older nodes
+can omit these facts; clients must not infer them from `play_method`, the source
+container, or the video codec. Direct Play retains the original container.
+These additive admin fields require no Apple/Android playback-protocol change;
+both clients may consume them when rendering admin session details. The shared
+web dashboard uses them for native and Jellyfin-compatible sessions alike.
+
 `silo_playback_routing_decisions_total` counts routing outcomes with bounded
 `workload`, `execution`, `egress`, `outcome`, and `reason` labels. It never
 labels observations with playback-session or node identity.
