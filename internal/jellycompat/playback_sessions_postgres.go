@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,18 +46,22 @@ var (
 
 var jsonNULCodePoint = []byte(`\u0000`)
 
-const negotiatedSessionAdvisoryLockQuery = `SELECT pg_advisory_xact_lock($1::bigint)`
+const (
+	negotiatedSessionLegacyAdvisoryLockQuery = `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`
+	negotiatedSessionAdvisoryLockQuery       = `SELECT pg_advisory_xact_lock($1::bigint)`
+)
 
 // negotiatedSessionAdvisoryLockKey maps one negotiation scope into Postgres's
 // signed 64-bit advisory-lock key space without sending any client-derived text
-// to the lock query. The previous NUL-delimited string could not be encoded as
-// PostgreSQL text, so every fully-scoped negotiation failed before persistence.
+// to the versioned lock query. PostgreSQL text parameters reject NUL; deriving
+// a fixed-width key locally lets a later release retire the legacy text lock
+// after this release has bridged rolling upgrades.
 //
 // Length framing keeps component boundaries unambiguous even when a value
-// itself contains a NUL or another delimiter. SHA-256 makes adversarial key
-// collisions impractical; truncation to 64 bits matches PostgreSQL's bigint
-// advisory-lock namespace. A collision would only serialize unrelated
-// negotiations because the subsequent DELETE remains scoped by exact values.
+// itself contains a NUL or another delimiter. SHA-256 distributes keys before
+// truncation to PostgreSQL's 64-bit bigint advisory-lock namespace. A collision
+// only serializes unrelated negotiations because the subsequent DELETE remains
+// scoped by exact values.
 func negotiatedSessionAdvisoryLockKey(compatToken, clientDeviceID, routeItemID string) int64 {
 	const domain = "silo:jellycompat:negotiated-session:v1"
 	framed := make([]byte, 0, len(domain)+3*8+len(compatToken)+len(clientDeviceID)+len(routeItemID))
@@ -78,9 +83,19 @@ func acquireNegotiatedSessionAdvisoryLock(
 	executor negotiatedSessionAdvisoryLockExecutor,
 	compatToken, clientDeviceID, routeItemID string,
 ) error {
+	// Current-main processes know only the legacy text-derived key. Taking it
+	// first preserves mutual exclusion during a rolling upgrade; every upgraded
+	// process then takes the versioned bigint key in the same order. Once this
+	// bridge has shipped for a full release, a later release can remove the
+	// legacy acquisition while still coordinating with bridged processes.
+	legacyScope := strings.ToValidUTF8(negotiatedPlaybackScope(compatToken, clientDeviceID, routeItemID), "\uFFFD")
+	if _, err := executor.Exec(ctx, negotiatedSessionLegacyAdvisoryLockQuery, legacyScope); err != nil {
+		return fmt.Errorf("acquiring legacy negotiated playback session advisory lock: %w", err)
+	}
+
 	lockKey := negotiatedSessionAdvisoryLockKey(compatToken, clientDeviceID, routeItemID)
 	if _, err := executor.Exec(ctx, negotiatedSessionAdvisoryLockQuery, lockKey); err != nil {
-		return fmt.Errorf("acquiring negotiated playback session advisory lock: %w", err)
+		return fmt.Errorf("acquiring versioned negotiated playback session advisory lock: %w", err)
 	}
 	return nil
 }
@@ -272,11 +287,12 @@ func (d *DurableCompatPlaybackStore) replaceUnstartedNegotiation(
 				AND compat_token = $2
 				AND data->>'ClientDeviceID' = $3
 				AND data->>'RouteItemID' = $4
+				AND COALESCE(data->>'NegotiationVariant', '') = $6
 				AND COALESCE(data->>'UpstreamSessionID', '') = ''
 				AND COALESCE((data->>'Terminal')::boolean, false) = false
 				AND expires_at > $5
 			RETURNING id
-		`, session.ID, session.CompatToken, session.ClientDeviceID, session.RouteItemID, d.now())
+		`, session.ID, session.CompatToken, session.ClientDeviceID, session.RouteItemID, d.now(), session.NegotiationVariant)
 		if err != nil {
 			return nil, err
 		}

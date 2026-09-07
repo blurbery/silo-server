@@ -30,6 +30,18 @@ jobs:
   go:
     name: Go
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: silo_test
+          POSTGRES_PASSWORD: silo_test
+          POSTGRES_DB: silo_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U silo_test -d silo_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -113,6 +125,15 @@ jobs:
       # defaults. Without this job those tests exist but never run.
       - name: Test
         run: make test-go
+
+      - name: Test PostgreSQL integration for upstream synchronization
+        env:
+          DATABASE_URL: postgres://silo_test:silo_test@localhost:5432/silo_test?sslmode=disable
+          SILO_TEST_DATABASE_URL: postgres://silo_test:silo_test@localhost:5432/silo_test?sslmode=disable
+          SECRET_KEY: ci-only-disposable-database-encryption-key-00000000
+        run: |
+          go run ./cmd/silo --migrate-only
+          go test -p 1 -count=1 ./internal/catalog ./internal/userstore/pgstore ./internal/jellycompat ./internal/api/handlers ./internal/metadata
 
   web:
     name: Web

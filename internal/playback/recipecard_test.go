@@ -56,6 +56,7 @@ func TestRecipeCardRoundTripOpts(t *testing.T) {
 		TargetBitrateKbps:          8000,
 		TotalDuration:              7200,
 		FastStart:                  true,
+		ThrottleSeconds:            180,
 	}
 
 	card := NewRecipeCard(42, "profile-1", 77, "", opts)
@@ -88,6 +89,9 @@ func TestRecipeCardRoundTripOpts(t *testing.T) {
 	}
 	if got.SourceAudioChannels != 6 || got.TargetAudioChannels != 1 || got.TargetAudioBitrateKbps != 96 {
 		t.Errorf("audio encode params wrong: %+v", got)
+	}
+	if got.ThrottleSeconds != 180 {
+		t.Errorf("ThrottleSeconds = %d, want 180", got.ThrottleSeconds)
 	}
 	if got.VideoBitstreamFilter != DV7ToHDR10BitstreamFilter {
 		t.Errorf("VideoBitstreamFilter = %q", got.VideoBitstreamFilter)
@@ -374,6 +378,7 @@ func TestRecipeCardClaimsRoundTrip(t *testing.T) {
 		TargetBitrateKbps:          8000,
 		TotalDuration:              7200,
 		FastStart:                  true,
+		ThrottleSeconds:            180,
 	})
 	card.RoutingWorkload = "video_transcode"
 	card.RoutingExecution = "transcode"
@@ -410,7 +415,8 @@ func TestRecipeCardClaimsRoundTrip(t *testing.T) {
 		got.SubtitleTrackIndex != card.SubtitleTrackIndex || got.SubtitleBurnIn != card.SubtitleBurnIn ||
 		got.SubtitleCodec != card.SubtitleCodec ||
 		got.AudioTrackIndex != card.AudioTrackIndex || got.TargetBitrateKbps != card.TargetBitrateKbps ||
-		got.TotalDuration != card.TotalDuration || got.FastStart != card.FastStart {
+		got.TotalDuration != card.TotalDuration || got.FastStart != card.FastStart ||
+		got.ThrottleSeconds != card.ThrottleSeconds {
 		t.Fatalf("encode parameters lost in round trip (non-v2 source channels must be stripped):\n have %+v\n want %+v", got, card)
 	}
 }

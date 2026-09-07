@@ -209,16 +209,27 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	}
 	// Subtitle renderability is delivery-specific, so every candidate route is
 	// validated against the capabilities of the delivery class that would
-	// execute it. The original_http delivery remains the canonical policy for
-	// source-preserving routes and for the up-front terminal decision.
+	// execute it. A refusal on original_http must not suppress a viable
+	// progressive or HLS subtitle renderer.
 	subtitle := ResolveSubtitlePolicyV3(file, input.Request, input.Settings.TranscodeEnabled, DeliveryClassOriginalHTTPV3, input.AdditionalSubtitles)
-	if subtitle.Terminal != nil {
-		return PlannerResultV3{Terminal: subtitle.Terminal, SubtitleTrackIndex: -1, SubtitleTransportTrackIndex: -1}
-	}
 	remuxSubtitle := ResolveSubtitlePolicyV3(file, input.Request, input.Settings.TranscodeEnabled, DeliveryClassProgressiveV3, input.AdditionalSubtitles)
 	hlsSubtitle := ResolveSubtitlePolicyV3(file, input.Request, input.Settings.TranscodeEnabled, DeliveryClassHLSV3, input.AdditionalSubtitles)
+	if subtitle.Terminal != nil && remuxSubtitle.Terminal != nil && hlsSubtitle.Terminal != nil {
+		return PlannerResultV3{Terminal: subtitle.Terminal, SubtitleTrackIndex: -1, SubtitleTransportTrackIndex: -1}
+	}
+	// Every policy addresses the same selected source track. Preserve that
+	// identity even when the original delivery's refusal carries no selection;
+	// each candidate still applies its own rendering decision and claims.
+	selectedSubtitle := subtitle
+	if selectedSubtitle.Terminal != nil {
+		selectedSubtitle = remuxSubtitle
+		if selectedSubtitle.Terminal != nil {
+			selectedSubtitle = hlsSubtitle
+		}
+	}
 	// A remux route cannot burn subtitles, so it is only viable when its own
 	// delivery can present the selected subtitle without one.
+	originalSubtitleOK := subtitle.Terminal == nil && !subtitle.RequiresBurn
 	remuxSubtitleOK := remuxSubtitle.Terminal == nil && !remuxSubtitle.RequiresBurn
 	hlsRemuxSubtitleOK := hlsSubtitle.Terminal == nil && !hlsSubtitle.RequiresBurn
 	quality := ResolveQualityPolicyV3(input.Request, source)
@@ -232,7 +243,8 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	}
 	rangeOK, videoClaims := outputRangeEligibleV3(source, input.Request)
 	clientManagedRange := clientManagesOriginalDynamicRangeV3(source, input.Request)
-	originalRangeOK := rangeOK || clientManagedRange
+	clientDV8BaseLayerOK, clientDV8BaseRange := clientDV8BaseLayerFallbackV3(source, input.Request)
+	originalRangeOK := rangeOK || clientManagedRange || clientDV8BaseLayerOK
 	audioOK, passthrough, audioClaims := audioEligibilityV3(source, input.Request)
 	webAudioQuirk, normalizeWebAudio := webAudioNormalizationQuirkV3(source, input.Request)
 	firefoxAACTimingQuirk, normalizeMatroskaAAC := firefoxMatroskaAACTimingQuirkV3(source, input.Request)
@@ -320,7 +332,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	base := PlanV3{
 		ProtocolVersion:        ProtocolV3,
 		ExpiresAt:              NewPlanExpiryV3(input.Now),
-		SelectedTracks:         selectedTracksForPlanV3(file, input.AudioTrackIndex, subtitle),
+		SelectedTracks:         selectedTracksForPlanV3(file, input.AudioTrackIndex, selectedSubtitle),
 		EffectiveRecipe:        recipeFromSourceV3(source),
 		Claims:                 ValidationClaimsV3{Video: videoClaims, Audio: audioClaims, Subtitles: subtitle.Claims},
 		Subtitle:               subtitle.Decision,
@@ -373,7 +385,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	// transcode route entirely), deliver the source at original quality with a
 	// degradation warning instead of refusing playback. Explicit user-selected
 	// rungs keep the existing terminals.
-	if quality.RequiresTranscode && !quality.ExplicitRung && !subtitle.RequiresBurn && videoOK &&
+	if quality.RequiresTranscode && !quality.ExplicitRung && (originalSubtitleOK || remuxSubtitleOK || hlsRemuxSubtitleOK) && videoOK &&
 		(originalRangeOK || dvStripEligible || clientDV81Eligible || clientHDR10Eligible) &&
 		!videoTranscodeExecutableV3(input, source) {
 		warnings := append(quality.Warnings, DegradationWarningV3{
@@ -387,7 +399,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 
 	if quality.RequiresTranscode || !videoOK ||
 		(!originalRangeOK && !dvStripEligible && !clientDV81Eligible && !clientHDR10Eligible) ||
-		(subtitle.RequiresBurn && !remuxSubtitleOK && !hlsRemuxSubtitleOK) {
+		(!originalSubtitleOK && !remuxSubtitleOK && !hlsRemuxSubtitleOK) {
 		reasonOverride := ""
 		if !quality.RequiresTranscode && !videoOK && videoEvidenceInsufficient {
 			// The only reason this route adapts is the evidence tier, not a
@@ -399,7 +411,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		// other route condition still permits a source-preserving delivery.
 		subtitleForcedAdaptation := !quality.RequiresTranscode && videoOK &&
 			(originalRangeOK || dvStripEligible || clientDV81Eligible || clientHDR10Eligible) &&
-			subtitle.RequiresBurn && !remuxSubtitleOK && !hlsRemuxSubtitleOK
+			!originalSubtitleOK && !remuxSubtitleOK && !hlsRemuxSubtitleOK
 		return planVideoTranscodeV3(input, base, source, quality, hlsSubtitle, reasonOverride, subtitleForcedAdaptation)
 	}
 
@@ -407,7 +419,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	// source. A decoder profile/max-instance claim alone is not proof of native
 	// dual-layer output, so the default Android route mirrors Silo Apple: P8.1
 	// base-layer Dolby Vision first, then same-file HDR10.
-	if !normalizeWebAudio && !preferServerHLS && source.DVProfile == 7 && quality.PreservesSource && videoOK && containerOK && audioOK && originalAudioSelectionOK && !subtitle.RequiresBurn {
+	if !normalizeWebAudio && !preferServerHLS && source.DVProfile == 7 && quality.PreservesSource && videoOK && containerOK && audioOK && originalAudioSelectionOK && originalSubtitleOK {
 		if clientDV81Eligible {
 			plan := base
 			plan.Delivery = DeliveryOriginalHTTPV3
@@ -460,12 +472,46 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		}
 	}
 
-	if !normalizeWebAudio && !preferServerHLS && source.DVProfile != 7 && deliveryAvailableV3(input.Request, DeliveryClassOriginalHTTPV3) && containerOK && videoOK && originalRangeOK && audioOK && originalAudioSelectionOK && quality.PreservesSource && !subtitle.RequiresBurn {
+	if !normalizeWebAudio && !preferServerHLS && source.DVProfile != 7 && deliveryAvailableV3(input.Request, DeliveryClassOriginalHTTPV3) && containerOK && videoOK && originalRangeOK && audioOK && originalAudioSelectionOK && quality.PreservesSource && originalSubtitleOK {
 		plan := base
 		plan.Delivery = DeliveryOriginalHTTPV3
 		plan.Stream = StreamV3{Protocol: StreamHTTPProgressiveV3, Container: source.Container, MIMEType: MimeFromExtension(file.FilePath), Headers: map[string]string{}, HeaderRefresh: HeaderRefreshNoneV3}
 		plan.DecisionReason = "validated_original_playback"
-		if !rangeOK && clientManagedRange {
+		// A native route always wins when the delivery can actually carry
+		// it. When the original_http capability itself refuses the native
+		// Dolby Vision plan (an HDR10-only executor on a DV-capable output),
+		// fall through to the base-layer route rather than adapting.
+		nativeDeliverable := rangeOK
+		if rangeOK && clientDV8BaseLayerOK {
+			// The probe must carry the same copied-video quirks as the real
+			// native candidate, or its attempt key differs and a replan after
+			// a native failure re-selects native instead of falling through.
+			nativeProbe := plan
+			applyCopiedVideoQuirksV3(&nativeProbe, source, input.Request, high10Quirk)
+			finalizePlanIdentityV3(&nativeProbe, input.Request.PlaybackAttemptID, input.Request.ClientPlaybackContext.Output.OutputContextID)
+			nativeDeliverable = deliverySupportsPlanV3(input.Request, DeliveryClassOriginalHTTPV3, nativeProbe) &&
+				!planAttemptedV3(nativeProbe, input.Request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys)
+		}
+		switch {
+		case nativeDeliverable:
+		case clientDV8BaseLayerOK:
+			// Same bytes, ordinary HEVC decoder, base layer presented. The
+			// recipe names the range that actually reaches the output so the
+			// per-delivery HDR gate below and the attempt key both see the
+			// base range, and the plan never claims Dolby Vision.
+			plan.DecisionReason = decisionReasonClientDV8BaseLayerV3
+			plan.EffectiveRecipe.DynamicRange = clientDV8BaseRange
+			plan.Claims.Video = VideoClaimsV3{
+				HDR10:             clientDV8BaseRange == DynamicRangeHDR10V3,
+				HLG:               clientDV8BaseRange == DynamicRangeHLGV3,
+				DolbyVision:       false,
+				DolbyVisionReason: "base_layer_compatible_hevc",
+			}
+			plan.DegradationWarnings = append(plan.DegradationWarnings, DegradationWarningV3{
+				Code:    "dolby_vision_base_layer_only",
+				Message: "This output does not carry Dolby Vision; the file plays unchanged through an HEVC decoder as its " + strings.ToUpper(clientDV8BaseRange) + " base layer and the Dolby Vision metadata is not presented.",
+			})
+		case clientManagedRange:
 			plan.DecisionReason = decisionReasonClientManagedDynamicRangeV3
 		}
 		applyCopiedVideoQuirksV3(&plan, source, input.Request, high10Quirk)
@@ -727,6 +773,12 @@ const (
 	// decisionReasonClientManagedDynamicRangeV3 marks an original-file plan
 	// whose executor owns source-to-output dynamic-range presentation.
 	decisionReasonClientManagedDynamicRangeV3 = "client_managed_dynamic_range"
+
+	// decisionReasonClientDV8BaseLayerV3 marks an original-file plan for a
+	// Dolby Vision Profile 8 source that the client plays through an ordinary
+	// HEVC decoder as its compatible base layer. The recipe's dynamic_range is
+	// that base range, not dolby_vision.
+	decisionReasonClientDV8BaseLayerV3 = "client_dv8_base_layer"
 )
 
 // planAudioOnlyV3 plans sources without a video track (audiobooks, music).
@@ -1083,7 +1135,7 @@ func dolbyVisionBaseLayerFallbackV3(source SourceDescriptorV3, request StartRequ
 		return dolbyVisionBaseLayerFallbackV3Result{}, false
 	}
 	if source.DVProfile == 7 {
-		if !clientSupportsHDR10V3(request) || !registry.Available(TransformationServerDV7HDR10V3) {
+		if !clientSupportsHDR10V3(request, source) || !registry.Available(TransformationServerDV7HDR10V3) {
 			return dolbyVisionBaseLayerFallbackV3Result{}, false
 		}
 		return dolbyVisionBaseLayerFallbackV3Result{
@@ -1102,7 +1154,7 @@ func dolbyVisionBaseLayerFallbackV3(source SourceDescriptorV3, request StartRequ
 	}
 	switch source.DVBLCompatID {
 	case 1, 6:
-		if !dolbyVisionBaseTransferMatchesV3(source.ColorTransfer, DynamicRangeHDR10V3) || !clientSupportsHDR10V3(request) {
+		if !dolbyVisionBaseTransferMatchesV3(source.ColorTransfer, DynamicRangeHDR10V3) || !clientSupportsHDR10V3(request, source) {
 			return dolbyVisionBaseLayerFallbackV3Result{}, false
 		}
 		result.DynamicRange = DynamicRangeHDR10V3
@@ -1146,14 +1198,6 @@ func dolbyVisionBaseTransferMatchesV3(transfer, dynamicRange string) bool {
 	return false
 }
 
-func clientSupportsHLGV3(request StartRequestV3) bool {
-	hdr := request.ClientPlaybackContext.Output.HDRDetails
-	if hdr == nil {
-		hdr = request.Capabilities.HDRDetails
-	}
-	return hdr != nil && hdr.HLG
-}
-
 func canClientTransformDV7ToDV81V3(source SourceDescriptorV3, request StartRequestV3) bool {
 	if source.DynamicRange != DynamicRangeDolbyVisionV3 || source.DVProfile != 7 ||
 		!clientTransformationAvailableV3(request, ClientDV7ToDV81V3, ClientDVTransformVersionV3) {
@@ -1165,15 +1209,12 @@ func canClientTransformDV7ToDV81V3(source SourceDescriptorV3, request StartReque
 }
 
 func canClientTransformDV7ToHDR10V3(source SourceDescriptorV3, request StartRequestV3) bool {
-	return source.DynamicRange == DynamicRangeDolbyVisionV3 && source.DVProfile == 7 && clientSupportsHDR10V3(request) &&
+	return source.DynamicRange == DynamicRangeDolbyVisionV3 && source.DVProfile == 7 && clientSupportsHDR10V3(request, source) &&
 		clientTransformationAvailableV3(request, ClientDV7ToHDR10V3, ClientDVTransformVersionV3)
 }
 
 func clientSupportsDVProfileV3(request StartRequestV3, source SourceDescriptorV3, profile int) bool {
-	hdr := request.ClientPlaybackContext.Output.HDRDetails
-	if hdr == nil {
-		hdr = request.Capabilities.HDRDetails
-	}
+	hdr := nativeOutputHDRV3(request)
 	source.DVProfile = profile
 	return hdr != nil && hdrSupportsDolbyVisionSourceV3(*hdr, source)
 }

@@ -18,10 +18,14 @@ import (
 
 var negotiatedSessionAdvisoryLockKeySink int64
 
-func TestNegotiatedSessionAdvisoryLockKeyIsStableAndUnambiguous(t *testing.T) {
+func TestNegotiatedSessionAdvisoryLockKeyIsPinnedAndSeparatesRepresentativeInputs(t *testing.T) {
 	t.Parallel()
 
 	baseline := negotiatedSessionAdvisoryLockKey("token", "device", "route")
+	const wantBaseline int64 = -2277851018424744338
+	if baseline != wantBaseline {
+		t.Fatalf("key = %d, want pinned value %d", baseline, wantBaseline)
+	}
 	for i := 0; i < 100; i++ {
 		if got := negotiatedSessionAdvisoryLockKey("token", "device", "route"); got != baseline {
 			t.Fatalf("key changed between calls: first=%d call_%d=%d", baseline, i, got)
@@ -56,34 +60,47 @@ func TestNegotiatedSessionAdvisoryLockKeyIsStableAndUnambiguous(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			key := negotiatedSessionAdvisoryLockKey(tc.compatToken, tc.clientDeviceID, tc.routeItemID)
 			if prior, exists := seen[key]; exists {
-				t.Fatalf("lock-key collision with %q: %d", prior, key)
+				t.Fatalf("unexpected representative collision with %q: %d", prior, key)
 			}
 			seen[key] = tc.name
 		})
 	}
 }
 
-func TestNegotiatedSessionAdvisoryLockQueryAcceptsOnlyBigint(t *testing.T) {
+func TestNegotiatedSessionAdvisoryLockQueriesArePinned(t *testing.T) {
 	t.Parallel()
 
+	if negotiatedSessionLegacyAdvisoryLockQuery != `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))` {
+		t.Fatalf("legacy advisory lock query changed: %q", negotiatedSessionLegacyAdvisoryLockQuery)
+	}
 	if negotiatedSessionAdvisoryLockQuery != `SELECT pg_advisory_xact_lock($1::bigint)` {
 		t.Fatalf("advisory lock query can accept text again: %q", negotiatedSessionAdvisoryLockQuery)
 	}
 }
 
-type negotiatedSessionAdvisoryLockRecorder struct {
+type negotiatedSessionAdvisoryLockCall struct {
 	query string
 	args  []any
-	err   error
+}
+
+type negotiatedSessionAdvisoryLockRecorder struct {
+	calls  []negotiatedSessionAdvisoryLockCall
+	failAt int
+	err    error
 }
 
 func (r *negotiatedSessionAdvisoryLockRecorder) Exec(_ context.Context, query string, args ...any) (pgconn.CommandTag, error) {
-	r.query = query
-	r.args = append([]any(nil), args...)
-	return pgconn.CommandTag{}, r.err
+	r.calls = append(r.calls, negotiatedSessionAdvisoryLockCall{
+		query: query,
+		args:  append([]any(nil), args...),
+	})
+	if r.failAt == len(r.calls) {
+		return pgconn.CommandTag{}, r.err
+	}
+	return pgconn.CommandTag{}, nil
 }
 
-func TestAcquireNegotiatedSessionAdvisoryLockPassesOnlyBigint(t *testing.T) {
+func TestAcquireNegotiatedSessionAdvisoryLockBridgesLegacyThenBigint(t *testing.T) {
 	t.Parallel()
 
 	recorder := &negotiatedSessionAdvisoryLockRecorder{}
@@ -94,25 +111,57 @@ func TestAcquireNegotiatedSessionAdvisoryLockPassesOnlyBigint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire advisory lock: %v", err)
 	}
-	if recorder.query != negotiatedSessionAdvisoryLockQuery {
-		t.Fatalf("query = %q, want %q", recorder.query, negotiatedSessionAdvisoryLockQuery)
+	if len(recorder.calls) != 2 {
+		t.Fatalf("call count = %d, want 2", len(recorder.calls))
 	}
-	if len(recorder.args) != 1 {
-		t.Fatalf("argument count = %d, want 1", len(recorder.args))
+	legacy := recorder.calls[0]
+	if legacy.query != negotiatedSessionLegacyAdvisoryLockQuery {
+		t.Fatalf("legacy query = %q, want %q", legacy.query, negotiatedSessionLegacyAdvisoryLockQuery)
 	}
-	if _, ok := recorder.args[0].(int64); !ok {
-		t.Fatalf("advisory lock argument type = %T, want int64", recorder.args[0])
+	if len(legacy.args) != 1 {
+		t.Fatalf("legacy argument count = %d, want 1", len(legacy.args))
+	}
+	legacyScope, ok := legacy.args[0].(string)
+	if !ok {
+		t.Fatalf("legacy advisory lock argument type = %T, want string", legacy.args[0])
+	}
+	if strings.ContainsRune(legacyScope, '\x00') {
+		t.Fatalf("legacy advisory lock scope contains NUL: %q", legacyScope)
+	}
+
+	versioned := recorder.calls[1]
+	if versioned.query != negotiatedSessionAdvisoryLockQuery {
+		t.Fatalf("versioned query = %q, want %q", versioned.query, negotiatedSessionAdvisoryLockQuery)
+	}
+	if len(versioned.args) != 1 {
+		t.Fatalf("versioned argument count = %d, want 1", len(versioned.args))
+	}
+	if _, ok := versioned.args[0].(int64); !ok {
+		t.Fatalf("versioned advisory lock argument type = %T, want int64", versioned.args[0])
 	}
 }
 
 func TestAcquireNegotiatedSessionAdvisoryLockPropagatesDatabaseError(t *testing.T) {
 	t.Parallel()
 
-	wantErr := errors.New("lock unavailable")
-	recorder := &negotiatedSessionAdvisoryLockRecorder{err: wantErr}
-	err := acquireNegotiatedSessionAdvisoryLock(context.Background(), recorder, "token", "device", "route")
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("error = %v, want wrapped %v", err, wantErr)
+	for _, tc := range []struct {
+		name   string
+		failAt int
+	}{
+		{name: "legacy lock", failAt: 1},
+		{name: "versioned lock", failAt: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wantErr := errors.New("lock unavailable")
+			recorder := &negotiatedSessionAdvisoryLockRecorder{failAt: tc.failAt, err: wantErr}
+			err := acquireNegotiatedSessionAdvisoryLock(context.Background(), recorder, "token", "device", "route")
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("error = %v, want wrapped %v", err, wantErr)
+			}
+			if len(recorder.calls) != tc.failAt {
+				t.Fatalf("call count = %d, want %d", len(recorder.calls), tc.failAt)
+			}
+		})
 	}
 }
 
@@ -213,6 +262,87 @@ func newCompatTestPool(t *testing.T) *pgxpool.Pool {
 		t.Skip("test database has not applied jellycompat playback sessions migration")
 	}
 	return pool
+}
+
+func TestNegotiatedSessionAdvisoryLockCoordinatesAcrossRollingUpgrade(t *testing.T) {
+	pool := newCompatTestPool(t)
+	ctx := context.Background()
+	const (
+		compatToken    = "rolling-token"
+		clientDeviceID = "rolling-device"
+		routeItemID    = "rolling-route"
+	)
+
+	bridgedTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin bridged transaction: %v", err)
+	}
+	t.Cleanup(func() { _ = bridgedTx.Rollback(ctx) })
+	if err := acquireNegotiatedSessionAdvisoryLock(
+		ctx, bridgedTx, compatToken, clientDeviceID, routeItemID,
+	); err != nil {
+		t.Fatalf("acquire bridged advisory locks: %v", err)
+	}
+
+	legacyTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin legacy transaction: %v", err)
+	}
+	t.Cleanup(func() { _ = legacyTx.Rollback(ctx) })
+	legacyScope := negotiatedPlaybackScope(compatToken, clientDeviceID, routeItemID)
+	var legacyAcquired bool
+	if err := legacyTx.QueryRow(
+		ctx,
+		`SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))`,
+		legacyScope,
+	).Scan(&legacyAcquired); err != nil {
+		t.Fatalf("try legacy advisory lock: %v", err)
+	}
+	if legacyAcquired {
+		t.Fatal("legacy writer bypassed bridged advisory lock")
+	}
+
+	versionedTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin versioned transaction: %v", err)
+	}
+	t.Cleanup(func() { _ = versionedTx.Rollback(ctx) })
+	lockKey := negotiatedSessionAdvisoryLockKey(compatToken, clientDeviceID, routeItemID)
+	var versionedAcquired bool
+	if err := versionedTx.QueryRow(
+		ctx,
+		`SELECT pg_try_advisory_xact_lock($1::bigint)`,
+		lockKey,
+	).Scan(&versionedAcquired); err != nil {
+		t.Fatalf("try versioned advisory lock: %v", err)
+	}
+	if versionedAcquired {
+		t.Fatal("versioned writer bypassed bridged advisory lock")
+	}
+
+	if err := bridgedTx.Rollback(ctx); err != nil {
+		t.Fatalf("release bridged advisory locks: %v", err)
+	}
+	if err := legacyTx.QueryRow(
+		ctx,
+		`SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))`,
+		legacyScope,
+	).Scan(&legacyAcquired); err != nil {
+		t.Fatalf("retry legacy advisory lock: %v", err)
+	}
+	if !legacyAcquired {
+		t.Fatal("legacy advisory lock remained unavailable after bridge released")
+	}
+	if err := versionedTx.QueryRow(
+		ctx,
+		`SELECT pg_try_advisory_xact_lock($1::bigint)`,
+		lockKey,
+	).Scan(&versionedAcquired); err != nil {
+		t.Fatalf("retry versioned advisory lock: %v", err)
+	}
+	if !versionedAcquired {
+		t.Fatal("versioned advisory lock remained unavailable after bridge released")
+	}
 }
 
 // A session written by one store instance must be reloadable by a fresh instance
