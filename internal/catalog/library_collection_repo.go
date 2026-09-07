@@ -155,7 +155,7 @@ func NewLibraryCollectionRepository(pool *pgxpool.Pool) *LibraryCollectionReposi
 
 const (
 	libraryCollectionPosterAdvisoryLockSQL = `SELECT pg_advisory_xact_lock(hashtextextended('library_collection_poster:' || $1, 0))`
-	libraryCollectionLifecycleLockSQL      = `SELECT pg_advisory_xact_lock(hashtextextended('library_collection_lifecycle:' || $1::text, 0))`
+	libraryCollectionLifecycleLockSQL      = `SELECT pg_advisory_xact_lock(hashtextextended('library_collection_lifecycle:' || $1::bigint::text, 0))`
 )
 
 // Package variable only so the PostgreSQL integration test can use a short

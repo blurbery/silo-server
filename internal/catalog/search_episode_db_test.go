@@ -98,8 +98,11 @@ func TestEpisodeSearchPostgresAndDocumentSource(t *testing.T) {
 	if len(docs[0].LibraryIDs) != 1 || int(docs[0].LibraryIDs[0]) != folderID {
 		t.Fatalf("episode library ids = %v, want [%d]", docs[0].LibraryIDs, folderID)
 	}
-	if docs[0].Vectors != nil {
-		t.Fatalf("episode document unexpectedly has vectors: %#v", docs[0].Vectors)
+	// Episodes do not carry recommendation vectors, but the configured
+	// user-provided embedder requires an explicit null opt-out on the wire.
+	vector, optedOut := docs[0].Vectors[DefaultMeilisearchEmbedder]
+	if !optedOut || len(docs[0].Vectors) != 1 || vector != nil {
+		t.Fatalf("episode document must explicitly opt out of vectors: %#v", docs[0].Vectors)
 	}
 }
 
