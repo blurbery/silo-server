@@ -59,7 +59,7 @@ type queryParam struct {
 func queryParams(op *huma.Operation) map[string]queryParam {
 	out := map[string]queryParam{}
 	for _, p := range op.Parameters {
-		if p.In != "query" || p.Schema == nil {
+		if p.In != artworkParamQuery || p.Schema == nil {
 			continue
 		}
 		out[p.Name] = queryParam{array: p.Schema.Type == huma.TypeArray, boolean: p.Schema.Type == huma.TypeBoolean}

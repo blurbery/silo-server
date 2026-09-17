@@ -53,7 +53,7 @@ func RawSuccessStatus(method, protocol string, status int) bool {
 	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
 		return true
 	case http.StatusSwitchingProtocols:
-		return method == http.MethodGet && protocol == "websocket"
+		return method == http.MethodGet && protocol == eventsRawProtocol
 	}
 	return false
 }
@@ -82,7 +82,7 @@ func RegisterRaw(reg *Registry, raw RawOperation, handler http.Handler) {
 	if len(op.Responses) == 0 {
 		fail("raw response statuses and media types are required")
 	}
-	if raw.Protocol == "websocket" && (op.Method != http.MethodGet || op.Responses["101"] == nil) {
+	if raw.Protocol == eventsRawProtocol && (op.Method != http.MethodGet || op.Responses["101"] == nil) {
 		fail("websocket requires GET with an explicit 101 response")
 	}
 	success := false
@@ -92,7 +92,7 @@ func RegisterRaw(reg *Registry, raw RawOperation, handler http.Handler) {
 			fail("raw responses require explicit statuses and descriptions")
 		}
 		if code == http.StatusSwitchingProtocols {
-			if op.Method != http.MethodGet || raw.Protocol != "websocket" || len(response.Content) != 0 {
+			if op.Method != http.MethodGet || raw.Protocol != eventsRawProtocol || len(response.Content) != 0 {
 				fail("101 requires a bodyless GET websocket handshake")
 			}
 			for _, name := range []string{"Connection", "Upgrade", "Sec-WebSocket-Accept"} {
@@ -127,7 +127,7 @@ func RegisterRaw(reg *Registry, raw RawOperation, handler http.Handler) {
 		}
 		name := strings.TrimSuffix(strings.TrimPrefix(part, "{"), "}")
 		if !slices.ContainsFunc(op.Parameters, func(p *huma.Param) bool {
-			return p != nil && p.In == "path" && p.Name == name && p.Required && p.Schema != nil
+			return p != nil && p.In == paramInPath && p.Name == name && p.Required && p.Schema != nil
 		}) {
 			fail("raw path parameter must be explicitly documented: " + name)
 		}

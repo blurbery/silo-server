@@ -56,7 +56,7 @@ func registerDirectDownloads(reg *Registry) {
 		{http.MethodHead, directDownloadProxyPath, "headDirectDownloadProxy", handlers.Proxy, true},
 	} {
 		params := []*huma.Param{
-			{Name: "file_id", In: directParamQuery, Required: true, Schema: &huma.Schema{Type: huma.TypeString, Pattern: "^[1-9][0-9]*$"}},
+			{Name: playbackParamFileID, In: directParamQuery, Required: true, Schema: &huma.Schema{Type: huma.TypeString, Pattern: "^[1-9][0-9]*$"}},
 			{Name: directDownloadFormat, In: directParamQuery, Schema: &huma.Schema{Type: huma.TypeString, Enum: []any{"", directOriginalFormat}}},
 			{Name: directAccountToken, In: directParamQuery, Description: "Existing account bearer fallback for browser navigation without authorization headers. Does not grant profile or file authority.", Schema: &huma.Schema{Type: huma.TypeString}},
 		}
@@ -113,11 +113,11 @@ func parseDirectDownloadQuery(r *http.Request) (string, *Problem) {
 	if err != nil {
 		return "", err
 	}
-	id, p := ID(values.Get("file_id")).positive("query.file_id")
+	id, p := ID(values.Get(playbackParamFileID)).positive("query.file_id")
 	if p != nil {
 		return "", p
 	}
-	if strconv.Itoa(id) != values.Get("file_id") {
+	if strconv.Itoa(id) != values.Get(playbackParamFileID) {
 		return "", validationProblem("query.file_id", "invalid", "Expected a canonical positive integer identifier.")
 	}
 	if format := values.Get(directDownloadFormat); format != "" && format != directOriginalFormat {
@@ -132,7 +132,7 @@ func urlParseDirectQuery(r *http.Request) (url.Values, *Problem) {
 		return nil, validationProblem("query.parameters", "invalid", "Invalid download query.")
 	}
 	for key, v := range values {
-		if key != "file_id" && key != directDownloadFormat && key != directAccountToken {
+		if key != playbackParamFileID && key != directDownloadFormat && key != directAccountToken {
 			return nil, validationProblem("query.parameters", "unknown", "Unknown download query parameter.")
 		}
 		if len(v) != 1 {

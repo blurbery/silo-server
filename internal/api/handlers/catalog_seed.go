@@ -74,7 +74,7 @@ func (h *CatalogSeedHandler) HandleExport(w http.ResponseWriter, r *http.Request
 	var req exportCatalogSeedRequest
 	if r.Body != nil && r.ContentLength != 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-			writeError(w, http.StatusBadRequest, "bad_request", "Invalid request body")
+			writeError(w, http.StatusBadRequest, autoscanDeliveryBadRequest, "Invalid request body")
 			return
 		}
 	}
@@ -103,7 +103,7 @@ func (h *CatalogSeedHandler) HandleCreateExportJob(w http.ResponseWriter, r *htt
 	var req exportCatalogSeedRequest
 	if r.Body != nil && r.ContentLength != 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-			writeError(w, http.StatusBadRequest, "bad_request", "Invalid request body")
+			writeError(w, http.StatusBadRequest, autoscanDeliveryBadRequest, "Invalid request body")
 			return
 		}
 	}
@@ -190,12 +190,12 @@ func (h *CatalogSeedHandler) HandleListImportSources(w http.ResponseWriter, r *h
 
 func (h *CatalogSeedHandler) HandleCreateImportJob(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "Invalid multipart form")
+		writeError(w, http.StatusBadRequest, autoscanDeliveryBadRequest, "Invalid multipart form")
 		return
 	}
 	opts, err := parseCatalogImportOptions(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "Invalid import options")
+		writeError(w, http.StatusBadRequest, autoscanDeliveryBadRequest, "Invalid import options")
 		return
 	}
 	source := catalogImportSelectionFromForm(r)
@@ -257,13 +257,13 @@ func (h *CatalogSeedHandler) HandleListLocalImportSources(w http.ResponseWriter,
 
 func (h *CatalogSeedHandler) HandleImport(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "Invalid multipart form")
+		writeError(w, http.StatusBadRequest, autoscanDeliveryBadRequest, "Invalid multipart form")
 		return
 	}
 
 	opts, err := parseCatalogImportOptions(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "Invalid import options")
+		writeError(w, http.StatusBadRequest, autoscanDeliveryBadRequest, "Invalid import options")
 		return
 	}
 
@@ -278,11 +278,11 @@ func (h *CatalogSeedHandler) HandleImport(w http.ResponseWriter, r *http.Request
 		case errors.As(err, &unmatched):
 			writeCatalogSeedError(w, http.StatusBadRequest, "path_rewrite_required", "Catalog seed import requires additional path rewrites", unmatched.Roots)
 		case errors.Is(err, catalogseed.ErrInvalidBundle):
-			writeError(w, http.StatusBadRequest, "bad_request", "Invalid catalog seed bundle")
+			writeError(w, http.StatusBadRequest, autoscanDeliveryBadRequest, "Invalid catalog seed bundle")
 		case errors.Is(err, catalogseed.ErrUnsupportedBundleVersion):
-			writeError(w, http.StatusBadRequest, "bad_request", "Unsupported catalog seed version")
+			writeError(w, http.StatusBadRequest, autoscanDeliveryBadRequest, "Unsupported catalog seed version")
 		case errors.Is(err, catalogseed.ErrInvalidConflictMode):
-			writeError(w, http.StatusBadRequest, "bad_request", "Invalid conflict mode")
+			writeError(w, http.StatusBadRequest, autoscanDeliveryBadRequest, "Invalid conflict mode")
 		default:
 			log.Printf("catalog seed import failed: %v", err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to import catalog seed")
@@ -431,7 +431,7 @@ func writeCatalogTransferFailure(w http.ResponseWriter, err error, message strin
 		code := apiErr.Code
 		if status == http.StatusConflict {
 			status = http.StatusBadRequest
-			code = "bad_request"
+			code = autoscanDeliveryBadRequest
 		}
 		writeError(w, status, code, apiErr.Message)
 		return

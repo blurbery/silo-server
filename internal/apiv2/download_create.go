@@ -13,6 +13,10 @@ import (
 	"github.com/Silo-Server/silo-server/internal/playback"
 )
 
+const (
+	createDownloadsOperation = "createDownloads"
+)
+
 type DownloadCreationService interface {
 	Create(context.Context, int, downloads.CreateRequest, catalogpkg.AccessFilter) (*downloads.Download, error)
 	CreateSeriesPage(context.Context, int, downloads.CreateRequest, *int, *catalogpkg.EpisodePagePosition, int, catalogpkg.AccessFilter) (downloads.CreatePage, error)
@@ -53,7 +57,7 @@ type DownloadCreateOutput struct{ Body DownloadCreated }
 
 func registerDownloadCreation(reg *Registry) {
 	cursors := NewCursors(reg.deps.CursorSecret)
-	op := Operation{Operation: humaOp(http.MethodPost, Prefix+"/downloads", "createDownloads", "downloads", "Create one download or one bounded series/season page using shared preparation and registration. Do not automatically replay uncertain creation; reconcile the registry first."), Class: ClassProfileScoped, ServiceBacked: true, DemoRestricted: true, RetrySafety: RetrySafetyNonRetryable}
+	op := Operation{Operation: humaOp(http.MethodPost, Prefix+"/downloads", createDownloadsOperation, "downloads", "Create one download or one bounded series/season page using shared preparation and registration. Do not automatically replay uncertain creation; reconcile the registry first."), Class: ClassProfileScoped, ServiceBacked: true, DemoRestricted: true, RetrySafety: RetrySafetyNonRetryable}
 	op.DefaultStatus = http.StatusAccepted
 	op.MaxBodyBytes = 256 << 10
 	op.Errors = []int{409, 429, 501}
@@ -150,7 +154,7 @@ func (reg *Registry) createDownloads(ctx context.Context, cursors *Cursors, in *
 		Device, Batch, Series, Quality string
 		Season                         *int
 	}{in.DeviceID, string(body.BatchID), body.ContentID, body.Quality, body.SeasonNumber})
-	scope := CursorScope{OperationID: "createDownloads", Security: strconv.Itoa(user) + "/" + profile + "/" + viewerScopeDigest(ctx), Filter: string(filter), Sort: "season,episode,id", Tiebreaker: "id"}
+	scope := CursorScope{OperationID: createDownloadsOperation, Security: strconv.Itoa(user) + "/" + profile + "/" + viewerScopeDigest(ctx), Filter: string(filter), Sort: "season,episode,id", Tiebreaker: "id"}
 	var after *catalogpkg.EpisodePagePosition
 	if in.Cursor != "" {
 		after = &catalogpkg.EpisodePagePosition{}

@@ -11,6 +11,10 @@ import (
 	"github.com/Silo-Server/silo-server/internal/downloads"
 )
 
+const (
+	listDownloadSubscriptionsOperation = "listDownloadSubscriptions"
+)
+
 type DownloadSubscriptionService interface {
 	ListSubscriptionsPage(context.Context, int, string, string, *downloads.RegistryPosition, int) ([]*downloads.Subscription, error)
 	GetSubscription(context.Context, int, string, string, string) (*downloads.Subscription, error)
@@ -58,7 +62,7 @@ func downloadSubscriptionOf(row *downloads.Subscription) DownloadSubscription {
 
 func registerDownloadSubscriptions(reg *Registry) {
 	cursors := NewCursors(reg.deps.CursorSecret)
-	Register(reg, Operation{Operation: humaOp(http.MethodGet, Prefix+"/downloads/subscriptions", "listDownloadSubscriptions", "downloads", "Page the calling device's series monitors, including paused monitors."), Class: ClassProfileScoped, ServiceBacked: true}, func(ctx context.Context, in *DownloadSubscriptionsInput) (*DownloadSubscriptionsOutput, error) {
+	Register(reg, Operation{Operation: humaOp(http.MethodGet, Prefix+"/downloads/subscriptions", listDownloadSubscriptionsOperation, "downloads", "Page the calling device's series monitors, including paused monitors."), Class: ClassProfileScoped, ServiceBacked: true}, func(ctx context.Context, in *DownloadSubscriptionsInput) (*DownloadSubscriptionsOutput, error) {
 		return reg.listDownloadSubscriptions(ctx, cursors, in)
 	})
 	Register(reg, Operation{Operation: humaOp(http.MethodGet, Prefix+"/downloads/subscriptions/{id}", "getDownloadSubscription", "downloads", "Read a series monitor and its current validator for this device."), Class: ClassProfileScoped, ServiceBacked: true}, reg.getDownloadSubscription)
@@ -71,7 +75,7 @@ func (reg *Registry) listDownloadSubscriptions(ctx context.Context, cursors *Cur
 	if p != nil {
 		return nil, p
 	}
-	scope := CursorScope{OperationID: "listDownloadSubscriptions", Security: strconv.Itoa(user) + "/" + profile + "/" + viewerScopeDigest(ctx), Filter: in.DeviceID, Sort: "-created_at,-id", Tiebreaker: "id"}
+	scope := CursorScope{OperationID: listDownloadSubscriptionsOperation, Security: strconv.Itoa(user) + "/" + profile + "/" + viewerScopeDigest(ctx), Filter: in.DeviceID, Sort: loginSessionCursorSort, Tiebreaker: "id"}
 	var after *downloads.RegistryPosition
 	if in.Cursor != "" {
 		after = &downloads.RegistryPosition{}
@@ -96,7 +100,7 @@ func (reg *Registry) listDownloadSubscriptions(ctx context.Context, cursors *Cur
 	for _, row := range rows {
 		items = append(items, downloadSubscriptionOf(row))
 	}
-	return &DownloadSubscriptionsOutput{CacheControl: "private, no-cache", Body: Paginated(items, next)}, nil
+	return &DownloadSubscriptionsOutput{CacheControl: cacheControlPrivateNoCache, Body: Paginated(items, next)}, nil
 }
 func (reg *Registry) getDownloadSubscription(ctx context.Context, in *DownloadSubscriptionInput) (*DownloadSubscriptionOutput, error) {
 	if reg.deps.DownloadSubscriptions == nil {
@@ -111,5 +115,5 @@ func (reg *Registry) getDownloadSubscription(ctx context.Context, in *DownloadSu
 		return nil, downloadProblem(err)
 	}
 	out := downloadSubscriptionOf(row)
-	return &DownloadSubscriptionOutput{ETag: out.ETag, CacheControl: "private, no-cache", Body: out}, nil
+	return &DownloadSubscriptionOutput{ETag: out.ETag, CacheControl: cacheControlPrivateNoCache, Body: out}, nil
 }

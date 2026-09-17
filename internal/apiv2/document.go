@@ -15,6 +15,10 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
+const (
+	schemaTypeString = "string"
+)
+
 // The OpenAPI document: how a registration is described, and how the
 // committed artifact is generated from the registries alone.
 
@@ -154,7 +158,7 @@ func profileTokenHeaderParam() *huma.Param {
 		Name:        profileTokenHeader,
 		In:          paramInHeader,
 		Description: "Verification proof for a PIN-locked profile, issued by POST /api/v2/profiles/{id}/verify-pin; required only when the declared profile is locked",
-		Schema:      &huma.Schema{Type: "string", Examples: []any{"pvt_5f3a9c1e7b2d4e8fa0c6"}},
+		Schema:      &huma.Schema{Type: schemaTypeString, Examples: []any{"pvt_5f3a9c1e7b2d4e8fa0c6"}},
 	}
 }
 
@@ -168,7 +172,7 @@ func profileHeaderParam(class Class) *huma.Param {
 	p := &huma.Param{
 		Name:   profileHeader,
 		In:     paramInHeader,
-		Schema: &huma.Schema{Type: "string", Examples: []any{"1"}},
+		Schema: &huma.Schema{Type: schemaTypeString, Examples: []any{"1"}},
 	}
 	switch class {
 	case ClassProfileScoped:
@@ -193,7 +197,7 @@ func ifMatchParam() *huma.Param {
 		In:          paramInHeader,
 		Required:    true,
 		Description: "The resource's current ETag, or \"*\" to overwrite deliberately. A missing field is 428 precondition_required; a stale tag is 412 precondition_failed with the current ETag.",
-		Schema:      &huma.Schema{Type: "string"},
+		Schema:      &huma.Schema{Type: schemaTypeString},
 	}
 }
 
@@ -208,7 +212,7 @@ func ifNoneMatchGuardedParam() *huma.Param {
 		In:          paramInHeader,
 		Required:    false,
 		Description: "Optional second precondition, evaluated after If-Match succeeds: \"*\" or any tag matching the current representation is 412 precondition_failed with the current ETag.",
-		Schema:      &huma.Schema{Type: "string"},
+		Schema:      &huma.Schema{Type: schemaTypeString},
 	}
 }
 
@@ -222,7 +226,7 @@ func ifMatchOptionalParam() *huma.Param {
 		In:          paramInHeader,
 		Required:    false,
 		Description: "Optional first precondition, evaluated before If-None-Match: a tag that does not match the current representation is 412 precondition_failed.",
-		Schema:      &huma.Schema{Type: "string"},
+		Schema:      &huma.Schema{Type: schemaTypeString},
 	}
 }
 
@@ -232,7 +236,7 @@ func ifNoneMatchCreateParam() *huma.Param {
 		In:          paramInHeader,
 		Required:    false,
 		Description: "\"*\" makes the request create-only: a resource already stored at this id is 412 precondition_failed with its current ETag. Absent, the request replaces or creates.",
-		Schema:      &huma.Schema{Type: "string"},
+		Schema:      &huma.Schema{Type: schemaTypeString},
 	}
 }
 
@@ -251,7 +255,7 @@ func documentConcurrencyResponses(oapi *huma.OpenAPI, op Operation) {
 	etag := func() *huma.Header {
 		return &huma.Header{
 			Description: "The strong, opaque validator of the representation; send it back in If-Match on a guarded mutation or If-None-Match on a conditional read.",
-			Schema:      &huma.Schema{Type: "string"},
+			Schema:      &huma.Schema{Type: schemaTypeString},
 		}
 	}
 	if op.Conditional {

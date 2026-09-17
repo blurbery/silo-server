@@ -3,10 +3,11 @@ package apiv2
 import (
 	"context"
 	"errors"
-	"github.com/Silo-Server/silo-server/internal/api/handlers"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/Silo-Server/silo-server/internal/api/handlers"
 )
 
 type fakeAdminSettingsInspection struct {

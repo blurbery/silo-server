@@ -10,6 +10,10 @@ import (
 	"github.com/Silo-Server/silo-server/internal/api/handlers"
 )
 
+const (
+	listAdminDevicesOperation = "listAdminDevices"
+)
+
 type AdminDeviceService interface {
 	AdminDevicesAvailable() bool
 	ReadAdminDevices(context.Context) ([]handlers.AdminDeviceSummaryView, error)
@@ -122,11 +126,11 @@ func registerAdminDevices(reg *Registry) {
 		out.Body.Available = reg.deps.AdminDevices != nil && reg.deps.AdminDevices.AdminDevicesAvailable()
 		return out, nil
 	})
-	Register(reg, op("", "listAdminDevices"), func(ctx context.Context, in *AdminDevicesInput) (*AdminDevicesOutput, error) {
+	Register(reg, op("", listAdminDevicesOperation), func(ctx context.Context, in *AdminDevicesInput) (*AdminDevicesOutput, error) {
 		if reg.deps.AdminDevices == nil || !reg.deps.AdminDevices.AdminDevicesAvailable() {
 			return nil, unavailable("administrator devices")
 		}
-		scope := CursorScope{OperationID: "listAdminDevices", Security: strconv.Itoa(claimsFrom(ctx).UserID) + "/" + profileFrom(ctx), Filter: strconv.Itoa(in.Limit), Sort: "last_updated-desc,username,device_name,device_id", Tiebreaker: "user_id"}
+		scope := CursorScope{OperationID: listAdminDevicesOperation, Security: strconv.Itoa(claimsFrom(ctx).UserID) + "/" + profileFrom(ctx), Filter: strconv.Itoa(in.Limit), Sort: "last_updated-desc,username,device_name,device_id", Tiebreaker: adminLogsQueryUserID}
 		var after adminDevicePosition
 		if in.Cursor != "" {
 			if p := cursors.Decode(scope, in.Cursor, &after); p != nil {

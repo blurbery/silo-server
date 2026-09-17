@@ -157,7 +157,7 @@ func (h *AdminIntroHandler) RefreshEpisodeMarkers(ctx context.Context, episodeID
 		h.notifyEpisodeMarkerUpdates(h.baseContext, episodeID, action)
 	}()
 
-	return "queued", nil
+	return metadataQueueStatusQueued, nil
 }
 
 func (h *AdminIntroHandler) notifyEpisodeMarkerUpdates(ctx context.Context, episodeID, action string) {

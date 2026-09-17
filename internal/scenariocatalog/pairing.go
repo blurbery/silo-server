@@ -11,6 +11,10 @@ import (
 	apiv2 "github.com/Silo-Server/silo-server/contracts/api/v2"
 )
 
+const (
+	listProfilesOperation = "listProfiles"
+)
+
 const profilesV2Path = "/api/v2/profiles"
 
 // openAPIOperation is the slice of one embedded v2 operation the validators read.
@@ -234,7 +238,7 @@ func ProfileMutationAcceptance(catalogs []*Catalog) ([]*Catalog, error) {
 				if scenario.ID == "profiles_delete.primary_protected" {
 					principal = adminInvitationCreateAdminPrincipal
 				}
-				if step.OperationID != "listProfiles" || step.Method != http.MethodGet || step.Request.Path != profilesV2Path || step.Principal == nil || step.Principal.Class != principal || len(step.Expect.Body) == 0 {
+				if step.OperationID != listProfilesOperation || step.Method != http.MethodGet || step.Request.Path != profilesV2Path || step.Principal == nil || step.Principal.Class != principal || len(step.Expect.Body) == 0 {
 					return nil, fmt.Errorf("%s: required profile read-after is invalid", scenario.ID)
 				}
 			}

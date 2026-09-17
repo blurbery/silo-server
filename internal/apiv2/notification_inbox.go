@@ -369,7 +369,7 @@ func registerNotificationInbox(reg *Registry) {
 // the pre-auth budget protecting the long-lived token's session lookup.
 func notificationDisplayGateChain(deps Dependencies) ([]func(http.Handler) http.Handler, string) {
 	if deps.Auth == nil {
-		return nil, "auth"
+		return nil, authenticationDomain
 	}
 	if deps.ViewerAccess == nil {
 		return nil, "viewer access"

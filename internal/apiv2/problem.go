@@ -14,6 +14,19 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 )
 
+const (
+	notFoundCode = "not_found"
+)
+
+const (
+	installationChangedCode       = "installation_changed"
+	authenticationRequiredMessage = "Authentication required"
+	notFoundMessage               = "Not found"
+	conflictCode                  = "conflict"
+	rateLimitedCode               = "rate_limited"
+	internalErrorCode             = "internal_error"
+)
+
 // ProblemTypeOrigin is the project-controlled documentation origin every
 // problem `type` URI lives under. The final path segment of a type URI is the
 // machine-readable problem identifier (docs/architecture/api-contract.md,
@@ -36,7 +49,7 @@ func (t ProblemType) URI() string { return ProblemTypeOrigin + t.ID }
 // The shared type catalog. Domain-specific types are added only when a client
 // needs distinct corrective behavior.
 var (
-	TypePlaybackInstallationChanged = ProblemType{"installation_changed", http.StatusConflict, "Playback installation changed"}
+	TypePlaybackInstallationChanged = ProblemType{installationChangedCode, http.StatusConflict, "Playback installation changed"}
 	TypePlaybackSessionEnded        = ProblemType{"playback_session_ended", http.StatusGone, "Playback session ended"}
 	TypePlaybackProgressConflict    = ProblemType{handlers.PlaybackCodeProgressConflict, http.StatusConflict, "Playback progress conflict"}
 	TypeDeviceLoginExpired          = ProblemType{"device_login_expired", http.StatusGone, "Device login expired"}
@@ -46,16 +59,16 @@ var (
 
 	TypeMalformedRequest                              = ProblemType{"malformed_request", http.StatusBadRequest, "Malformed request"}
 	TypeInvalidCursor                                 = ProblemType{"invalid_cursor", http.StatusBadRequest, "Invalid cursor"}
-	TypeAuthenticationRequired                        = ProblemType{"authentication_required", http.StatusUnauthorized, "Authentication required"}
+	TypeAuthenticationRequired                        = ProblemType{"authentication_required", http.StatusUnauthorized, authenticationRequiredMessage}
 	TypeInvalidToken                                  = ProblemType{"invalid_token", http.StatusUnauthorized, "Invalid token"}
 	TypeSessionExpired                                = ProblemType{"session_expired", http.StatusUnauthorized, "Session expired"}
 	TypePermissionDenied                              = ProblemType{"permission_denied", http.StatusForbidden, "Permission denied"}
 	TypeProfileVerificationRequired                   = ProblemType{"profile_verification_required", http.StatusForbidden, "Profile verification required"}
-	TypeNotFound                                      = ProblemType{"not_found", http.StatusNotFound, "Not found"}
+	TypeNotFound                                      = ProblemType{notFoundCode, http.StatusNotFound, notFoundMessage}
 	TypeMethodNotAllowed                              = ProblemType{"method_not_allowed", http.StatusMethodNotAllowed, "Method not allowed"}
 	TypeNotAcceptable                                 = ProblemType{"not_acceptable", http.StatusNotAcceptable, "Not acceptable"}
 	TypeRequestTimeout                                = ProblemType{"request_timeout", http.StatusRequestTimeout, "Request timeout"}
-	TypeConflict                                      = ProblemType{"conflict", http.StatusConflict, "Conflict"}
+	TypeConflict                                      = ProblemType{conflictCode, http.StatusConflict, "Conflict"}
 	TypeIdempotencyConflict                           = ProblemType{"idempotency_conflict", http.StatusConflict, "Idempotency conflict"}
 	TypeJobNotCancelable                              = ProblemType{"job_not_cancelable", http.StatusConflict, "Job not cancelable"}
 	TypeCapabilityDisabled                            = ProblemType{"capability_disabled", http.StatusConflict, "Capability disabled"}
@@ -66,8 +79,8 @@ var (
 	TypeUnsupportedMediaType                          = ProblemType{"unsupported_media_type", http.StatusUnsupportedMediaType, "Unsupported media type"}
 	TypeValidationFailed                              = ProblemType{"validation_failed", http.StatusUnprocessableEntity, "Validation failed"}
 	TypePreconditionRequired                          = ProblemType{"precondition_required", http.StatusPreconditionRequired, "Precondition required"}
-	TypeRateLimited                                   = ProblemType{"rate_limited", http.StatusTooManyRequests, "Rate limited"}
-	TypeInternalError                                 = ProblemType{"internal_error", http.StatusInternalServerError, "Internal error"}
+	TypeRateLimited                                   = ProblemType{rateLimitedCode, http.StatusTooManyRequests, "Rate limited"}
+	TypeInternalError                                 = ProblemType{internalErrorCode, http.StatusInternalServerError, "Internal error"}
 	TypeCapabilityUnsupported                         = ProblemType{"capability_unsupported", http.StatusNotImplemented, "Capability unsupported"}
 	TypeDependencyUnavailable                         = ProblemType{"dependency_unavailable", http.StatusServiceUnavailable, "Dependency unavailable"}
 	TypeClientUpgradeRequired                         = ProblemType{"client_upgrade_required", http.StatusGone, "Client upgrade required"}

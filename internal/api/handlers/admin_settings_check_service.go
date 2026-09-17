@@ -7,6 +7,15 @@ import (
 	"github.com/Silo-Server/silo-server/internal/config"
 )
 
+const (
+	connectionCheckRedis           = "redis"
+	connectionCheckAITranscription = "ai_transcription"
+)
+
+const (
+	connectionCheckAIChat = "ai_chat"
+)
+
 const connectionCheckFailedMessage = "Connection check failed. Verify the submitted settings and provider availability."
 
 var ErrAdminSettingsCheckKind = errors.New("unsupported settings check kind")
@@ -22,7 +31,7 @@ type AdminSettingsCheckResult struct {
 // must not automatically replay an uncertain result.
 func (h *AdminHandler) CheckAdminSettingsConnection(ctx context.Context, kind string, values map[string]string, dirtyKeys []string) (AdminSettingsCheckResult, error) {
 	switch kind {
-	case "s3_public", "s3_operational", "s3_private", "redis", "recommendations_embedding", "ai_chat", "ai_transcription", "meilisearch", "mdblist":
+	case "s3_public", "s3_operational", "s3_private", connectionCheckRedis, "recommendations_embedding", connectionCheckAIChat, connectionCheckAITranscription, "meilisearch", collectionTypeMDBList:
 	default:
 		return AdminSettingsCheckResult{}, ErrAdminSettingsCheckKind
 	}

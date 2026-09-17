@@ -35,7 +35,7 @@ type OAuthHandshakeCapabilitiesOutputBody struct {
 }
 
 func registerOAuthHandshakes(reg *Registry) {
-	Register(reg, Operation{Operation: humaOp(http.MethodGet, Prefix+"/auth/oauth/capabilities", "getOAuthHandshakeCapabilities", "auth", "Discover browser OAuth handshake availability."), Class: ClassPublic, ServiceBacked: true}, func(_ context.Context, _ *CapabilityInput) (*OAuthHandshakeCapabilitiesOutput, error) {
+	Register(reg, Operation{Operation: humaOp(http.MethodGet, Prefix+"/auth/oauth/capabilities", "getOAuthHandshakeCapabilities", authenticationDomain, "Discover browser OAuth handshake availability."), Class: ClassPublic, ServiceBacked: true}, func(_ context.Context, _ *CapabilityInput) (*OAuthHandshakeCapabilitiesOutput, error) {
 		out := new(OAuthHandshakeCapabilitiesOutput)
 		out.Body.Available = reg.deps.OAuth != nil
 		return out, nil
@@ -59,7 +59,7 @@ func registerOAuthHandshakes(reg *Registry) {
 			delete(responses, "500")
 			delete(responses, "502")
 		}
-		op := Operation{Operation: huma.Operation{Method: route.method, Path: Prefix + "/auth/oauth/{install_id}/" + route.path, OperationID: route.id, Summary: "Continue the browser OAuth login handshake.", Tags: []string{"auth"}, Parameters: params, Responses: responses}, Class: ClassPublic, ServiceBacked: true}
+		op := Operation{Operation: huma.Operation{Method: route.method, Path: Prefix + "/auth/oauth/{install_id}/" + route.path, OperationID: route.id, Summary: "Continue the browser OAuth login handshake.", Tags: []string{authenticationDomain}, Parameters: params, Responses: responses}, Class: ClassPublic, ServiceBacked: true}
 		if route.method == http.MethodPost {
 			op.RetrySafety = RetrySafetyNonRetryable
 		}

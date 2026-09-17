@@ -662,9 +662,9 @@ func (in *CatalogBrowseInput) catalogValues() (url.Values, *Problem) {
 		}
 	}
 	set("source", in.Source)
-	set("scope", in.Scope)
+	set(scopeField, in.Scope)
 	set("section_id", in.SectionID)
-	set("library_id", string(in.LibraryID))
+	set(fieldLibraryID, string(in.LibraryID))
 	set("collection_id", in.CollectionID)
 	set("person_id", string(in.PersonID))
 	set("q", in.Q)
@@ -731,9 +731,9 @@ func (in *CatalogFiltersInput) catalogValues() url.Values {
 		}
 	}
 	set("source", in.Source)
-	set("scope", in.Scope)
+	set(scopeField, in.Scope)
 	set("section_id", in.SectionID)
-	set("library_id", string(in.LibraryID))
+	set(fieldLibraryID, string(in.LibraryID))
 	set("collection_id", in.CollectionID)
 	set("person_id", string(in.PersonID))
 	set("type", in.Type)
@@ -747,7 +747,7 @@ func parseCatalogRequest(values url.Values) (catalogpkg.CatalogRequest, *Problem
 	req, err := catalogpkg.ParseCatalogRequest(values)
 	if err != nil {
 		location := "query.source"
-		for _, name := range []string{"section_id", "collection_id", "person_id", "library_id", "scope", "groups"} {
+		for _, name := range []string{"section_id", "collection_id", "person_id", fieldLibraryID, scopeField, "groups"} {
 			if strings.Contains(err.Error(), name) {
 				location = "query." + name
 				break

@@ -11,6 +11,10 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
+const (
+	clientIPField = "client_ip"
+)
+
 // AdminLogsSocketService mints one administrator handshake credential and
 // serves the documented plain-WebSocket log stream handshake.
 type AdminLogsSocketService interface {
@@ -110,7 +114,7 @@ func registerAdminLogsSocket(reg *Registry) {
 		{Name: labelMethod, In: discordLinkQuery, Schema: &huma.Schema{Type: huma.TypeString}, Description: "audit: HTTP method filter."},
 		{Name: "path_prefix", In: discordLinkQuery, Schema: &huma.Schema{Type: huma.TypeString}, Description: "audit: path prefix filter."},
 		{Name: "status_code", In: discordLinkQuery, Schema: &huma.Schema{Type: huma.TypeInteger}, Description: "audit: status filter."},
-		{Name: "client_ip", In: discordLinkQuery, Schema: &huma.Schema{Type: huma.TypeString}, Description: "audit: client address or prefix filter."},
+		{Name: clientIPField, In: discordLinkQuery, Schema: &huma.Schema{Type: huma.TypeString}, Description: "audit: client address or prefix filter."},
 		{Name: adminLogsQueryRequestID, In: discordLinkQuery, Schema: &huma.Schema{Type: huma.TypeString}, Description: "Request identifier filter."},
 		{Name: adminLogsQueryUserID, In: discordLinkQuery, Schema: &huma.Schema{Type: huma.TypeInteger}, Description: "Account filter."},
 		{Name: adminLogsQuerySessionID, In: discordLinkQuery, Schema: &huma.Schema{Type: huma.TypeString}, Description: "Login session filter."},

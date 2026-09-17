@@ -42,7 +42,7 @@ func registerAdminAutoscanConnections(reg *Registry) {
 		if reg.deps.AdminAutoscanConnections == nil {
 			return nil, unavailable("autoscan connections")
 		}
-		scope := CursorScope{OperationID: "listAdminAutoscanConnections", Security: strconv.Itoa(claimsFrom(ctx).UserID) + "/" + profileFrom(ctx), Filter: strconv.Itoa(in.Limit), Sort: "name", Tiebreaker: "id"}
+		scope := CursorScope{OperationID: "listAdminAutoscanConnections", Security: strconv.Itoa(claimsFrom(ctx).UserID) + "/" + profileFrom(ctx), Filter: strconv.Itoa(in.Limit), Sort: playbackSegmentName, Tiebreaker: "id"}
 		var after adminAutoscanConnectionPosition
 		if in.Cursor != "" {
 			if p := cursors.Decode(scope, in.Cursor, &after); p != nil {

@@ -14,6 +14,10 @@ import (
 	"github.com/Silo-Server/silo-server/internal/userstore"
 )
 
+const (
+	featuredSectionKind = "featured"
+)
+
 // The profile sections domain: the acting profile's customization of the
 // home and library pages (hidden, reordered, and profile-built rows). Every
 // operation acts on one override set, addressed by scope and, for a library
@@ -31,7 +35,7 @@ type SectionConfig map[string]any
 // Schema declares the config as a named extension bag.
 func (SectionConfig) Schema(_ huma.Registry) *huma.Schema {
 	return &huma.Schema{
-		Type:                 "object",
+		Type:                 schemaTypeObject,
 		Description:          "A recipe's configuration document; its keys are fixed by the recipe named in section_type.",
 		AdditionalProperties: true,
 		Extensions:           map[string]any{extExtensionBag: "section-config"},
@@ -161,7 +165,7 @@ const (
 
 // sectionOverrideWriteNullable names the override members whose null means
 // "no override"; null on any other member is a type failure.
-var sectionOverrideWriteNullable = map[string]bool{"position": true, "featured": true, "item_limit": true}
+var sectionOverrideWriteNullable = map[string]bool{playbackParamPosition: true, featuredSectionKind: true, "item_limit": true}
 
 func registerProfileSections(reg *Registry) {
 	Register(reg, Operation{

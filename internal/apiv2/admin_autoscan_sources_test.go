@@ -3,11 +3,12 @@ package apiv2
 import (
 	"context"
 	"encoding/json"
-	"github.com/Silo-Server/silo-server/internal/api/handlers"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Silo-Server/silo-server/internal/api/handlers"
 )
 
 type fakeAdminAutoscanSources struct{ calls int }

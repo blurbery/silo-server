@@ -1,10 +1,11 @@
 package catalog
 
 import (
-	"github.com/jackc/pgx/v5/pgxpool"
 	"os"
 	"reflect"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestDownloadEpisodePagesSQLBoundsAndAvailability(t *testing.T) {

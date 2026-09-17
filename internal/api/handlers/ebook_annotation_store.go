@@ -70,7 +70,7 @@ func (s *PGEbookReaderAnnotationStore) CreateOrGet(ctx context.Context, annotati
 	current, err := scanEbookReaderAnnotation(tx.QueryRow(ctx, `SELECT `+ebookAnnotationColumns+` FROM ebook_reader_annotations
  WHERE id=$1 AND user_id=$2 AND profile_id=$3 AND content_id=$4 FOR UPDATE`, annotation.ID, annotation.UserID, annotation.ProfileID, annotation.ContentID))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, false, &APIError{Status: 409, Code: "conflict", Message: "Annotation identity is unavailable"}
+		return nil, false, &APIError{Status: 409, Code: policyErrorConflict, Message: "Annotation identity is unavailable"}
 	}
 	if err != nil {
 		return nil, false, err

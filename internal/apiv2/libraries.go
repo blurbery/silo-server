@@ -17,6 +17,10 @@ import (
 	catalogpkg "github.com/Silo-Server/silo-server/internal/catalog"
 )
 
+const (
+	titleField = "title"
+)
+
 // The libraries domain, administrator side: the /libraries operations that
 // manage media folders, their scanned roots and the metadata matcher's
 // backlog. The viewer-facing /library/{id} reads live in catalog_types.go
@@ -1244,7 +1248,7 @@ func (reg *Registry) listLibraryRoots(ctx context.Context, cursors *Cursors, in 
 	scope := CursorScope{
 		OperationID: opListLibraryRoots,
 		Security:    strconv.Itoa(userID),
-		Filter:      url.Values{fieldLibraryID: {strconv.Itoa(libID)}, "state": {state}, "q": {search}}.Encode(),
+		Filter:      url.Values{fieldLibraryID: {strconv.Itoa(libID)}, discordLinkState: {state}, "q": {search}}.Encode(),
 		Sort:        sortStore,
 		Tiebreaker:  sortStore,
 	}
@@ -1417,7 +1421,7 @@ func (reg *Registry) listUnmatchedItems(ctx context.Context, cursors *Cursors, i
 		OperationID: opListUnmatchedItems,
 		Security:    strconv.Itoa(userID),
 		Filter:      "q=" + search,
-		Sort:        "title",
+		Sort:        titleField,
 		Tiebreaker:  tiebreakerContentID,
 	}
 	offset, p := decodeOffset(cursors, scope, in.Cursor)

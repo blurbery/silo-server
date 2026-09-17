@@ -15,6 +15,11 @@ import (
 	"github.com/Silo-Server/silo-server/internal/apiv2"
 )
 
+const (
+	getMethod         = "get"
+	websocketProtocol = "websocket"
+)
+
 // Extension names the document carries; they mirror internal/apiv2.
 const (
 	extClass          = "x-silo-class"
@@ -121,13 +126,13 @@ func lintStatuses(fail func(string, ...any), where, path, method string, op oper
 		if strings.TrimSpace(stringExt(op.Extensions, "x-silo-raw-reason")) == "" {
 			fail("%s: raw protocol requires its exclusion reason", where)
 		}
-		if method != "get" && method != "head" && method != "post" {
+		if method != getMethod && method != "head" && method != "post" {
 			fail("%s: raw registration supports only GET, HEAD and POST", where)
 		}
 		if method == "post" && stringExt(op.Extensions, "x-silo-retry-safety") == "" {
 			fail("%s: raw POST must declare retry safety", where)
 		}
-		if _, upgrade := op.Responses["101"]; protocol == "websocket" && (method != "get" || !upgrade) {
+		if _, upgrade := op.Responses["101"]; protocol == websocketProtocol && (method != getMethod || !upgrade) {
 			fail("%s: websocket requires GET with an explicit 101 response", where)
 		}
 		if op.RequestBody != nil || guarded || conditional || createOnly {
@@ -139,7 +144,7 @@ func lintStatuses(fail func(string, ...any), where, path, method string, op oper
 				continue
 			}
 			if code == 101 {
-				if method != "get" || protocol != "websocket" || len(response.Content) != 0 {
+				if method != getMethod || protocol != websocketProtocol || len(response.Content) != 0 {
 					fail("%s: 101 requires a bodyless GET websocket handshake", where)
 				}
 				for _, header := range []string{"Connection", "Upgrade", "Sec-WebSocket-Accept"} {

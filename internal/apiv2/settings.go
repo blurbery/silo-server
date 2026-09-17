@@ -14,6 +14,11 @@ import (
 	"github.com/Silo-Server/silo-server/internal/settingscontract"
 )
 
+const (
+	scopeField = "scope"
+	valueField = "value"
+)
+
 // The settings domain: the settings contract (the manifest clients vendor
 // and its capability document), the server-wide overlay defaults, device
 // overrides of the subtitle appearance, and per-installation plugin settings.
@@ -1008,7 +1013,7 @@ const (
 var settingFieldLocations = map[string]string{
 	fieldKey:         locationPathKey,
 	fieldKeys:        locationQueryKeys,
-	"scope":          locationQueryScope,
+	scopeField:       locationQueryScope,
 	"profile_id":     "query.profile_id",
 	"profile_header": locationProfileHeader,
 	fieldDeviceID:    "query.device_id",
@@ -1016,7 +1021,7 @@ var settingFieldLocations = map[string]string{
 	"client_family":  "header." + clientFamilyHeader,
 	fieldLibraryID:   locationQueryLibraryID,
 	fieldSeriesID:    "query.series_id",
-	"value":          locationBodyValue,
+	valueField:       locationBodyValue,
 	"item":           locationBodyItem,
 	"present":        "body.present",
 	"contexts":       locationBodyContexts,

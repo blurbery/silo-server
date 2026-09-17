@@ -52,10 +52,10 @@ const (
 func registerAdminSubtitleBytes(reg *Registry) {
 	content := map[string]*huma.MediaType{}
 	for _, media := range []string{"application/x-subrip", "text/vtt", "text/x-ssa", mediaTypeBinary} {
-		content[media] = &huma.MediaType{Schema: &huma.Schema{Type: huma.TypeString, Format: "binary"}}
+		content[media] = &huma.MediaType{Schema: &huma.Schema{Type: huma.TypeString, Format: artworkBinaryFormat}}
 	}
 	headers := map[string]*huma.Param{}
-	for _, name := range []string{"Content-Disposition", adminSubtitleCacheHeader, "X-Content-Type-Options"} {
+	for _, name := range []string{directDisposition, adminSubtitleCacheHeader, "X-Content-Type-Options"} {
 		headers[name] = &huma.Param{Schema: &huma.Schema{Type: huma.TypeString}}
 	}
 	headers[adminSubtitleLengthHeader] = &huma.Param{Schema: &huma.Schema{Type: huma.TypeInteger, Format: "int64"}}
@@ -94,7 +94,7 @@ func registerAdminSubtitleBytes(reg *Registry) {
 		w.Header().Set(adminSubtitleCacheHeader, "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Content-Type", subtitles.SubtitleContentType(row.Format))
-		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": adminSubtitleAttachmentName(row)}))
+		w.Header().Set(directDisposition, mime.FormatMediaType("attachment", map[string]string{filenameField: adminSubtitleAttachmentName(row)}))
 		w.Header().Set(adminSubtitleLengthHeader, strconv.Itoa(len(data)))
 		_, _ = w.Write(data)
 	}))

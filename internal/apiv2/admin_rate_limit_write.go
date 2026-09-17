@@ -37,7 +37,7 @@ func registerAdminRateLimitWrite(reg *Registry) {
 		_ = json.Unmarshal(in.RawBody, &maps)
 		for _, group := range []map[string]json.RawMessage{maps.Tiers, maps.Auth} {
 			for _, raw := range group {
-				if string(raw) == "null" {
+				if string(raw) == adminCollectionNull {
 					return nil, NewProblem(TypeValidationFailed, "Rate-limit entries cannot be null")
 				}
 				if p := rejectNonNullableNulls(raw, nil); p != nil {

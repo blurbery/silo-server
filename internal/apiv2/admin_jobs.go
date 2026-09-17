@@ -76,11 +76,11 @@ func adminJobOf(job *models.AdminJob) AdminJob {
 		out.Terminal = true
 	}
 	if job.CancelRequested && !out.Terminal {
-		out.State = "canceling"
+		out.State = historyImportCanceling
 	}
 	out.Cancelable = job.JobType == adminjob.JobTypeLibraryRefresh && !out.Terminal
 	if job.JobType == adminjob.JobTypeLibraryRefresh && job.ProgressTotal > 0 && job.ProgressCurrent >= 0 && job.ProgressCurrent <= job.ProgressTotal {
-		out.Progress = &JobProgress{Current: job.ProgressCurrent, Total: job.ProgressTotal, Unit: "items"}
+		out.Progress = &JobProgress{Current: job.ProgressCurrent, Total: job.ProgressTotal, Unit: adminTaskProgressUnit}
 	}
 	if job.Status == adminjob.StatusFailed {
 		out.Failure = &JobFailure{Type: ProblemTypeOrigin + "job_failed", Title: "Job failed", Detail: "The operation could not finish. Inspect administrator diagnostics before submitting new work.", Retryable: false}

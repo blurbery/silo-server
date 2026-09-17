@@ -12,6 +12,10 @@ import (
 	"github.com/Silo-Server/silo-server/internal/api/handlers"
 )
 
+const (
+	languageField = "language"
+)
+
 // The profiles domain: household members of a login account.
 
 // Profile is one household member.
@@ -95,7 +99,7 @@ const (
 const memberAvatar = "avatar"
 
 var profileUpdateNullable = map[string]bool{
-	memberAvatar: true, "pin": true, "max_content_rating": true, "language": true,
+	memberAvatar: true, "pin": true, "max_content_rating": true, languageField: true,
 	"preferred_metadata_language": true, "subtitle_language": true, fieldMaxPlaybackQuality: true,
 }
 

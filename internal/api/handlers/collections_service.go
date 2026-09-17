@@ -13,6 +13,12 @@ import (
 	"github.com/Silo-Server/silo-server/internal/userstore"
 )
 
+const (
+	collectionWatchedState   = "watched"
+	collectionUnwatchedState = "unwatched"
+	assetKindArtwork         = "artwork"
+)
+
 // The personal-collection seams. v1 HTTP handlers and the v2 operations both
 // call them, so the two surfaces share one decision; a failure is an
 // *APIError carrying the v1 status, code and message (and the rejected
@@ -89,9 +95,9 @@ func (h *CollectionHandler) ListPersonalCollections(ctx context.Context, userID 
 // Capabilities is the additive feature support collection clients detect.
 func (h *CollectionHandler) Capabilities() CollectionCapabilitiesView {
 	return CollectionCapabilitiesView{
-		DisplayFilterFields: []string{collectionFilterType, "watched"},
+		DisplayFilterFields: []string{collectionFilterType, collectionWatchedState},
 		DisplayFilterPresets: CollectionDisplayFilterPresetsView{
-			Watched: []string{collectionFilterAll, "watched", "unwatched"},
+			Watched: []string{collectionFilterAll, collectionWatchedState, collectionUnwatchedState},
 			Media:   []string{collectionFilterAll, itemTypeMovie, collectionFilterSeries},
 		},
 		CollectionDefaultSort:     true,
@@ -116,7 +122,7 @@ func (h *CollectionHandler) CreatePersonalCollection(ctx context.Context, cmd Pe
 	}
 
 	if cmd.PosterFile != nil || req.PosterSourceURL != "" {
-		if err := collectionFeatureError(store, "artwork"); err != nil {
+		if err := collectionFeatureError(store, assetKindArtwork); err != nil {
 			return none, err
 		}
 	}
@@ -345,7 +351,7 @@ func collectionFeatureError(store userstore.UserStore, feature string) error {
 		supported = f.Groups
 	case "imports":
 		supported = f.Imports
-	case "artwork":
+	case assetKindArtwork:
 		supported = f.Artwork
 	case "item_reorder":
 		supported = f.ItemReorder

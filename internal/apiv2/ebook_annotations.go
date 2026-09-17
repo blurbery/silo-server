@@ -13,6 +13,10 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
+const (
+	listEbookAnnotationsOperation = "listEbookAnnotations"
+)
+
 type EbookAnnotationService interface {
 	ReaderAnnotationPage(context.Context, handlers.EbookAnnotationScope, *handlers.EbookAnnotationPosition, int) ([]handlers.EbookReaderAnnotation, error)
 	CreateReaderAnnotation(context.Context, handlers.EbookAnnotationScope, string, handlers.EbookAnnotationCreate) (*handlers.EbookReaderAnnotation, bool, error)
@@ -100,7 +104,7 @@ func registerEbookAnnotations(reg *Registry) {
 		return Operation{Operation: humaOp(method, Prefix+path, id, "ebooks", summary), Class: ClassProfileScoped, ServiceBacked: true}
 	}
 	cursors := NewCursors(reg.deps.CursorSecret)
-	Register(reg, op(http.MethodGet, "/ebooks/{content_id}/annotations", "listEbookAnnotations", "Page the acting profile's annotations by newest update and identity."), func(ctx context.Context, in *EbookAnnotationListInput) (*EbookAnnotationPageOutput, error) {
+	Register(reg, op(http.MethodGet, "/ebooks/{content_id}/annotations", listEbookAnnotationsOperation, "Page the acting profile's annotations by newest update and identity."), func(ctx context.Context, in *EbookAnnotationListInput) (*EbookAnnotationPageOutput, error) {
 		return reg.listEbookAnnotations(ctx, cursors, in)
 	})
 	create := op(http.MethodPost, "/ebooks/{content_id}/annotations", "createEbookAnnotation", "Create an annotation using its client-selected identity; retry returns the existing scoped annotation without changing it.")
@@ -153,7 +157,7 @@ func (reg *Registry) listEbookAnnotations(ctx context.Context, cursors *Cursors,
 	if p != nil {
 		return nil, p
 	}
-	cursorScope := CursorScope{OperationID: "listEbookAnnotations", Security: strconv.Itoa(scope.UserID) + "/" + scope.ProfileID + "/" + viewerScopeDigest(ctx), Filter: in.ContentID, Sort: "-updated_at,-id", Tiebreaker: "id"}
+	cursorScope := CursorScope{OperationID: listEbookAnnotationsOperation, Security: strconv.Itoa(scope.UserID) + "/" + scope.ProfileID + "/" + viewerScopeDigest(ctx), Filter: in.ContentID, Sort: "-updated_at,-id", Tiebreaker: "id"}
 	var after *handlers.EbookAnnotationPosition
 	if in.Cursor != "" {
 		after = &handlers.EbookAnnotationPosition{}

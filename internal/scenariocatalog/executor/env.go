@@ -62,6 +62,14 @@ import (
 	"github.com/Silo-Server/silo-server/migrations"
 )
 
+const (
+	fixtureNodeName     = "fixture-node"
+	fixtureDeviceC      = "fixture-device-c"
+	fixtureLoopbackIP   = "127.0.0.1"
+	usersTable          = "users"
+	serverSettingsTable = "server_settings"
+)
+
 // DatabaseEnv names the environment variable that points the executor at
 // its own scratch database. See the package documentation for why it is not
 // SILO_TEST_DATABASE_URL.
@@ -241,7 +249,7 @@ func New(t testing.TB) *Env {
 		DB:               deadPool,
 		SecretCipher:     cipher,
 		ClientIPResolver: clientip.NewResolver(nil),
-		NodeID:           "fixture-node",
+		NodeID:           fixtureNodeName,
 		PublicURL:        publicURL,
 	}
 	e.offline = httptest.NewServer(api.NewRouter(offlineDeps))
@@ -302,7 +310,7 @@ func New(t testing.TB) *Env {
 			DB:                pool,
 			SecretCipher:      cipher,
 			ClientIPResolver:  clientip.NewResolver(nil),
-			NodeID:            "fixture-node",
+			NodeID:            fixtureNodeName,
 			PublicURL:         publicURL,
 			UserStoreProvider: e.stores,
 			PolicySystem:      e.policy,
@@ -462,7 +470,7 @@ func (e *Env) Reseed() {
 	for i, d := range []userstore.DeviceEntry{
 		{ProfileID: profilePrimary, DeviceID: deviceIDA, DeviceName: "Fixture TV", DevicePlatform: "tvos"},
 		{ProfileID: profilePrimary, DeviceID: deviceIDB, DeviceName: "Fixture Phone", DevicePlatform: "ios"},
-		{ProfileID: profileSecondary, DeviceID: "fixture-device-c", DeviceName: "Fixture Tablet", DevicePlatform: "android"},
+		{ProfileID: profileSecondary, DeviceID: fixtureDeviceC, DeviceName: "Fixture Tablet", DevicePlatform: "android"},
 	} {
 		if err := registry.RegisterDevice(ctx, d); err != nil {
 			e.t.Fatalf("scenario executor: register device: %v", err)
@@ -476,7 +484,7 @@ func (e *Env) Reseed() {
 	// One login session per account for bearer principals.
 	for name, u := range e.users {
 		id := fmt.Sprintf("00000000-0000-4000-8000-0000000d%04d", u.ID)
-		if err := sessions.Create(ctx, models.AuthSession{ID: id, UserID: u.ID, DeviceName: "fixture-client", IPAddress: "127.0.0.1", ExpiresAt: time.Now().Add(24 * time.Hour)}); err != nil {
+		if err := sessions.Create(ctx, models.AuthSession{ID: id, UserID: u.ID, DeviceName: "fixture-client", IPAddress: fixtureLoopbackIP, ExpiresAt: time.Now().Add(24 * time.Hour)}); err != nil {
 			e.t.Fatalf("scenario executor: session for %s: %v", name, err)
 		}
 		e.sessions[name] = id
@@ -484,7 +492,7 @@ func (e *Env) Reseed() {
 	// A second, already-revoked session for the member so revoked_at has a
 	// non-null case in the session list.
 	revoked := "00000000-0000-4000-8000-00000000dead"
-	if err := sessions.Create(ctx, models.AuthSession{ID: revoked, UserID: member.ID, DeviceName: "fixture-old-client", IPAddress: "127.0.0.1", ExpiresAt: time.Now().Add(24 * time.Hour)}); err != nil {
+	if err := sessions.Create(ctx, models.AuthSession{ID: revoked, UserID: member.ID, DeviceName: "fixture-old-client", IPAddress: fixtureLoopbackIP, ExpiresAt: time.Now().Add(24 * time.Hour)}); err != nil {
 		e.t.Fatalf("scenario executor: revoked session: %v", err)
 	}
 	if err := sessions.Revoke(ctx, revoked); err != nil {
@@ -602,10 +610,10 @@ func (e *Env) guardScratchDatabase() {
 		{"media items", "media_items", "", nil},
 		{"media files", "media_files", "", nil},
 		{"library folders", "media_folders", "", nil},
-		{"non-fixture users", "users", "email IS NULL OR btrim(email::text) = '' OR email::text NOT ILIKE $1", []any{fixtureEmailPattern}},
+		{"non-fixture users", usersTable, "email IS NULL OR btrim(email::text) = '' OR email::text NOT ILIKE $1", []any{fixtureEmailPattern}},
 		// ratelimit.* keys are budgets the server seeds on startup, and
 		// ratelimit.auth.password_change.* would otherwise match `password`.
-		{"non-fixture server settings", "server_settings",
+		{"non-fixture server settings", serverSettingsTable,
 			"(key NOT LIKE 'ratelimit.%' AND key ~ '(secret|password|api_key|access_key|token_secret|jwt)' AND value <> '') OR (key = 'branding.server_name' AND value <> $1)",
 			[]any{serverName}},
 	}
@@ -739,7 +747,7 @@ func (e *Env) impersonationToken() string {
 	}
 	admin, member := e.users[fixtureAdmin], e.users[fixtureMember]
 	adminClaims := &auth.Claims{UserID: admin.ID, Role: admin.Role, SessionID: e.sessions[fixtureAdmin], TokenType: auth.TokenTypeAccess}
-	pair, _, _, err := e.auth.StartImpersonation(auth.WithClaims(e.ctx, adminClaims), admin.ID, member.ID, "fixture-client", "127.0.0.1")
+	pair, _, _, err := e.auth.StartImpersonation(auth.WithClaims(e.ctx, adminClaims), admin.ID, member.ID, "fixture-client", fixtureLoopbackIP)
 	if err != nil {
 		e.t.Fatalf("scenario executor: start impersonation: %v", err)
 	}

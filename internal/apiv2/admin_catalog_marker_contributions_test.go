@@ -3,12 +3,13 @@ package apiv2
 import (
 	"context"
 	"encoding/json"
-	"github.com/Silo-Server/silo-server/internal/api/handlers"
-	catalogsvc "github.com/Silo-Server/silo-server/internal/catalog"
-	"github.com/Silo-Server/silo-server/internal/markers"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Silo-Server/silo-server/internal/api/handlers"
+	catalogsvc "github.com/Silo-Server/silo-server/internal/catalog"
+	"github.com/Silo-Server/silo-server/internal/markers"
 )
 
 type fakeAdminMarkerContributions struct {

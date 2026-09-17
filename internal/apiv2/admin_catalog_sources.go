@@ -9,6 +9,10 @@ import (
 	"github.com/Silo-Server/silo-server/internal/api/handlers"
 )
 
+const (
+	catalogSourceField = "source"
+)
+
 const opListCatalogImportSources = "listCatalogImportSources"
 const opListLocalCatalogImportSources = "listLocalCatalogImportSources"
 
@@ -128,5 +132,5 @@ func registerAdminCatalogSources(reg *Registry) {
 	})
 }
 func adminCatalogSourceScope(ctx context.Context, op, filter string) CursorScope {
-	return CursorScope{OperationID: op, Security: strconv.Itoa(claimsFrom(ctx).UserID) + "/" + profileFrom(ctx), Filter: filter, Sort: "source", Tiebreaker: "key"}
+	return CursorScope{OperationID: op, Security: strconv.Itoa(claimsFrom(ctx).UserID) + "/" + profileFrom(ctx), Filter: filter, Sort: catalogSourceField, Tiebreaker: "key"}
 }

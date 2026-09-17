@@ -32,7 +32,7 @@ func (h *ThemeHandler) DownloadThemeFile(ctx context.Context, rawURL string) ([]
 		return nil, apiError(http.StatusBadRequest, "bad_request", "Missing url parameter")
 	}
 	parsed, err := url.Parse(rawURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+	if err != nil || (parsed.Scheme != eventsSchemeHTTP && parsed.Scheme != eventsSchemeHTTPS) {
 		return nil, apiError(http.StatusBadRequest, "bad_request", "Invalid URL")
 	}
 	if config.ValidateThemeRemoteURL(parsed) != nil {

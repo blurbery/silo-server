@@ -57,7 +57,7 @@ func (h *EbookReaderHandler) CreateReaderAnnotation(ctx context.Context, scope E
 func (h *EbookReaderHandler) createReaderAnnotation(ctx context.Context, userID int, profileID, contentID, id string, req EbookAnnotationCreate) (*EbookReaderAnnotation, bool, error) {
 	annotation, err := buildEbookReaderAnnotation(req)
 	if err != nil {
-		return nil, false, &APIError{Status: http.StatusBadRequest, Code: "bad_request", Message: err.Error()}
+		return nil, false, &APIError{Status: http.StatusBadRequest, Code: autoscanDeliveryBadRequest, Message: err.Error()}
 	}
 	now := time.Now().UTC()
 	annotation.UserID = userID
@@ -75,7 +75,7 @@ func (h *EbookReaderHandler) createReaderAnnotation(ctx context.Context, userID 
 	}
 	annotation.ID = uuid.NewString()
 	if err := h.AnnotationStore.Create(ctx, annotation); err != nil {
-		return nil, false, &APIError{Status: http.StatusInternalServerError, Code: "internal_error", Message: "Failed to create ebook annotation"}
+		return nil, false, &APIError{Status: http.StatusInternalServerError, Code: autoscanDeliveryInternalError, Message: "Failed to create ebook annotation"}
 	}
 	return &annotation, true, nil
 }
@@ -95,7 +95,7 @@ func (h *EbookReaderHandler) patchReaderAnnotation(ctx context.Context, userID i
 		}
 		merged, mergeErr := mergeEbookReaderAnnotationPatch(existing, req)
 		if mergeErr != nil {
-			callbackErr = &APIError{Status: http.StatusBadRequest, Code: "bad_request", Message: mergeErr.Error()}
+			callbackErr = &APIError{Status: http.StatusBadRequest, Code: autoscanDeliveryBadRequest, Message: mergeErr.Error()}
 			return EbookReaderAnnotation{}, callbackErr
 		}
 		merged.UpdatedAt = time.Now().UTC()
@@ -105,7 +105,7 @@ func (h *EbookReaderHandler) patchReaderAnnotation(ctx context.Context, userID i
 		return nil, callbackErr
 	}
 	if err != nil {
-		return nil, &APIError{Status: http.StatusInternalServerError, Code: "internal_error", Message: "Failed to update ebook annotation"}
+		return nil, &APIError{Status: http.StatusInternalServerError, Code: autoscanDeliveryInternalError, Message: "Failed to update ebook annotation"}
 	}
 	if updated == nil {
 		return nil, ErrEbookAnnotationNotFound

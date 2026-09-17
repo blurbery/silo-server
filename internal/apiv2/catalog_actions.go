@@ -303,7 +303,7 @@ func catalogActionProblem(err error) *Problem {
 		case apiErr.Status == http.StatusBadRequest:
 			return NewProblem(TypeValidationFailed, "The request did not pass validation; see errors.").
 				WithErrors(ProblemError{Location: locationBody, Code: codeInvalid, Detail: apiErr.Message})
-		case apiErr.Status == http.StatusServiceUnavailable && (apiErr.Code == "not_configured" || apiErr.Message == "Trailer refresh is not configured"):
+		case apiErr.Status == http.StatusServiceUnavailable && (apiErr.Code == StateNotConfigured || apiErr.Message == "Trailer refresh is not configured"):
 			return NewProblem(TypeCapabilityNotConfigured, apiErr.Message)
 		}
 	}

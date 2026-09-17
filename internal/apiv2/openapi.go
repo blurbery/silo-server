@@ -9,6 +9,10 @@ import (
 	contracts "github.com/Silo-Server/silo-server/contracts/api/v2"
 )
 
+const (
+	schemaTypeObject = "object"
+)
+
 // OpenAPIDocumentOutput is the getOpenAPIDocument response: the committed
 // artifact, byte for byte. The body is written by hand (Body is a writer
 // callback) so nothing re-encodes it; the digest a client computes over the
@@ -42,7 +46,7 @@ func registerOpenAPIDocument(reg *Registry) {
 			Description: "The OpenAPI 3.1 document, exactly the committed contracts/api/v2/openapi.json bytes.",
 			Content: map[string]*huma.MediaType{
 				mediaTypeJSON: {Schema: &huma.Schema{
-					Type:                 "object",
+					Type:                 schemaTypeObject,
 					Description:          "An OpenAPI 3.1 document. Its members are fixed by the OpenAPI specification, not by this contract.",
 					AdditionalProperties: true,
 					Extensions:           map[string]any{extExtensionBag: "openapi-document"},

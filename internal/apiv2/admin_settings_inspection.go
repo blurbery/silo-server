@@ -3,6 +3,7 @@ package apiv2
 import (
 	"context"
 	"errors"
+
 	"github.com/Silo-Server/silo-server/internal/api/handlers"
 	"github.com/Silo-Server/silo-server/internal/config"
 	"github.com/danielgtaylor/huma/v2"

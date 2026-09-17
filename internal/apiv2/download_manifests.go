@@ -16,6 +16,10 @@ import (
 	"github.com/Silo-Server/silo-server/internal/downloads"
 )
 
+const (
+	listDownloadBatchManifestsOperation = "listDownloadBatchManifests"
+)
+
 const maxDownloadManifestBytes = 1 << 20
 
 type DownloadManifestService interface {
@@ -106,7 +110,7 @@ func registerDownloadManifests(reg *Registry) {
 	read.Errors = []int{409, 413}
 	Register(reg, read, reg.getDownloadManifest)
 	cursors := NewCursors(reg.deps.CursorSecret)
-	page := Operation{Operation: humaOp(http.MethodGet, Prefix+"/downloads/batches/{batch_id}/manifests", "listDownloadBatchManifests", "downloads", "Page complete manifests with explicit skipped results; skipped rows still advance the cursor."), Class: ClassProfileScoped, ServiceBacked: true}
+	page := Operation{Operation: humaOp(http.MethodGet, Prefix+"/downloads/batches/{batch_id}/manifests", listDownloadBatchManifestsOperation, "downloads", "Page complete manifests with explicit skipped results; skipped rows still advance the cursor."), Class: ClassProfileScoped, ServiceBacked: true}
 	Register(reg, page, func(ctx context.Context, in *DownloadManifestPageInput) (*DownloadManifestPageOutput, error) {
 		return reg.listDownloadBatchManifests(ctx, cursors, in)
 	})
@@ -228,7 +232,7 @@ func (reg *Registry) listDownloadBatchManifests(ctx context.Context, cursors *Cu
 		return nil, p
 	}
 	filter, _ := json.Marshal([]string{in.DeviceID, in.BatchID})
-	scope := CursorScope{OperationID: "listDownloadBatchManifests", Security: strconv.Itoa(user) + "/" + profile + "/" + viewerScopeDigest(ctx), Filter: string(filter), Sort: "-created_at,-id", Tiebreaker: "id"}
+	scope := CursorScope{OperationID: listDownloadBatchManifestsOperation, Security: strconv.Itoa(user) + "/" + profile + "/" + viewerScopeDigest(ctx), Filter: string(filter), Sort: loginSessionCursorSort, Tiebreaker: "id"}
 	var after *downloads.RegistryPosition
 	if in.Cursor != "" {
 		after = &downloads.RegistryPosition{}
@@ -244,7 +248,7 @@ func (reg *Registry) listDownloadBatchManifests(ctx context.Context, cursors *Cu
 	for _, row := range page.Items {
 		item, err := downloadManifestOf(row)
 		if err != nil {
-			reason := "error"
+			reason := adminCollectionSyncError
 			if p, ok := errors.AsType[*Problem](err); ok && p.Status == http.StatusRequestEntityTooLarge {
 				reason = "too_large"
 			}

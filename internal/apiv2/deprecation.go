@@ -61,7 +61,7 @@ func (d *Deprecation) validate() error {
 	if err != nil {
 		return fmt.Errorf("deprecation link %q is not a URL: %w", d.Link, err)
 	}
-	if u.Scheme != "https" || !strings.HasPrefix(d.Link, DocsOrigin) {
+	if u.Scheme != schemeHTTPS || !strings.HasPrefix(d.Link, DocsOrigin) {
 		return fmt.Errorf("deprecation link %q must be an absolute https URL under %s", d.Link, DocsOrigin)
 	}
 	if d.Sunset != nil && d.Sunset.Before(d.At) {

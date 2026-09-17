@@ -11,6 +11,10 @@ import (
 	"github.com/Silo-Server/silo-server/internal/historyimport"
 )
 
+const (
+	schemeHTTPS = "https"
+)
+
 // AdminHistoryImportService keeps administrative configuration separate from
 // account-owned import credentials and runs.
 type AdminHistoryImportService interface {
@@ -401,7 +405,7 @@ func adminHistoryGuard(match, none string, tag EntityTag, revision int64) (int64
 
 func adminHistorySafeSourceURL(raw string) (string, bool) {
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != schemeHTTPS) {
 		return "", true
 	}
 	unsafe := parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != ""

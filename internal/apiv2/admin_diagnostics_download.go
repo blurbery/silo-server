@@ -16,6 +16,10 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const (
+	filenameField = "filename"
+)
+
 type AdminDiagnosticDownloadService interface {
 	OpenAdminDiagnosticDownload(context.Context, string) (handlers.AdminDiagnosticDownload, error)
 }
@@ -34,12 +38,12 @@ func adminDiagnosticDownloadProblem(err error) *Problem {
 }
 func registerAdminDiagnosticDownload(reg *Registry) {
 	operation := humaOp("GET", Prefix+"/admin/diagnostics/reports/{id}/download", "downloadAdminDiagnosticReport", "admin-observability", "Stream a ready diagnostic bundle through the API host. Range requests receive the complete bundle; no presigned URL is returned.")
-	operation.Parameters = []*huma.Param{{Name: "id", In: "path", Required: true, Schema: &huma.Schema{Type: "string", MinLength: new(1), MaxLength: new(128)}}}
+	operation.Parameters = []*huma.Param{{Name: "id", In: paramInPath, Required: true, Schema: &huma.Schema{Type: schemaTypeString, MinLength: new(1), MaxLength: new(128)}}}
 	operation.Responses = map[string]*huma.Response{
-		"200": {Description: "Complete gzip-compressed diagnostic bundle", Content: map[string]*huma.MediaType{diagnostics.ReportDownloadContentType: {Schema: &huma.Schema{Type: "string", Format: "binary"}}}, Headers: map[string]*huma.Param{"Content-Disposition": {Schema: &huma.Schema{Type: "string"}}, "Content-Length": {Schema: &huma.Schema{Type: "integer"}}, "Accept-Ranges": {Schema: &huma.Schema{Type: "string"}}}},
+		"200": {Description: "Complete gzip-compressed diagnostic bundle", Content: map[string]*huma.MediaType{diagnostics.ReportDownloadContentType: {Schema: &huma.Schema{Type: schemaTypeString, Format: artworkBinaryFormat}}}, Headers: map[string]*huma.Param{directDisposition: {Schema: &huma.Schema{Type: schemaTypeString}}, adminSubtitleLengthHeader: {Schema: &huma.Schema{Type: artworkIntegerType}}, directAcceptRanges: {Schema: &huma.Schema{Type: schemaTypeString}}}},
 	}
 	for _, status := range []int{400, 404, 409, 500, 503} {
-		operation.Responses[strconv.Itoa(status)] = &huma.Response{Description: http.StatusText(status), Content: map[string]*huma.MediaType{problemContentType: {Schema: &huma.Schema{Ref: "#/components/schemas/Problem"}}}}
+		operation.Responses[strconv.Itoa(status)] = &huma.Response{Description: http.StatusText(status), Content: map[string]*huma.MediaType{problemContentType: {Schema: &huma.Schema{Ref: webhookProblemSchema}}}}
 	}
 	RegisterRaw(reg, RawOperation{Operation: Operation{Operation: operation, Class: ClassActingAdmin, DemoRestricted: isMutatingMethod(operation.Method), ServiceBacked: true}, Protocol: "diagnostic-bundle", Reason: "The existing administrator consumer downloads a gzip archive; bytes must not pass through JSON encoding or response buffering."}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
@@ -62,11 +66,11 @@ func registerAdminDiagnosticDownload(reg *Registry) {
 		}
 		defer func() { _ = download.Body.Close() }()
 		w.Header().Set("Content-Type", diagnostics.ReportDownloadContentType)
-		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": download.Filename}))
+		w.Header().Set(directDisposition, mime.FormatMediaType("attachment", map[string]string{filenameField: download.Filename}))
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Accept-Ranges", "none")
+		w.Header().Set(directAcceptRanges, "none")
 		if download.Size != nil && *download.Size >= 0 {
-			w.Header().Set("Content-Length", strconv.FormatInt(*download.Size, 10))
+			w.Header().Set(adminSubtitleLengthHeader, strconv.FormatInt(*download.Size, 10))
 		}
 		w.WriteHeader(http.StatusOK)
 		if _, err := io.Copy(w, download.Body); err != nil {

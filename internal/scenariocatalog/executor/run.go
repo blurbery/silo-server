@@ -23,6 +23,19 @@ import (
 	"github.com/Silo-Server/silo-server/internal/scenariocatalog"
 )
 
+const (
+	secondaryProfileName    = "secondary"
+	primaryProfilePrincipal = "primary_profile"
+)
+
+const (
+	apiKeyAuthClass        = "api_key"
+	authenticatedPrincipal = "authenticated"
+	profilePrincipal       = "profile"
+	primaryProfileName     = "primary"
+	actingAdminPrincipal   = "acting_admin"
+)
+
 const publicPrincipal = "public"
 
 // Result is the outcome of one scenario.
@@ -550,9 +563,9 @@ func (e *Env) principalHeaders(p scenariocatalog.Principal) (http.Header, error)
 	defaults, ok := principalDefaults[p.Class]
 	defaultUser, defaultProfile := defaults[0], defaults[1]
 	switch {
-	case p.Class == "public":
+	case p.Class == publicPrincipal:
 		return h, nil
-	case p.Class == "api_key":
+	case p.Class == apiKeyAuthClass:
 		key := e.apiKeys[strings.Join(p.Scopes, ",")]
 		if key == "" {
 			return nil, fmt.Errorf("no fixture api key for scopes %v", p.Scopes)
@@ -702,14 +715,14 @@ func (e *Env) buildRequest(base, method string, r scenariocatalog.Request, princ
 // is an ordinary member so the demo guard applies; catalogs pair it with the
 // demo.enabled setting.
 var principalDefaults = map[string][2]string{
-	"authenticated":   {fixtureMember, ""},
-	"profile":         {fixtureMember, "secondary"},
-	"child_profile":   {fixtureMember, "child"},
-	"primary_profile": {fixtureMember, "primary"},
-	"admin":           {fixtureAdmin, ""},
-	"acting_admin":    {fixtureAdmin, "admin_primary"},
-	"access_group":    {fixtureGrouped, "grouped_primary"},
-	"demo":            {fixtureMember, ""},
+	authenticatedPrincipal:  {fixtureMember, ""},
+	profilePrincipal:        {fixtureMember, secondaryProfileName},
+	"child_profile":         {fixtureMember, "child"},
+	primaryProfilePrincipal: {fixtureMember, primaryProfileName},
+	fixtureAdmin:            {fixtureAdmin, ""},
+	actingAdminPrincipal:    {fixtureAdmin, "admin_primary"},
+	"access_group":          {fixtureGrouped, "grouped_primary"},
+	"demo":                  {fixtureMember, ""},
 }
 
 const contentTypeJSON = "application/json"

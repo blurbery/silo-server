@@ -11,6 +11,10 @@ import (
 	"github.com/Silo-Server/silo-server/internal/downloads"
 )
 
+const (
+	syncDownloadSubscriptionOperation = "syncDownloadSubscription"
+)
+
 type DownloadSubscriptionSyncService interface {
 	SyncSubscriptionPage(context.Context, int, string, string, string, *catalogpkg.EpisodePagePosition, int, catalogpkg.AccessFilter, func(*downloads.Subscription) error) (downloads.SubscriptionSyncPage, error)
 }
@@ -33,7 +37,7 @@ type DownloadSubscriptionSyncOutput struct{ Body DownloadSubscriptionSync }
 
 func registerDownloadSubscriptionSync(reg *Registry) {
 	cursors := NewCursors(reg.deps.CursorSecret)
-	op := Operation{Operation: humaOp(http.MethodPost, Prefix+"/downloads/subscriptions/sync", "syncDownloadSubscription", "downloads", "Register one bounded episode page for a current device monitor. Continue every page, even if no episodes were registered."), Class: ClassProfileScoped, ServiceBacked: true, DemoRestricted: true, RetrySafety: RetrySafetyNaturalIdempotent}
+	op := Operation{Operation: humaOp(http.MethodPost, Prefix+"/downloads/subscriptions/sync", syncDownloadSubscriptionOperation, "downloads", "Register one bounded episode page for a current device monitor. Continue every page, even if no episodes were registered."), Class: ClassProfileScoped, ServiceBacked: true, DemoRestricted: true, RetrySafety: RetrySafetyNaturalIdempotent}
 	op.MaxBodyBytes = 4096
 	op.Errors = []int{409}
 	Register(reg, op, func(ctx context.Context, in *DownloadSubscriptionSyncInput) (*DownloadSubscriptionSyncOutput, error) {
@@ -49,7 +53,7 @@ func (reg *Registry) syncDownloadSubscription(ctx context.Context, cursors *Curs
 		return nil, p
 	}
 	filter, _ := json.Marshal([]string{in.DeviceID, in.Body.SubscriptionID, in.Body.ETag})
-	scope := CursorScope{OperationID: "syncDownloadSubscription", Security: strconv.Itoa(user) + "/" + profile + "/" + viewerScopeDigest(ctx), Filter: string(filter), Sort: "season,episode,id", Tiebreaker: "id"}
+	scope := CursorScope{OperationID: syncDownloadSubscriptionOperation, Security: strconv.Itoa(user) + "/" + profile + "/" + viewerScopeDigest(ctx), Filter: string(filter), Sort: "season,episode,id", Tiebreaker: "id"}
 	var after *catalogpkg.EpisodePagePosition
 	if in.Cursor != "" {
 		after = &catalogpkg.EpisodePagePosition{}

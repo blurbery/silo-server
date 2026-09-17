@@ -13,6 +13,15 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const (
+	mediaTypePNG = "image/png"
+	mediaTypeSVG = "image/svg+xml"
+)
+
+const (
+	kindField = "kind"
+)
+
 type BrandingService interface {
 	HasStorage() bool
 	Load(context.Context) branding.Snapshot
@@ -96,16 +105,16 @@ func registerBranding(reg *Registry) {
 		raw := op("/branding/assets/{kind}", id, "Read a public branding image with content-version validation.")
 		raw.Method = method
 		raw.Parameters = []*huma.Param{
-			{Name: "kind", In: "path", Required: true, Schema: &huma.Schema{Type: "string", Enum: []any{"wordmark", "wordmark_light", "mark", "mark_light", "favicon", "login_bg"}}},
-			{Name: "v", In: "query", Schema: &huma.Schema{Type: "string"}, Description: "Content reference returned by branding discovery; a stale reference returns 404."},
-			{Name: "If-Match", In: "header", Schema: &huma.Schema{Type: "string"}},
-			{Name: "If-None-Match", In: "header", Schema: &huma.Schema{Type: "string"}},
+			{Name: kindField, In: paramInPath, Required: true, Schema: &huma.Schema{Type: schemaTypeString, Enum: []any{"wordmark", "wordmark_light", "mark", "mark_light", "favicon", "login_bg"}}},
+			{Name: "v", In: artworkParamQuery, Schema: &huma.Schema{Type: schemaTypeString}, Description: "Content reference returned by branding discovery; a stale reference returns 404."},
+			{Name: ifMatchField, In: paramInHeader, Schema: &huma.Schema{Type: schemaTypeString}},
+			{Name: ifNoneMatchField, In: paramInHeader, Schema: &huma.Schema{Type: schemaTypeString}},
 		}
-		headers := map[string]*huma.Param{"Content-Length": {Schema: &huma.Schema{Type: "string"}}, "ETag": {Schema: &huma.Schema{Type: "string"}}, "Cache-Control": {Schema: &huma.Schema{Type: "string"}}, "Content-Security-Policy": {Schema: &huma.Schema{Type: "string"}}, "X-Content-Type-Options": {Schema: &huma.Schema{Type: "string"}}}
+		headers := map[string]*huma.Param{adminSubtitleLengthHeader: {Schema: &huma.Schema{Type: schemaTypeString}}, etagField: {Schema: &huma.Schema{Type: schemaTypeString}}, adminSubtitleCacheHeader: {Schema: &huma.Schema{Type: schemaTypeString}}, "Content-Security-Policy": {Schema: &huma.Schema{Type: schemaTypeString}}, "X-Content-Type-Options": {Schema: &huma.Schema{Type: schemaTypeString}}}
 		content := map[string]*huma.MediaType{}
 		if method == http.MethodGet {
-			for _, media := range []string{"image/png", "image/webp", "image/svg+xml", "image/x-icon", "application/octet-stream"} {
-				content[media] = &huma.MediaType{Schema: &huma.Schema{Type: "string", Format: "binary"}}
+			for _, media := range []string{mediaTypePNG, "image/webp", mediaTypeSVG, "image/x-icon", directMediaBinary} {
+				content[media] = &huma.MediaType{Schema: &huma.Schema{Type: schemaTypeString, Format: artworkBinaryFormat}}
 			}
 		}
 		raw.Responses = map[string]*huma.Response{
@@ -119,7 +128,7 @@ func registerBranding(reg *Registry) {
 	}
 }
 func (reg *Registry) serveBrandingAsset(w http.ResponseWriter, r *http.Request) {
-	kind := chi.URLParam(r, "kind")
+	kind := chi.URLParam(r, kindField)
 	if !branding.IsValidKind(kind) {
 		writeProblem(w, r, NewProblem(TypeNotFound, "Unknown branding asset."))
 		return
@@ -147,15 +156,15 @@ func (reg *Registry) serveBrandingAsset(w http.ResponseWriter, r *http.Request) 
 	}
 	tag := EntityTag{Opaque: ref}
 	// Immutable caching is safe only for an exact content-version request.
-	w.Header().Set("Cache-Control", "public, no-cache")
+	w.Header().Set(adminSubtitleCacheHeader, "public, no-cache")
 	if version != "" {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Header().Set(adminSubtitleCacheHeader, "public, max-age=31536000, immutable")
 	}
-	w.Header().Set("ETag", tag.String())
+	w.Header().Set(etagField, tag.String())
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", branding.AssetContentSecurityPolicy)
-	if matched, p := EvaluateReadPreconditions(r.Header.Get("If-Match"), r.Header.Get("If-None-Match"), tag); p != nil {
-		w.Header().Set("Cache-Control", "no-store")
+	if matched, p := EvaluateReadPreconditions(r.Header.Get(ifMatchField), r.Header.Get(ifNoneMatchField), tag); p != nil {
+		w.Header().Set(adminSubtitleCacheHeader, "no-store")
 		writeProblem(w, r, p)
 		return
 	} else if matched {
@@ -163,7 +172,7 @@ func (reg *Registry) serveBrandingAsset(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.Header().Set("Content-Type", media)
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.Header().Set(adminSubtitleLengthHeader, strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(data)

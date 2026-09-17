@@ -2,11 +2,12 @@ package apiv2
 
 import (
 	"context"
+	"net/http"
+	"strconv"
+
 	"github.com/Silo-Server/silo-server/internal/api/handlers"
 	catalogsvc "github.com/Silo-Server/silo-server/internal/catalog"
 	"github.com/Silo-Server/silo-server/internal/markers"
-	"net/http"
-	"strconv"
 )
 
 type AdminMarkerContributionsService interface {

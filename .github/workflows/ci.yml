@@ -113,7 +113,7 @@ jobs:
           BASE_REF: ${{ github.base_ref || github.event.repository.default_branch }}
         run: |
           git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
-          golangci-lint run --new-from-merge-base="origin/${BASE_REF}" ./...
+          golangci-lint run --new-from-merge-base="origin/${BASE_REF}" --max-issues-per-linter=0 --max-same-issues=0 --uniq-by-line=false ./...
 
       # A manifest change that does not regenerate leaves every client reading
       # stale keys, which the contract exists to prevent.

@@ -10,6 +10,10 @@ import (
 	"github.com/Silo-Server/silo-server/internal/downloads"
 )
 
+const (
+	listDownloadsOperation = "listDownloads"
+)
+
 type DownloadRegistryService interface {
 	Capability(context.Context, int) (downloads.Capability, error)
 	ListPage(context.Context, int, string, string, *downloads.RegistryPosition, int) ([]*downloads.Download, error)
@@ -85,7 +89,7 @@ type DownloadCapabilityOutput struct {
 
 func registerDownloadRegistry(reg *Registry) {
 	cursors := NewCursors(reg.deps.CursorSecret)
-	Register(reg, Operation{Operation: humaOp(http.MethodGet, Prefix+"/downloads", "listDownloads", "downloads", "Page device-managed downloads or account ephemeral downloads."), Class: ClassProfileScoped, ServiceBacked: true}, func(ctx context.Context, in *DownloadRegistryInput) (*DownloadRegistryOutput, error) {
+	Register(reg, Operation{Operation: humaOp(http.MethodGet, Prefix+"/downloads", listDownloadsOperation, "downloads", "Page device-managed downloads or account ephemeral downloads."), Class: ClassProfileScoped, ServiceBacked: true}, func(ctx context.Context, in *DownloadRegistryInput) (*DownloadRegistryOutput, error) {
 		return reg.listDownloads(ctx, cursors, in)
 	})
 	op := Operation{Operation: humaOp(http.MethodPatch, Prefix+"/downloads/{id}", "reportDownloadStatus", "downloads", "Record a revision-bound local status event; older or equal events return current state."), Class: ClassProfileScoped, ServiceBacked: true, RetrySafety: RetrySafetyDomainIdentity}
@@ -135,7 +139,7 @@ func (reg *Registry) listDownloads(ctx context.Context, cursors *Cursors, in *Do
 	if p != nil {
 		return nil, p
 	}
-	scope := CursorScope{OperationID: "listDownloads", Security: strconv.Itoa(user) + "/" + profile + "/" + viewerScopeDigest(ctx), Filter: in.DeviceID, Sort: "-created_at,-id", Tiebreaker: "id"}
+	scope := CursorScope{OperationID: listDownloadsOperation, Security: strconv.Itoa(user) + "/" + profile + "/" + viewerScopeDigest(ctx), Filter: in.DeviceID, Sort: loginSessionCursorSort, Tiebreaker: "id"}
 	var after *downloads.RegistryPosition
 	if in.Cursor != "" {
 		after = &downloads.RegistryPosition{}
@@ -225,5 +229,5 @@ func (reg *Registry) getDownloadCapability(ctx context.Context, _ *CapabilityInp
 		// other demo-restricted capability (notification email verification).
 		out.Allowed = new(view.DownloadAllowed && !demoRestricted(ctx, reg.deps.DemoSettings))
 	}
-	return &DownloadCapabilityOutput{CacheControl: "private, no-cache", Body: out}, nil
+	return &DownloadCapabilityOutput{CacheControl: cacheControlPrivateNoCache, Body: out}, nil
 }

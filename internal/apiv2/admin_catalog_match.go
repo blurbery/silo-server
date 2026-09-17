@@ -2,6 +2,7 @@ package apiv2
 
 import (
 	"context"
+
 	"github.com/Silo-Server/silo-server/internal/api/handlers"
 	"github.com/Silo-Server/silo-server/internal/metadata"
 	"github.com/Silo-Server/silo-server/internal/policy"

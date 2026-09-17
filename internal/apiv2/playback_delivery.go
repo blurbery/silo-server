@@ -92,15 +92,15 @@ func registerPlaybackDelivery(reg *Registry) {
 		media                      []string
 		ranges                     bool
 	}{
-		{http.MethodGet, "/stream/{session_id}", "getPlaybackMedia", "media-bytes", handlers.Original, []string{"video/mp4", "video/x-matroska", "video/webm", "video/x-msvideo", "video/quicktime", "video/mp2t", "video/x-flv", "video/x-ms-wmv", "audio/mp4", "audio/mpeg", "audio/flac", "audio/ogg", "audio/wav", "audio/aac", playbackMediaBinary, "multipart/byteranges"}, true},
+		{http.MethodGet, "/stream/{session_id}", "getPlaybackMedia", "media-bytes", handlers.Original, []string{"video/mp4", "video/x-matroska", "video/webm", "video/x-msvideo", "video/quicktime", "video/mp2t", "video/x-flv", "video/x-ms-wmv", "audio/mp4", "audio/mpeg", "audio/flac", "audio/ogg", "audio/wav", "audio/aac", playbackMediaBinary, directMultipart}, true},
 		{http.MethodHead, "/stream/{session_id}", "headPlaybackMedia", "media-bytes", handlers.Original, nil, true},
 		{http.MethodGet, "/playback/transcode/{session_id}/master.m3u8", "getPlaybackManifest", "hls", handlers.Manifest, []string{"application/vnd.apple.mpegurl"}, false},
-		{http.MethodGet, "/playback/transcode/{session_id}/segment/{name}", playbackSegmentOperation, "hls", handlers.Segment, []string{"video/mp4", "video/mp2t", playbackMediaBinary, "multipart/byteranges"}, true},
+		{http.MethodGet, "/playback/transcode/{session_id}/segment/{name}", playbackSegmentOperation, "hls", handlers.Segment, []string{"video/mp4", "video/mp2t", playbackMediaBinary, directMultipart}, true},
 		{http.MethodGet, "/stream/{session_id}/subtitles/{track}", playbackSubtitleOperation, "subtitle-sidecar", handlers.Subtitle, []string{playbackSubtitleVTT, playbackSubtitleSSA, playbackSubtitleSubrip, playbackMediaBinary}, false},
 		{http.MethodHead, "/stream/{session_id}/subtitles/{track}", playbackSubtitleHead, "subtitle-sidecar", handlers.Subtitle, nil, false},
 	} {
 		params := []*huma.Param{
-			{Name: "session_id", In: playbackParamPath, Required: true, Schema: &huma.Schema{Type: huma.TypeString, MinLength: new(1)}},
+			{Name: adminLogsQuerySessionID, In: playbackParamPath, Required: true, Schema: &huma.Schema{Type: huma.TypeString, MinLength: new(1)}},
 			{Name: playbackAccountToken, In: playbackParamQuery, Description: "Media-element fallback for the account bearer token when an Authorization header cannot be set. Header-authenticated media requires the Authorization header and the profile selector.", Schema: &huma.Schema{Type: huma.TypeString}},
 			{Name: "st", In: playbackParamQuery, Description: "Signed stream reference the plan URL carries; it reconstructs the session after a restart. Omitted for header-authenticated media. Account and viewer authorization are always required.", Schema: &huma.Schema{Type: huma.TypeString}},
 		}
@@ -127,9 +127,9 @@ func registerPlaybackDelivery(reg *Registry) {
 			headers["Accept-Ranges"] = &huma.Param{Schema: &huma.Schema{Type: huma.TypeString}}
 			headers[etagField] = &huma.Param{Schema: &huma.Schema{Type: huma.TypeString}}
 			headers[playbackLastModified] = &huma.Param{Schema: &huma.Schema{Type: huma.TypeString}}
-			responses["206"] = &huma.Response{Description: "Requested byte range", Content: content, Headers: map[string]*huma.Param{"Content-Range": {Schema: &huma.Schema{Type: huma.TypeString}}}}
+			responses["206"] = &huma.Response{Description: "Requested byte range", Content: content, Headers: map[string]*huma.Param{directContentRange: {Schema: &huma.Schema{Type: huma.TypeString}}}}
 			responses["304"] = &huma.Response{Description: "The authorized representation has not changed"}
-			params = append(params, &huma.Param{Name: ifMatchField, In: paramInHeader, Schema: &huma.Schema{Type: huma.TypeString}}, &huma.Param{Name: "If-Unmodified-Since", In: paramInHeader, Schema: &huma.Schema{Type: huma.TypeString}}, &huma.Param{Name: "Range", In: paramInHeader, Schema: &huma.Schema{Type: huma.TypeString}}, &huma.Param{Name: "If-Range", In: paramInHeader, Schema: &huma.Schema{Type: huma.TypeString}}, &huma.Param{Name: ifNoneMatchField, In: paramInHeader, Schema: &huma.Schema{Type: huma.TypeString}}, &huma.Param{Name: "If-Modified-Since", In: paramInHeader, Schema: &huma.Schema{Type: huma.TypeString}})
+			params = append(params, &huma.Param{Name: ifMatchField, In: paramInHeader, Schema: &huma.Schema{Type: huma.TypeString}}, &huma.Param{Name: directIfUnmodified, In: paramInHeader, Schema: &huma.Schema{Type: huma.TypeString}}, &huma.Param{Name: artworkRangeHeader, In: paramInHeader, Schema: &huma.Schema{Type: huma.TypeString}}, &huma.Param{Name: directIfRange, In: paramInHeader, Schema: &huma.Schema{Type: huma.TypeString}}, &huma.Param{Name: ifNoneMatchField, In: paramInHeader, Schema: &huma.Schema{Type: huma.TypeString}}, &huma.Param{Name: directIfModified, In: paramInHeader, Schema: &huma.Schema{Type: huma.TypeString}})
 		}
 		statuses := []int{400, 404, 409, 410, 422, 500, 503}
 		if route.ranges {
@@ -142,7 +142,7 @@ func registerPlaybackDelivery(reg *Registry) {
 			responses[strconv.Itoa(status)] = &huma.Response{Description: http.StatusText(status), Content: map[string]*huma.MediaType{problemContentType: {Schema: reg.api.OpenAPI().Components.Schemas.Schema(reflect.TypeFor[Problem](), true, "")}}}
 		}
 		if route.ranges {
-			responses["416"].Headers = map[string]*huma.Param{"Content-Range": {Schema: &huma.Schema{Type: huma.TypeString}}}
+			responses["416"].Headers = map[string]*huma.Param{directContentRange: {Schema: &huma.Schema{Type: huma.TypeString}}}
 		}
 		reason := "Token-authorized media retains native byte, range, HEAD and HLS semantics without JSON buffering."
 		if subtitle {
@@ -150,7 +150,7 @@ func registerPlaybackDelivery(reg *Registry) {
 		}
 		raw := RawOperation{Operation: Operation{Operation: huma.Operation{Method: route.method, Path: Prefix + route.path, OperationID: route.id, Tags: []string{playbackTag}, Parameters: params, Responses: responses}, Class: ClassProfileScoped, ProfileOptional: true, ServiceBacked: true}, Protocol: route.protocol, Reason: reason}
 		RegisterRaw(reg, raw, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !playbackUUID(chi.URLParam(r, "session_id")) {
+			if !playbackUUID(chi.URLParam(r, adminLogsQuerySessionID)) {
 				writeProblem(w, r, validationProblem("path.session_id", "invalid", "Expected a canonical UUID."))
 				return
 			}

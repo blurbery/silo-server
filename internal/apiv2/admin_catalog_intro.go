@@ -5,6 +5,15 @@ import (
 	"net/http"
 )
 
+const (
+	refreshAdminEpisodeMarkersOperation = "refreshAdminEpisodeMarkers"
+	markerRefreshAction                 = "refresh"
+)
+
+const (
+	redetectAdminEpisodeIntroOperation = "redetectAdminEpisodeIntro"
+)
+
 type AdminEpisodeMarkersService interface {
 	RefreshEpisodeMarkers(context.Context, string, string) (string, error)
 }
@@ -18,7 +27,7 @@ type AdminEpisodeMarkersOutput struct{ Body AdminEpisodeMarkersStatus }
 
 func registerAdminCatalogIntro(reg *Registry) {
 	for _, action := range []struct{ suffix, id, action string }{
-		{"refresh-markers", "refreshAdminEpisodeMarkers", "refresh"}, {"redetect-intro", "redetectAdminEpisodeIntro", "redetect"},
+		{"refresh-markers", refreshAdminEpisodeMarkersOperation, markerRefreshAction}, {"redetect-intro", redetectAdminEpisodeIntroOperation, "redetect"},
 	} {
 		op := Operation{Operation: humaOp(http.MethodPost, Prefix+"/admin/items/{id}/"+action.suffix, action.id, "admin-catalog", "Request local episode marker analysis; duplicate in-process work is coalesced."), Class: ClassActingAdmin, ServiceBacked: true, DemoRestricted: true, RetrySafety: RetrySafetyNonRetryable}
 		op.DefaultStatus = http.StatusAccepted

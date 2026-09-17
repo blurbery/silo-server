@@ -247,7 +247,7 @@ func checkAITranscriptionConnection(ctx context.Context, cfg *config.Config) con
 	if err != nil {
 		message := transcriptionCheckFailureMessage(err)
 		if message == "" {
-			message = "Connection check failed. Verify the submitted settings and provider availability."
+			message = connectionCheckFailedMessage
 		}
 		// Both the legacy handler and native service consume this result.
 		// Never put provider-controlled error text in the response.

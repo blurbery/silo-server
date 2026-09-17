@@ -73,7 +73,7 @@ func (h *SectionSettingsHandler) HandlePut(w http.ResponseWriter, r *http.Reques
 func (h *SectionSettingsHandler) UpdateAdminSectionSettings(ctx context.Context, enabled bool, guard func(bool) error) error {
 	updater, ok := h.Settings.(serverSettingsAtomicUpdater)
 	if !ok {
-		return &APIError{Status: http.StatusServiceUnavailable, Code: "unavailable", Message: "Atomic settings store not configured"}
+		return &APIError{Status: http.StatusServiceUnavailable, Code: AdminTerminateDeliveryUnavailable, Message: "Atomic settings store not configured"}
 	}
 	return updater.UpdateAtomic(ctx, func(current map[string]string) (map[string]string, error) {
 		before := current[SectionsAllowProfileCustomSettingKey] == "true"

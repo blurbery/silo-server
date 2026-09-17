@@ -3,10 +3,11 @@ package apiv2
 import (
 	"context"
 	"encoding/json"
+	"testing"
+
 	"github.com/Silo-Server/silo-server/internal/api/handlers"
 	"github.com/Silo-Server/silo-server/internal/metadata"
 	"github.com/Silo-Server/silo-server/internal/policy"
-	"testing"
 )
 
 type fakeAdminMatch struct {

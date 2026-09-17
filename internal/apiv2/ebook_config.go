@@ -65,7 +65,7 @@ func ebookConfigTag(userID int, profileID, contentID string, current *handlers.E
 	return EntityTag{Opaque: hex.EncodeToString(sum[:])}
 }
 func ebookConfigOutput(userID int, profileID, contentID string, current *handlers.EbookReaderConfig) (*EbookConfigOutput, error) {
-	out := &EbookConfigOutput{ETag: ebookConfigTag(userID, profileID, contentID, current).String(), CacheControl: "private, no-cache", Body: EbookConfig{ContentID: contentID, Config: ReaderConfigValues{}}}
+	out := &EbookConfigOutput{ETag: ebookConfigTag(userID, profileID, contentID, current).String(), CacheControl: cacheControlPrivateNoCache, Body: EbookConfig{ContentID: contentID, Config: ReaderConfigValues{}}}
 	if current != nil {
 		if err := json.Unmarshal(current.Config, &out.Body.Config); err != nil {
 			return nil, serviceProblem(err)

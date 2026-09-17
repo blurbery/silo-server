@@ -14,6 +14,10 @@ import (
 	"github.com/Silo-Server/silo-server/internal/models"
 )
 
+const (
+	invitationKind = "invitation"
+)
+
 const listAdminInvitationsOperation = "listAdminInvitations"
 
 // InvitationService uses the same transactional lifecycle as legacy handlers.
@@ -186,7 +190,7 @@ func registerInvitations(reg *Registry) {
 		if public {
 			o.Class = ClassPublic
 			o.DemoRestricted = false
-			o.RateLimitBucket = "invitation"
+			o.RateLimitBucket = invitationKind
 		}
 		if method == http.MethodPost {
 			o.Errors = append(o.Errors, http.StatusNotImplemented)
@@ -247,7 +251,7 @@ func registerInvitations(reg *Registry) {
 		if p != nil {
 			return nil, p
 		}
-		scope := CursorScope{OperationID: listAdminInvitationsOperation, Security: strconv.Itoa(claimsFrom(ctx).UserID) + "/" + profileFrom(ctx), Filter: "v1/limit=" + strconv.Itoa(in.Limit), Sort: "created_at:desc", Tiebreaker: "id:desc"}
+		scope := CursorScope{OperationID: listAdminInvitationsOperation, Security: strconv.Itoa(claimsFrom(ctx).UserID) + "/" + profileFrom(ctx), Filter: "v1/limit=" + strconv.Itoa(in.Limit), Sort: adminSubtitleListSort, Tiebreaker: adminSubtitleListTiebreaker}
 		var after *invitations.PageKey
 		if in.Cursor != "" {
 			after = new(invitations.PageKey)

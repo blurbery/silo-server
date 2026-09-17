@@ -17,6 +17,10 @@ import (
 	"github.com/Silo-Server/silo-server/internal/userstore"
 )
 
+const (
+	settingsClearAction = "clear"
+)
+
 // This file is the request-free core of the settings values API. The v1
 // routes in settings_values.go parse the request, call in here, and render
 // the *APIError they get back with the same status, code and message they
@@ -629,7 +633,7 @@ func (h *SettingValuesHandler) clearSettingValue(
 		return apiError(http.StatusNotFound, policyErrorNotFound, "No value is set at this scope")
 	}
 	auditSettingsForOther(ctx, settingsAuditRecord{
-		Action:          "clear",
+		Action:          settingsClearAction,
 		ActorProfileID:  actingProfileID(ctx),
 		TargetProfileID: identity.ProfileID,
 		TargetUserID:    eventUserID,

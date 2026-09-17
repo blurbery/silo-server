@@ -11,6 +11,10 @@ import (
 	"github.com/Silo-Server/silo-server/internal/catalog"
 )
 
+const (
+	progressUpdatedAtField = "updated_at"
+)
+
 // EbookProgressEventStore preserves the newest client event for an ebook.
 // Equal timestamps retain the stored event, including its file and location.
 type EbookProgressEventStore interface {
@@ -27,7 +31,7 @@ func (h *EbookReaderHandler) ReaderProgress(ctx context.Context, userID int, pro
 	}
 	progress, err := h.ProgressStore.Get(ctx, userID, profileID, contentID)
 	if err != nil {
-		return nil, &APIError{Status: http.StatusInternalServerError, Code: "internal_error", Message: "Failed to load ebook progress"}
+		return nil, &APIError{Status: http.StatusInternalServerError, Code: autoscanDeliveryInternalError, Message: "Failed to load ebook progress"}
 	}
 	return progress, nil
 }
@@ -53,14 +57,14 @@ func (h *EbookReaderHandler) SaveReaderProgress(ctx context.Context, progress Eb
 	if progress.UpdatedAt.IsZero() {
 		progress.UpdatedAt = time.Now().UTC()
 		if err := h.ProgressStore.Upsert(ctx, progress); err != nil {
-			return nil, &APIError{Status: http.StatusInternalServerError, Code: "internal_error", Message: "Failed to save ebook progress"}
+			return nil, &APIError{Status: http.StatusInternalServerError, Code: autoscanDeliveryInternalError, Message: "Failed to save ebook progress"}
 		}
 		return &progress, nil
 	}
 	// Reject future events instead of reclamping them on every retry, which
 	// would turn an identical event into a later write.
 	if progress.UpdatedAt.After(time.Now()) {
-		return nil, &APIError{Status: http.StatusBadRequest, Field: "updated_at", Message: "updated_at must not be in the future"}
+		return nil, &APIError{Status: http.StatusBadRequest, Field: progressUpdatedAtField, Message: "updated_at must not be in the future"}
 	}
 	store, ok := h.ProgressStore.(EbookProgressEventStore)
 	if !ok {

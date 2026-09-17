@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/Silo-Server/silo-server/internal/markers"
-	"github.com/go-chi/chi/v5"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Silo-Server/silo-server/internal/markers"
+	"github.com/go-chi/chi/v5"
 )
 
 func TestAdminMarkerProviderPartialUpdatePersists(t *testing.T) {

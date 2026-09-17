@@ -16,6 +16,12 @@ import (
 	"github.com/Silo-Server/silo-server/internal/scenariocatalog"
 )
 
+const (
+	assertionAbsent = "absent"
+	assertionEquals = "equals"
+	jsonNull        = "null"
+)
+
 // Body kinds and the predicate ops the engine special-cases by name.
 const (
 	bodyKindEmpty = "empty"
@@ -131,11 +137,11 @@ func checkHeader(h scenariocatalog.HeaderAssertion, headers http.Header) string 
 		if len(values) == 0 {
 			return fmt.Sprintf("header %s: absent, want present", h.Name)
 		}
-	case "absent":
+	case assertionAbsent:
 		if len(values) != 0 {
 			return fmt.Sprintf("header %s = %q, want absent", h.Name, got)
 		}
-	case "equals":
+	case assertionEquals:
 		if got != h.Value {
 			return fmt.Sprintf("header %s = %q, want %q", h.Name, got, h.Value)
 		}
@@ -188,7 +194,7 @@ func checkBody(a scenariocatalog.BodyAssertion, doc any, sized bool) string {
 		if !found {
 			return fmt.Sprintf("%s: absent, want present", label)
 		}
-	case "absent":
+	case assertionAbsent:
 		if found {
 			return fmt.Sprintf("%s = %s, want absent", label, short(got))
 		}
@@ -200,7 +206,7 @@ func checkBody(a scenariocatalog.BodyAssertion, doc any, sized bool) string {
 		if !found || got == nil {
 			return fmt.Sprintf("%s: null or absent, want a value", label)
 		}
-	case "equals":
+	case assertionEquals:
 		if !found || !reflect.DeepEqual(got, want) {
 			return fmt.Sprintf("%s = %s, want %s", label, short(got), short(want))
 		}
@@ -468,7 +474,7 @@ func resolvePointer(doc any, pointer string) (any, bool) {
 func jsonType(v any) string {
 	switch t := v.(type) {
 	case nil:
-		return "null"
+		return jsonNull
 	case bool:
 		return "boolean"
 	case float64:

@@ -16,6 +16,29 @@ import (
 	"github.com/Silo-Server/silo-server/internal/models"
 )
 
+const (
+	titleField             = "title"
+	titleIgnorePrefixField = "titleIgnorePrefix"
+	assetKindSubtitle      = "subtitle"
+	authorsField           = "authors"
+	authorNameField        = "authorName"
+	authorNameLFField      = "authorNameLF"
+	narratorsField         = "narrators"
+	narratorNameField      = "narratorName"
+	seriesField            = "series"
+	seriesNameField        = "seriesName"
+	genresField            = "genres"
+	tagsField              = "tags"
+	publishedYearField     = "publishedYear"
+	publishedDateField     = "publishedDate"
+	publisherField         = "publisher"
+	descriptionField       = "description"
+	isbnField              = "isbn"
+	asinField              = "asin"
+	explicitField          = "explicit"
+	abridgedField          = "abridged"
+)
+
 const audiobookLanguageKey = "language"
 
 // handlePlayStart handles POST /abs/api/items/{libraryItemId}/play.
@@ -128,7 +151,7 @@ func (h *Handler) handlePlayStart(w http.ResponseWriter, r *http.Request) {
 
 	displayTitle := item.Title
 	displayAuthor := ""
-	if v, ok := mediaMetadata["authorName"].(string); ok {
+	if v, ok := mediaMetadata[authorNameField].(string); ok {
 		displayAuthor = v
 	}
 
@@ -349,28 +372,28 @@ func buildSiloPlayMediaMetadata(item *models.MediaItem) map[string]any {
 	}
 
 	return map[string]any{
-		"title":              title,
-		"titleIgnorePrefix":  titleIgnorePrefix(title),
-		"subtitle":           nil,
-		"authors":            authors,
-		"authorName":         authorName,
-		"authorNameLF":       authorNameLF,
-		"narrators":          narrators,
-		"narratorName":       strings.Join(narrators, ", "),
-		"series":             series,
-		"seriesName":         strings.Join(seriesNames, ", "),
-		"genres":             genres,
-		"tags":               []string{},
-		"publishedYear":      publishedYear,
-		"publishedDate":      nil,
-		"publisher":          publisher,
-		"description":        nilIfEmpty(item.Overview),
-		"descriptionPlain":   nilIfEmpty(stripHTML(item.Overview)),
-		"isbn":               nil,
-		"asin":               nil,
-		audiobookLanguageKey: audiobookLanguage(item),
-		"explicit":           false,
-		"abridged":           false,
+		titleField:             title,
+		titleIgnorePrefixField: titleIgnorePrefix(title),
+		assetKindSubtitle:      nil,
+		authorsField:           authors,
+		authorNameField:        authorName,
+		authorNameLFField:      authorNameLF,
+		narratorsField:         narrators,
+		narratorNameField:      strings.Join(narrators, ", "),
+		seriesField:            series,
+		seriesNameField:        strings.Join(seriesNames, ", "),
+		genresField:            genres,
+		tagsField:              []string{},
+		publishedYearField:     publishedYear,
+		publishedDateField:     nil,
+		publisherField:         publisher,
+		descriptionField:       nilIfEmpty(item.Overview),
+		"descriptionPlain":     nilIfEmpty(stripHTML(item.Overview)),
+		isbnField:              nil,
+		asinField:              nil,
+		audiobookLanguageKey:   audiobookLanguage(item),
+		explicitField:          false,
+		abridgedField:          false,
 	}
 }
 
@@ -439,7 +462,7 @@ func buildSiloPlayLibraryItem(
 			"libraryItemId": contentID,
 			"metadata":      mediaMetadata,
 			"coverPath":     baseURL + "/api/items/" + contentID + "/cover",
-			"tags":          []any{},
+			tagsField:       []any{},
 			"audioFiles":    audioTracks,
 			"chapters":      chapters,
 			"ebookFile":     nil,

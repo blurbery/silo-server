@@ -173,7 +173,7 @@ func (h *AdminMarkerProvidersHandler) HandleValidateProvider(w http.ResponseWrit
 		return
 	}
 	if !out.Valid {
-		writeJSON(w, http.StatusOK, map[string]any{"valid": false, "error": out.Error})
+		writeJSON(w, http.StatusOK, map[string]any{"valid": false, nodeReprobeFailed: out.Error})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"valid": true, "stats": out.Stats})
@@ -247,7 +247,7 @@ func (h *AdminMarkerProvidersHandler) updateMarkerProvider(ctx context.Context, 
 		existing.ContributeMinConfidence = v
 	}
 	if err := h.Config.Update(ctx, existing); err != nil {
-		h.logger.ErrorContext(ctx, "admin markers: update provider config failed", "provider", provider, "error", err)
+		h.logger.ErrorContext(ctx, "admin markers: update provider config failed", "provider", provider, nodeReprobeFailed, err)
 		return MarkerProviderConfigView{}, apiError(http.StatusInternalServerError, "internal_error", "Failed to update provider")
 	}
 	if h.EventBus != nil {

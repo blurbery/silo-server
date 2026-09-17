@@ -169,7 +169,7 @@ func registerAdminAPIKeys(reg *Registry) {
 		if p != nil {
 			return nil, p
 		}
-		scope := CursorScope{OperationID: listAdminAPIKeysOperation, Security: strconv.Itoa(claimsFrom(ctx).UserID) + "/" + profileFrom(ctx), Filter: "v1/limit=" + strconv.Itoa(in.Limit), Sort: "created_at:desc", Tiebreaker: "id:desc"}
+		scope := CursorScope{OperationID: listAdminAPIKeysOperation, Security: strconv.Itoa(claimsFrom(ctx).UserID) + "/" + profileFrom(ctx), Filter: "v1/limit=" + strconv.Itoa(in.Limit), Sort: adminSubtitleListSort, Tiebreaker: adminSubtitleListTiebreaker}
 		var after *auth.APIKeyPageKey
 		if in.Cursor != "" {
 			after = new(auth.APIKeyPageKey)

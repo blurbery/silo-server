@@ -36,8 +36,8 @@ func KeyAuthorityUsageAcceptance(catalogs []*Catalog) ([]*Catalog, error) {
 		"keys_create.api_key_forbidden": {http.MethodPost, keyPath, createPersonalAPIKeyOperation},
 		"scopes.api_key_allowed":        {http.MethodGet, "/api/v2/api-keys/scopes", "getPersonalAPIKeyScopes"},
 		"keys_delete.api_key_forbidden": {http.MethodDelete, "/api/v2/api-keys/1", "revokePersonalAPIKey"},
-		"me.api_key":                    {http.MethodGet, accountMeV2Path, "getCurrentUser"},
-		"me.scoped_api_key":             {http.MethodGet, accountMeV2Path, "getCurrentUser"},
+		"me.api_key":                    {http.MethodGet, accountMeV2Path, currentAccountOperation},
+		"me.scoped_api_key":             {http.MethodGet, accountMeV2Path, currentAccountOperation},
 		"logout.api_key":                {http.MethodPost, "/api/v2/auth/logout", "logout"},
 		"adm_inv_list.scoped_key":       {http.MethodGet, adminInvitationInputV2Path, "listAdminInvitations"},
 	}

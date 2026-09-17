@@ -113,7 +113,7 @@ func registerAdminInviteCodes(reg *Registry) {
 		if reg.deps.AdminInviteCodes == nil {
 			return nil, unavailable("invite codes")
 		}
-		scope := CursorScope{OperationID: "listAdminInviteCodes", Security: strconv.Itoa(claimsFrom(ctx).UserID) + "/" + profileFrom(ctx), Filter: "limit=" + strconv.Itoa(in.Limit), Sort: "id:desc", Tiebreaker: "id:desc"}
+		scope := CursorScope{OperationID: "listAdminInviteCodes", Security: strconv.Itoa(claimsFrom(ctx).UserID) + "/" + profileFrom(ctx), Filter: "limit=" + strconv.Itoa(in.Limit), Sort: adminSubtitleListTiebreaker, Tiebreaker: adminSubtitleListTiebreaker}
 		before := 0
 		if in.Cursor != "" {
 			if p := cursors.Decode(scope, in.Cursor, &before); p != nil {

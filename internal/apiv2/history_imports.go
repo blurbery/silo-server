@@ -337,7 +337,7 @@ func (reg *Registry) listHistoryImportRuns(ctx context.Context, cursors *Cursors
 	scope := CursorScope{
 		OperationID: opListHistoryImportRuns,
 		Security:    strconv.Itoa(userID),
-		Sort:        "-created_at,-id",
+		Sort:        loginSessionCursorSort,
 		Tiebreaker:  "id",
 	}
 	var after *historyimport.RunKey

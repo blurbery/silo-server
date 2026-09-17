@@ -81,7 +81,7 @@ func registerPersonalAPIKeys(reg *Registry) {
 		if reg.deps.PersonalAPIKeys == nil {
 			return nil, unavailable("API keys")
 		}
-		scope := CursorScope{OperationID: "listPersonalAPIKeys", Security: strconv.Itoa(userID), Filter: "limit=" + strconv.Itoa(in.Limit), Sort: "created_at:desc", Tiebreaker: "id:desc"}
+		scope := CursorScope{OperationID: "listPersonalAPIKeys", Security: strconv.Itoa(userID), Filter: "limit=" + strconv.Itoa(in.Limit), Sort: adminSubtitleListSort, Tiebreaker: adminSubtitleListTiebreaker}
 		var after *auth.APIKeyPageKey
 		if in.Cursor != "" {
 			after = new(auth.APIKeyPageKey)

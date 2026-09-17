@@ -102,7 +102,7 @@ func (reg *Registry) getSetupStatus(ctx context.Context, _ *struct{}) (*SetupSta
 
 func getSystemInfo(_ context.Context, _ *struct{}) (*SystemInfoOutput, error) {
 	return &SystemInfoOutput{
-		CacheControl: "no-cache",
+		CacheControl: docsCachePolicy,
 		Body: SystemInfo{
 			ServerVersion:  buildinfo.Current().Display,
 			APIMajor:       APIMajor,

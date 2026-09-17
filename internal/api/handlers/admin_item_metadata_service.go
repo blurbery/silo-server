@@ -18,22 +18,22 @@ func (h *AdminHandler) CreateItemMetadataRefresh(ctx context.Context, contentID 
 		return nil, apiError(http.StatusServiceUnavailable, "unavailable", "Item refresh jobs are not configured")
 	}
 	if contentID == "" {
-		return nil, apiError(http.StatusBadRequest, "bad_request", "Item ID is required")
+		return nil, apiError(http.StatusBadRequest, autoscanDeliveryBadRequest, "Item ID is required")
 	}
 	if mode == "" {
 		mode = adminjob.ItemRefreshModeQuick
 	}
 	if mode != adminjob.ItemRefreshModeQuick && mode != adminjob.ItemRefreshModeComplete {
-		return nil, apiError(http.StatusBadRequest, "bad_request", "Invalid refresh mode")
+		return nil, apiError(http.StatusBadRequest, autoscanDeliveryBadRequest, "Invalid refresh mode")
 	}
 	payload, err := h.ItemRefreshResolver.ResolveWithMode(ctx, contentID, mode)
 	if err != nil {
 		if scopeErr, ok := errors.AsType[*adminjob.ScopeResolutionError](err); ok {
-			code := "bad_request"
+			code := autoscanDeliveryBadRequest
 			if scopeErr.StatusCode == http.StatusNotFound {
-				code = "not_found"
+				code = autoscanDeliveryNotFound
 			} else if scopeErr.StatusCode >= http.StatusConflict {
-				code = "conflict"
+				code = policyErrorConflict
 			}
 			return nil, apiError(scopeErr.StatusCode, code, scopeErr.Message)
 		}
@@ -63,13 +63,13 @@ func (h *AdminHandler) UpdateCatalogItemMetadata(ctx context.Context, contentID 
 		return nil, apiError(http.StatusServiceUnavailable, "unavailable", "Catalog metadata is not configured")
 	}
 	if contentID == "" {
-		return nil, apiError(http.StatusBadRequest, "bad_request", "Item ID is required")
+		return nil, apiError(http.StatusBadRequest, autoscanDeliveryBadRequest, "Item ID is required")
 	}
 	if req.AirTimezone != nil {
 		trimmed := strings.TrimSpace(*req.AirTimezone)
 		req.AirTimezone = new(trimmed)
 		if !catalog.ValidateAirTimezone(trimmed) {
-			return nil, apiError(http.StatusBadRequest, "bad_request", "air_timezone must be a valid IANA timezone")
+			return nil, apiError(http.StatusBadRequest, autoscanDeliveryBadRequest, "air_timezone must be a valid IANA timezone")
 		}
 	}
 
@@ -101,7 +101,7 @@ func (h *AdminHandler) UpdateCatalogItemMetadata(ctx context.Context, contentID 
 			}
 			if err := h.DetailSvc.UpdateEpisodeMetadata(ctx, contentID, &upd); err != nil {
 				if errors.Is(err, catalog.ErrEpisodeNotFound) {
-					return nil, apiError(http.StatusNotFound, "not_found", "Item not found")
+					return nil, apiError(http.StatusNotFound, autoscanDeliveryNotFound, "Item not found")
 				}
 				slog.ErrorContext(ctx, "admin: update episode metadata failed", "component", "api", "content_id", contentID, "error", err)
 				return nil, apiError(http.StatusInternalServerError, "internal_error", "Failed to update metadata")

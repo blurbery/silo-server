@@ -72,7 +72,7 @@ func catalogTransferOp(path, id, summary string) Operation {
 }
 func registerAdminCatalogTransfer(reg *Registry) {
 	export := catalogTransferOp("/export", opExportAdminCatalog, "Export a catalog seed synchronously as gzip bytes. Prefer persisted export jobs for large catalogs.")
-	export.Responses = map[string]*huma.Response{"200": {Description: "Compressed catalog seed", Content: map[string]*huma.MediaType{mediaTypeCatalogGzip: {Schema: &huma.Schema{Type: huma.TypeString, Format: "binary"}}}}}
+	export.Responses = map[string]*huma.Response{"200": {Description: "Compressed catalog seed", Content: map[string]*huma.MediaType{mediaTypeCatalogGzip: {Schema: &huma.Schema{Type: huma.TypeString, Format: artworkBinaryFormat}}}}}
 	Register(reg, export, func(ctx context.Context, in *AdminCatalogExportInput) (*AdminCatalogExportOutput, error) {
 		if reg.deps.AdminCatalogTransfer == nil {
 			return nil, unavailable("catalog transfer")

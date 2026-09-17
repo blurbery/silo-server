@@ -11,6 +11,10 @@ import (
 	"github.com/Silo-Server/silo-server/internal/policy"
 )
 
+const (
+	markerKindIntro = "intro"
+)
+
 type MarkerService interface {
 	GetMarkers(context.Context, catalogpkg.AccessFilter, handlers.MarkerTarget) (handlers.FileMarkersView, error)
 	SetMarkers(context.Context, catalogpkg.AccessFilter, handlers.MarkerTarget, handlers.MarkerChanges) (handlers.FileMarkersView, error)
@@ -141,7 +145,7 @@ func (reg *Registry) markerWrite(ctx context.Context, target handlers.MarkerTarg
 		return nil, NewProblem(TypeValidationFailed, "Invalid marker document.")
 	}
 	changes := handlers.MarkerChanges{}
-	for name, patch := range map[string]Patch[MarkerSegmentSet]{"intro": body.Intro, "credits": body.Credits, "recap": body.Recap, "preview": body.Preview} {
+	for name, patch := range map[string]Patch[MarkerSegmentSet]{markerKindIntro: body.Intro, "credits": body.Credits, "recap": body.Recap, "preview": body.Preview} {
 		if !patch.Present {
 			continue
 		}

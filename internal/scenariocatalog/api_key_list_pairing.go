@@ -8,6 +8,10 @@ import (
 	"slices"
 )
 
+const (
+	keysListShapeScenario = "keys_list.shape"
+)
+
 const keysListMeaningScenario = "keys_list.meaning"
 
 const listPersonalAPIKeysOperation = "listPersonalAPIKeys"
@@ -22,7 +26,7 @@ const assertionEvery = "every"
 var RequiredAPIKeyListScenarios = []string{
 	"keys_list.ok",
 	"keys_list.sorted", "keys_list.empty", "keys_list.no_token",
-	keysListMeaningScenario, "keys_list.shape",
+	keysListMeaningScenario, keysListShapeScenario,
 }
 
 func APIKeyListAcceptance(catalogs []*Catalog) ([]*Catalog, error) {
@@ -61,7 +65,7 @@ func apiKeyListAbsenceOverlay(catalogs []*Catalog) ([]*Catalog, error) {
 				switch scenario.ID {
 				case keysListMeaningScenario:
 					digest = "57d7196b16d8e986e10bf3ee5244091579e16a2dcce7f09123ca5cd4425eb338"
-				case "keys_list.shape":
+				case keysListShapeScenario:
 					digest = "1ad0a73af57a696b8b7099651019e7a54187dec04bccc136e8f0e5e48262ab09"
 				default:
 					continue

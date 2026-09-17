@@ -3,10 +3,11 @@ package downloads
 import (
 	"context"
 	"errors"
-	"github.com/Silo-Server/silo-server/internal/models"
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/Silo-Server/silo-server/internal/models"
 )
 
 func TestManagedCreateRevisionPostgres(t *testing.T) {

@@ -49,7 +49,7 @@ func registerCollectionPaging(reg *Registry) {
 	})
 }
 func collectionPageScope(ctx context.Context, operation, filter string) CursorScope {
-	return CursorScope{OperationID: operation, Security: strconv.Itoa(claimsFrom(ctx).UserID) + ":" + profileFrom(ctx) + ":" + viewerScopeDigest(ctx), Filter: filter, Sort: "position", Tiebreaker: collectionItemTiebreaker}
+	return CursorScope{OperationID: operation, Security: strconv.Itoa(claimsFrom(ctx).UserID) + ":" + profileFrom(ctx) + ":" + viewerScopeDigest(ctx), Filter: filter, Sort: playbackParamPosition, Tiebreaker: collectionItemTiebreaker}
 }
 func collectionPageOptions(c *Cursors, s CursorScope, cursor string, limit int) (userstore.CollectionItemsPageOptions, *Problem) {
 	o := userstore.CollectionItemsPageOptions{Limit: limit}
