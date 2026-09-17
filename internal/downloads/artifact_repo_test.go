@@ -857,7 +857,7 @@ func TestProxyMissingReportFencesCompleteRemoteLocator(t *testing.T) {
 }
 
 func TestRemoteCleanupBudgetBoundsUnreachableOrigins(t *testing.T) {
-	repo, _, fileID := newArtifactTestRepo(t)
+	repo, pool, fileID := newArtifactTestRepo(t)
 	ctx := context.Background()
 	row, _, err := repo.EnsureQueued(ctx, newArtifact(t, fileID, fmt.Sprintf("hash-cleanup-budget-%d", time.Now().UnixNano())))
 	if err != nil {
@@ -867,6 +867,13 @@ func TestRemoteCleanupBudgetBoundsUnreachableOrigins(t *testing.T) {
 	originArtifactID := fmt.Sprintf("artifact-blocked-%d", suffix)
 	originURL := fmt.Sprintf("http://unreachable-%d", suffix)
 	if err := repo.EnqueueRemoteOrphan(ctx, row.ID, 31, originURL, originArtifactID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM download_artifact_orphans WHERE download_artifact_id = $1 AND origin_artifact_id = $2`, row.ID, originArtifactID)
+	})
+	// Enqueue applies a grace period; this test exercises cleanup once due.
+	if _, err := pool.Exec(ctx, `UPDATE download_artifact_orphans SET next_retry_at = NULL WHERE download_artifact_id = $1 AND origin_artifact_id = $2`, row.ID, originArtifactID); err != nil {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})

@@ -679,7 +679,18 @@ type ProviderSummary struct {
 	ConnectionConfigSchema []plugins.ConfigSchemaView `json:"connection_config_schema,omitempty"`
 }
 
+// ConnectionVersion identifies a precise persisted connection generation.
+type ConnectionVersion struct {
+	ID        string
+	UpdatedAt time.Time
+}
+
+var ErrStaleConnection = errors.New("watch provider connection changed")
+var ErrSettingsCleanupUnavailable = errors.New("watchlist ordering cleanup unavailable")
+
 type ConnectionStatus struct {
+	Version ConnectionVersion `json:"-"`
+
 	Provider                     string                     `json:"provider"`
 	DisplayName                  string                     `json:"display_name"`
 	Capabilities                 Capabilities               `json:"capabilities"`
@@ -723,3 +734,53 @@ type ConnectionUpdate struct {
 	SyncWatchlistOrderEnabled    *bool `json:"sync_watchlist_order_enabled,omitempty"`
 	ScrobbleEnabled              *bool `json:"scrobble_enabled,omitempty"`
 }
+
+// UnknownProviderError reports a provider key the registry does not know.
+// Its message is the one the service has always produced.
+type UnknownProviderError struct {
+	Key string
+}
+
+func (e UnknownProviderError) Error() string { return fmt.Sprintf("unknown provider %q", e.Key) }
+
+// Sentinel errors the service answers for a missing connection and for a
+// device-authorization session that can no longer complete. The messages are
+// unchanged so the v1 responses stay byte-identical; the v2 listener
+// classifies on the values.
+var (
+	ErrConnectionNotFound   = errors.New("watch provider connection not found")
+	ErrAuthSessionMismatch  = errors.New("auth session does not match active profile")
+	ErrAuthSessionCompleted = errors.New("auth session is already completed")
+	ErrAuthSessionExpired   = errors.New("auth session has expired")
+	// ErrInvalidCredential reports a provider's rejection of the credential the
+	// profile supplied. Built-in providers wrap it so the listeners classify an
+	// API-key rejection as a client problem; plugin providers signal the same
+	// condition through the INVALID_CREDENTIAL fault code.
+	ErrInvalidCredential = errors.New("watch provider rejected the supplied credential")
+)
+
+// IsDeviceAuthPending reports whether err is the provider's "not yet
+// authorized" answer to a device-code poll.
+func IsDeviceAuthPending(err error) bool {
+	var pending deviceAuthorizationPendingError
+	return errors.As(err, &pending)
+}
+
+// IsInvalidCredentialError reports whether err is a provider's rejection of
+// the supplied credential.
+func IsInvalidCredentialError(err error) bool { return isWatchSyncInvalidCredentialError(err) }
+
+// IsRetryableProviderError reports whether err is a temporary provider fault.
+func IsRetryableProviderError(err error) bool {
+	var retryable retryableProviderError
+	return errors.As(err, &retryable)
+}
+
+// ProviderCapabilityError reports an authorization method or configuration
+// the named provider does not offer. The message is the service's original.
+type ProviderCapabilityError struct {
+	Key  string
+	What string
+}
+
+func (e ProviderCapabilityError) Error() string { return fmt.Sprintf("provider %q %s", e.Key, e.What) }

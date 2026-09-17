@@ -230,6 +230,7 @@ func LoadFromDB(m map[string]string) (*Config, error) {
 	// Client IP resolution ("" = clientip package defaults). Kept in the
 	// config snapshot so the nodeconfig watcher hot-reloads the resolver.
 	cfg.ClientIP.TrustedProxies = stringOr(m, "clientip.trusted_proxies", "")
+	cfg.Server.PublicURL = stringOr(m, "server.public_url", "")
 
 	// TMDB collection presets (independent of metadata providers)
 	cfg.TMDBAPIKey = stringOr(m, "tmdb.api_key", "")
@@ -316,12 +317,21 @@ func LoadFromDB(m map[string]string) (*Config, error) {
 	}
 	cfg.Matcher.EnableTVSeriesRootQueue = enableTVSeriesRootQueue
 
+	// Artwork
+	cfg.Artwork.StorageBackend = stringOr(m, "artwork.storage_backend", "auto")
+	cfg.Artwork.LocalPath = stringOr(m, "artwork.local_path", "/var/lib/silo/artwork")
+
 	// Metadata
-	cacheImages, err := boolOr(m, "metadata.cache_images", false)
+	cacheImages, err := boolOr(m, "metadata.cache_images", true)
 	if err != nil {
 		return nil, err
 	}
 	cfg.Metadata.CacheImages = cacheImages
+	imageWorkers, err := intOr(m, MetadataImageWorkersSettingKey, 0)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Metadata.ImageWorkers = imageWorkers
 
 	// Playback
 	cfg.Playback.FFmpegPath = stringOr(m, "playback.ffmpeg_path", "")

@@ -87,14 +87,14 @@ func TestHandlePatchDownloadedSubtitleUpdatesMetadata(t *testing.T) {
 	if !updated.HearingImpaired {
 		t.Fatal("expected hearing_impaired=true")
 	}
-	if updated.S3Key == "subtitles/42/en_upload_abcd1234.srt" {
-		t.Fatalf("expected migrated s3 key, got %q", updated.S3Key)
+	if updated.S3Key != "subtitles/42/en_upload_abcd1234.srt" {
+		t.Fatalf("immutable s3 key changed: %q", updated.S3Key)
 	}
-	if len(s3.putKeys) != 1 {
-		t.Fatalf("putKeys = %d, want 1", len(s3.putKeys))
+	if len(s3.putKeys) != 0 {
+		t.Fatalf("metadata edit uploaded content: %v", s3.putKeys)
 	}
-	if len(s3.deletedKeys) != 1 {
-		t.Fatalf("deletedKeys = %d, want 1", len(s3.deletedKeys))
+	if len(s3.deletedKeys) != 0 {
+		t.Fatalf("metadata edit deleted content: %v", s3.deletedKeys)
 	}
 }
 

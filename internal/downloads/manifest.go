@@ -16,7 +16,11 @@ import (
 // manifestVersion is bumped whenever the OfflineManifest DTO shape changes.
 const manifestVersion = 2
 
-const apiDownloadsPrefix = "/api/v1/downloads/"
+// apiDownloadsPrefix is the namespace every offline asset reference is minted
+// under. Manifests are stored and handed to clients verbatim, so the reference
+// has to stay resolvable after the /api/v1 tombstone; the v2 projection only
+// validates the prefix it finds here.
+const apiDownloadsPrefix = "/api/v2/downloads/"
 
 // ManifestSource assembles catalog detail for a content id. GetItemDetail
 // enforces per-profile content/library access via its filter, which doubles as

@@ -55,12 +55,12 @@ function defaultCatalogSubtitle(source: string): string {
 export default function Catalog() {
   const [searchParams, setSearchParams] = useSearchParams();
   const state = useMemo(() => parseCatalogSearchParams(searchParams), [searchParams]);
-  const emptySearchTitle =
-    state.source === "query" && !state.q ? "Search" : defaultCatalogTitle(state.source, state.q);
+  const isEmptySearch = state.source === "query" && !state.q && !state.library_id;
+  const emptySearchTitle = isEmptySearch ? "Search" : defaultCatalogTitle(state.source, state.q);
 
   useDocumentTitle(emptySearchTitle);
 
-  if (state.source === "query" && !state.q) {
+  if (isEmptySearch) {
     return (
       <section className="page-shell flex min-h-[calc(100dvh-10rem)] flex-col items-center justify-center py-16 text-center">
         <div className="text-muted-foreground mb-6">
@@ -352,7 +352,7 @@ function CatalogResults({
             querySortToSelectValue(nextState.query_definition.sort) !==
               querySortToSelectValue(sortedState.query_definition.sort);
           const stateForNavigation = sortChanged
-            ? { ...nextState, sort_from_server: false }
+            ? { ...nextState, sort_from_server: false, explicit_sort: true }
             : nextState;
           rememberCollectionSort(stateForNavigation);
           const nextSearchParams = buildCatalogFilterSearchParams(stateForNavigation);
@@ -433,14 +433,12 @@ function CatalogResults({
           role="alert"
         >
           <p className="font-medium">
-            {isQuerySource
-              ? "Search stopped before it could finish."
-              : "Catalog stopped before it could finish."}
+            {isQuerySource ? "Could not load search results." : "Could not load catalog results."}
           </p>
           <p className="text-muted-foreground max-w-md text-sm">
             {isQuerySource
-              ? "The server ended the lookup so it could not keep using CPU in the background. Try a more specific title or retry once."
-              : "The server could not load every requested result. Retry the catalog once."}
+              ? "The search request failed. Please retry."
+              : "The catalog request failed. Please retry."}
           </p>
           <Button variant="outline" size="sm" onClick={() => void catalogQuery.refetch()}>
             <RefreshCw className="size-4" />

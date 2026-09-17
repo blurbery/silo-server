@@ -1,7 +1,8 @@
+import { promoteWatchTogetherWithFeedback } from "@/lib/watchTogetherActions";
 import { useCallback, useState } from "react";
 import { Play, Search, Trash2, TriangleIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { WatchTogetherSuggestion } from "@/lib/watchTogether";
+import type { WatchTogetherSuggestion, WatchTogetherRoomSnapshot } from "@/lib/watchTogether";
 import { toast } from "sonner";
 
 interface SuggestionPanelProps {
@@ -11,7 +12,7 @@ interface SuggestionPanelProps {
   onVote: (id: string) => Promise<void>;
   onUnvote: (id: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
-  onPromote: (id: string) => Promise<void>;
+  onPromote: (id: string) => Promise<WatchTogetherRoomSnapshot | null>;
   onOpenSearch: () => void;
 }
 
@@ -165,8 +166,7 @@ export function WatchTogetherSuggestionPanel({
     async (id: string) => {
       setLoadingId(id);
       try {
-        await onPromote(id);
-        toast.success("Playing suggestion for everyone");
+        await promoteWatchTogetherWithFeedback(onPromote, id);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Failed to start suggestion");
       } finally {

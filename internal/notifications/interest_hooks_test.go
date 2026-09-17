@@ -60,6 +60,22 @@ func TestInterestTrackingStorePreservesSettingCapabilities(t *testing.T) {
 		t.Fatal("transaction callback was not invoked")
 	}
 
+	snapshotter, ok := wrapped.(userstore.PreferenceSettingsSnapshotter)
+	if !ok {
+		t.Fatal("interest-tracking wrapper dropped PreferenceSettingsSnapshotter")
+	}
+	called = false
+	if err := snapshotter.WithPreferenceSettingsSnapshot(t.Context(), func(reader userstore.PreferenceSettingsReader) error {
+		called = true
+		_, err := reader.GetAudioPreference(t.Context(), "missing", "missing")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("snapshot callback was not invoked")
+	}
+
 	cas, ok := wrapped.(userstore.SettingValueCompareAndSetter)
 	if !ok {
 		t.Fatal("interest-tracking wrapper dropped SettingValueCompareAndSetter")
@@ -431,6 +447,73 @@ func TestInterestTrackingStorePreservesCombinedPostgresCatalogCapabilities(t *te
 	}
 }
 
+func TestInterestTrackingDeviceSettingsCapability(t *testing.T) {
+	// Capability discovery is structural. Each combination must survive, and
+	// a backend with no device settings support must keep reporting absence.
+	plain := &struct{ userstore.UserStore }{}
+	provider := WrapUserStoreProvider(preferenceTransactionTestProvider{store: plain}, &System{})
+	wrapped, err := provider.ForUser(t.Context(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := wrapped.(userstore.DeviceSettingsStore); ok {
+		t.Fatal("invented device settings support")
+	}
+	supported := []userstore.UserStore{
+		&struct {
+			userstore.UserStore
+			userstore.DeviceSettingsStore
+		}{},
+		&struct {
+			userstore.UserStore
+			userstore.DeviceSettingsStore
+			userstore.DeviceRegistry
+		}{},
+		&struct {
+			userstore.UserStore
+			userstore.DeviceSettingsStore
+			userstore.SeriesEpisodeRollupStore
+		}{},
+		&struct {
+			userstore.UserStore
+			userstore.DeviceSettingsStore
+			userstore.DeviceRegistry
+			userstore.SeriesEpisodeRollupStore
+		}{},
+	}
+	for _, inner := range supported {
+		provider := WrapUserStoreProvider(preferenceTransactionTestProvider{store: inner}, &System{})
+		wrapped, err := provider.ForUser(t.Context(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := wrapped.(userstore.DeviceSettingsStore); !ok {
+			t.Fatal("lost device settings support")
+		}
+		_, beforeDevices := inner.(userstore.DeviceRegistry)
+		_, afterDevices := wrapped.(userstore.DeviceRegistry)
+		_, beforeRollup := inner.(userstore.SeriesEpisodeRollupStore)
+		_, afterRollup := wrapped.(userstore.SeriesEpisodeRollupStore)
+		if beforeDevices != afterDevices || beforeRollup != afterRollup {
+			t.Fatal("changed other capabilities")
+		}
+	}
+}
+
+func TestInterestTrackingProviderDoesNotInventProfileTransaction(t *testing.T) {
+	for name, inner := range map[string]userstore.UserStoreProvider{
+		"sqlite":  userdb.NewSQLiteProvider(nil),
+		"unknown": preferenceTransactionTestProvider{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			wrapped := WrapUserStoreProvider(inner, &System{})
+			if _, ok := wrapped.(transactionalProfileCreator); ok {
+				t.Fatal("unsupported backend advertised a profile transaction")
+			}
+		})
+	}
+}
+
 // completionCapableStore records both completion entry points so the decorator
 // test exercises the production capability assertion and argument forwarding.
 type completionCapableStore struct {
@@ -593,5 +676,26 @@ func TestInterestTrackingStoreConditionalCapabilities(t *testing.T) {
 				t.Error("dropped SettingMutationTransactioner")
 			}
 		})
+	}
+}
+
+func TestInterestTrackingOptionalCapabilityResolution(t *testing.T) {
+	inner := &struct {
+		userstore.UserStore
+		userstore.OnboardingProgressStore
+	}{}
+	provider := WrapUserStoreProvider(preferenceTransactionTestProvider{store: inner}, &System{})
+	wrapped, err := provider.ForUser(t.Context(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := wrapped.(userstore.OnboardingProgressStore); !ok {
+		t.Fatal("lost underlying onboarding capability")
+	}
+	if _, ok := wrapped.(userstore.WatchedBatchWriter); !ok {
+		t.Fatal("decorator dropped the notification mutation hooks")
+	}
+	if _, ok := wrapped.(userstore.SeriesEpisodeRollupStore); ok {
+		t.Fatal("decorator invented backend support")
 	}
 }

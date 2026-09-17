@@ -1,6 +1,7 @@
 package clientip
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"strings"
@@ -10,8 +11,9 @@ import (
 // Resolver resolves the real client IP from an HTTP request, accounting for
 // trusted reverse proxies that set forwarding headers.
 type Resolver struct {
-	mu      sync.RWMutex
-	trusted []*net.IPNet
+	reloadMu sync.Mutex
+	mu       sync.RWMutex
+	trusted  []*net.IPNet
 }
 
 // NewResolver creates a Resolver with the given trusted proxy CIDRs.
@@ -106,4 +108,49 @@ func (r *Resolver) UpdateTrustedCIDRs(cidrs []*net.IPNet) {
 	r.mu.Lock()
 	r.trusted = cidrs
 	r.mu.Unlock()
+}
+
+// ReloadTrustedCIDRs serializes the authoritative store read and publication.
+// Holding only the publication lock would let an older delayed read overwrite
+// a newer configuration. A failed read retains the last valid trust boundary.
+func (r *Resolver) ReloadTrustedCIDRs(ctx context.Context, store SettingsStore) error {
+	r.reloadMu.Lock()
+	defer r.reloadMu.Unlock()
+	cidrs, err := LoadTrustedCIDRs(ctx, store)
+	if err != nil {
+		return err
+	}
+	r.UpdateTrustedCIDRs(cidrs)
+	return nil
+}
+
+// requestScheme must run before Middleware replaces the transport peer address.
+// Proxies must preserve Host and overwrite X-Forwarded-Proto, never append it.
+func (r *Resolver) requestScheme(req *http.Request) string {
+	scheme := "http"
+	if req.TLS != nil {
+		scheme = "https"
+	}
+	host, _, err := net.SplitHostPort(req.RemoteAddr)
+	if err != nil {
+		host = req.RemoteAddr
+	}
+	peer := net.ParseIP(host)
+	if peer == nil || r == nil {
+		return scheme
+	}
+	r.mu.RLock()
+	trusted := r.isTrusted(peer)
+	r.mu.RUnlock()
+	if !trusted {
+		return scheme
+	}
+	values := req.Header.Values("X-Forwarded-Proto")
+	if len(values) == 0 {
+		return scheme
+	}
+	if len(values) != 1 || (values[0] != "http" && values[0] != "https") {
+		return ""
+	}
+	return values[0]
 }

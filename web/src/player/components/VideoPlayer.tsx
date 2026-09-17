@@ -24,6 +24,7 @@ import { MARKER_KINDS, useMarkerEditor } from "../hooks/useMarkerEditor";
 import { useWatchTogetherPlaybackSync } from "../hooks/useWatchTogetherPlaybackSync";
 import type { WatchTogetherRoomConnectionResult } from "../hooks/useWatchTogetherRoomConnection";
 import { getPersistedVolume, persistVolume } from "./VolumeControl";
+import { playerV2 } from "../player-v2";
 import { usePlayerConfig } from "../context/PlayerConfigContext";
 import { qualityOptionsFromPlanV3 } from "../playback-info";
 import { preconnectToStreamOrigin } from "../stream-url";
@@ -205,6 +206,8 @@ interface PlaybackNoticeState {
   title?: string;
   message: string;
   tone: "info" | "warning";
+  actionLabel?: string;
+  onAction?: () => void;
 }
 
 function readNumericPayload(
@@ -367,6 +370,11 @@ export function VideoPlayer({
     language: string;
     label: string;
   } | null>(null);
+  // Realtime callbacks can run before React commits the latest state. Keep the
+  // selected job identity synchronous so batches from an older job cannot enter it.
+  const liveTranslationIdentityRef = useRef<{ jobId: number; trackKey: string } | null>(null);
+  const acceptedSubtitleJobRef = useRef<string | null>(null);
+  const reportedSubtitleFailureRef = useRef<string | null>(null);
   const [liveCues, setLiveCues] = useState<ParsedCue[]>([]);
   const [pendingTranslationHandoff, setPendingTranslationHandoff] = useState<{
     language: string;
@@ -393,12 +401,44 @@ export function VideoPlayer({
       window.clearTimeout(translationResumeTimerRef.current);
       translationResumeTimerRef.current = null;
     }
+    liveTranslationIdentityRef.current = null;
+    acceptedSubtitleJobRef.current = null;
+    reportedSubtitleFailureRef.current = null;
     setPendingTranslationHandoff(null);
     setLiveTranslation(null);
     setLiveCues([]);
     setTranslationBuffering(false);
     translationPauseRef.current = false;
-  }, [activeFileId]);
+    return () => {
+      acceptedSubtitleJobRef.current = null;
+    };
+  }, [activeFileId, sessionId]);
+
+  const reportSubtitleFailure = useCallback((jobId: string, message?: string) => {
+    if (reportedSubtitleFailureRef.current === jobId) return;
+    reportedSubtitleFailureRef.current = jobId;
+    toast.error(message ? `Subtitle processing failed: ${message}` : "Subtitle processing failed");
+  }, []);
+
+  const handleSubtitleJobAccepted = useCallback(
+    (jobId: string) => {
+      acceptedSubtitleJobRef.current = jobId;
+      // Source loading can fail before Started, even before the POST response.
+      // Reconcile once after acceptance so that early terminal event is not lost.
+      void playerV2(playerConfig, "GET /api/v2/subtitles/ai/jobs/{job_id}", {
+        path: { job_id: jobId },
+      })
+        .then((result) => {
+          if (acceptedSubtitleJobRef.current === jobId && result?.job.status === "failed") {
+            reportSubtitleFailure(jobId, result.job.error_message);
+          }
+        })
+        .catch(() => {
+          /* Realtime continues to report the accepted job. */
+        });
+    },
+    [playerConfig, reportSubtitleFailure],
+  );
 
   // Merge the live track into the track list the player + menu see.
   const effectiveSubtitleTracks = useMemo(() => {
@@ -503,16 +543,14 @@ export function VideoPlayer({
   // useSubtitleTracks rebuilds its track against the new element; the rebuild
   // carries loaded cues and window coverage over, so it costs no refetch.
   const [subtitleStreamGeneration, setSubtitleStreamGeneration] = useState(0);
-  const lastSubtitlePlanRevisionRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!isPlayerReady) return;
-    const changed =
-      lastSubtitlePlanRevisionRef.current !== null &&
-      lastSubtitlePlanRevisionRef.current !== planRevision;
-    lastSubtitlePlanRevisionRef.current = planRevision;
-    if (changed) {
-      setSubtitleStreamGeneration((generation) => generation + 1);
-    }
+    const video = videoRef.current;
+    if (!video || !isPlayerReady) return;
+    // The URL is available before HLS attaches and clears native cue lists.
+    // Rebuild only once the actual source has loaded, including first startup.
+    const handleLoadedMetadata = () => setSubtitleStreamGeneration((generation) => generation + 1);
+    video.addEventListener("loadedmetadata", handleLoadedMetadata);
+    return () => video.removeEventListener("loadedmetadata", handleLoadedMetadata);
   }, [isPlayerReady, planRevision]);
 
   const isFirefoxBrowser =
@@ -546,13 +584,18 @@ export function VideoPlayer({
   const roomSyncWaiting = watchTogether.room?.playback_state === "waiting";
   const watchTogetherRoomActive = watchTogether.room !== null;
 
-  const showWatchTogetherNotice = useCallback((message: string, tone: "info" | "warning") => {
-    setNotice({
-      title: "Watch Party",
-      message,
-      tone,
-    });
-  }, []);
+  const showWatchTogetherNotice = useCallback(
+    (message: string, tone: "info" | "warning", onAction?: () => void) => {
+      setNotice({
+        title: "Watch Party",
+        message,
+        tone,
+        actionLabel: onAction ? "Join playback" : undefined,
+        onAction,
+      });
+    },
+    [],
+  );
 
   const resetLeaveState = useCallback(() => {
     leaveInProgressRef.current = false;
@@ -1061,6 +1104,14 @@ export function VideoPlayer({
   // Intercept live-translation events; forward everything else to the parent.
   const handleRealtimeEvent = useCallback(
     (event: PlaybackRealtimeEventEnvelope) => {
+      // Subtitle job events from another file or session are stale and ignored;
+      // cue and terminal events must also belong to the translation on screen.
+      const isForActiveStream = (payload: { file_id: number; session_id: string }) =>
+        payload.file_id === activeFileId && payload.session_id === sessionId;
+      const matchesLiveTranslation = (payload: { job_id: number; track_key: string }) => {
+        const identity = liveTranslationIdentityRef.current;
+        return identity?.jobId === payload.job_id && identity.trackKey === payload.track_key;
+      };
       switch (event.name) {
         case "subtitle_ready": {
           // Broadcast to every viewer of the file when a generated track is
@@ -1077,9 +1128,19 @@ export function VideoPlayer({
           break;
         }
         case "subtitle_translation_started": {
+          const payload = event.payload;
+          if (!isForActiveStream(payload) || matchesLiveTranslation(payload)) break;
+          acceptedSubtitleJobRef.current = String(payload.job_id);
+          liveTranslationIdentityRef.current = {
+            jobId: payload.job_id,
+            trackKey: payload.track_key,
+          };
+          setPendingTranslationHandoff(null);
           // Remember the real selection we're displacing and whether we were
           // playing, so completion/failure can restore the right state.
-          const wasPlaying = !(videoRef.current?.paused ?? true);
+          const wasPlaying =
+            !(videoRef.current?.paused ?? true) ||
+            (translationPauseRef.current && translationResumeOnFinishRef.current);
           translationResumeOnFinishRef.current = wasPlaying;
           setActiveSubtitleIndex((idx) => {
             if (idx !== LIVE_SUBTITLE_INDEX) {
@@ -1108,6 +1169,7 @@ export function VideoPlayer({
           break;
         }
         case "subtitle_translation_cues": {
+          if (!isForActiveStream(event.payload) || !matchesLiveTranslation(event.payload)) break;
           const cues = event.payload.cues.map((c) => ({
             start: c.start,
             end: c.end,
@@ -1117,6 +1179,8 @@ export function VideoPlayer({
           break;
         }
         case "subtitle_translation_completed": {
+          if (!isForActiveStream(event.payload) || !matchesLiveTranslation(event.payload)) break;
+          liveTranslationIdentityRef.current = null;
           resumeFromTranslationPause();
           // Hand off from the ephemeral live track to the persisted downloaded
           // one. The payload names the ordinal the server assigned it, so the
@@ -1147,6 +1211,14 @@ export function VideoPlayer({
           break;
         }
         case "subtitle_translation_failed": {
+          if (!isForActiveStream(event.payload)) break;
+          const jobId = String(event.payload.job_id);
+          if (!matchesLiveTranslation(event.payload)) {
+            if (acceptedSubtitleJobRef.current === jobId)
+              reportSubtitleFailure(jobId, event.payload.message);
+            break;
+          }
+          liveTranslationIdentityRef.current = null;
           resumeFromTranslationPause();
           setLiveTranslation(null);
           setLiveCues([]);
@@ -1154,11 +1226,7 @@ export function VideoPlayer({
           // subtitles off.
           const restore = preTranslationSubtitleIndexRef.current;
           setActiveSubtitleIndex((idx) => (idx === LIVE_SUBTITLE_INDEX ? restore : idx));
-          toast.error(
-            event.payload.message
-              ? `Translation failed: ${event.payload.message}`
-              : "Subtitle translation failed",
-          );
+          reportSubtitleFailure(jobId, event.payload.message);
           break;
         }
         default:
@@ -1174,6 +1242,8 @@ export function VideoPlayer({
       onRefreshSubtitles,
       planRevision,
       resumeFromTranslationPause,
+      reportSubtitleFailure,
+      sessionId,
       subtitleUrls,
     ],
   );
@@ -2436,7 +2506,23 @@ export function VideoPlayer({
         }
 
         if (command.action === "play") {
-          await video.play();
+          try {
+            await video.play();
+          } catch {
+            showWatchTogetherNotice(
+              "Your browser blocked automatic playback. Click to join playback.",
+              "warning",
+              () => {
+                if (lastRoomCommandIdRef.current !== command.command_id) return;
+                const currentVideo = videoRef.current;
+                if (!currentVideo) return;
+                void currentVideo
+                  .play()
+                  .then(() => reportRoomReadyRef.current(command.position_seconds, false))
+                  .catch(() => {});
+              },
+            );
+          }
         }
 
         if (
@@ -2460,6 +2546,7 @@ export function VideoPlayer({
     watchTogether.room?.selection_revision,
     watchTogether.serverTimeOffsetMs,
     watchTogether.transportCommand,
+    showWatchTogetherNotice,
   ]);
 
   const handleVolumeChange = useCallback((v: number) => {
@@ -2936,7 +3023,13 @@ export function VideoPlayer({
       )}
 
       {!isDetached && notice ? (
-        <PlaybackNoticeOverlay title={notice.title} message={notice.message} tone={notice.tone} />
+        <PlaybackNoticeOverlay
+          title={notice.title}
+          message={notice.message}
+          tone={notice.tone}
+          actionLabel={notice.actionLabel}
+          onAction={notice.onAction}
+        />
       ) : null}
 
       {/* Error state */}
@@ -3085,6 +3178,7 @@ export function VideoPlayer({
           }
           sessionId={sessionId}
           getSubtitleStartPosition={getSubtitleStartPosition}
+          onSubtitleJobAccepted={handleSubtitleJobAccepted}
           audioTracks={audioTracks}
           activeAudioIndex={activeAudioIndex}
           onAudioSelect={onAudioSelect}

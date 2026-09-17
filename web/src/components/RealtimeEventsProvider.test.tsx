@@ -1,5 +1,14 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render } from "@testing-library/react";
+import { adminSessionsKey } from "@/api/v2/adminSessionsCache";
+import {
+  captureProfileRequestContext,
+  setAccessToken,
+  setProfileId,
+  setProfileToken,
+} from "@/api/client";
+import type { ReactNode } from "react";
+import { useRealtimeEvents } from "./realtimeEventsContext";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminKeys, catalogKeys, libraryKeys, sectionKeys } from "@/hooks/queries/keys";
 import type { ItemDetail } from "@/api/types";
@@ -22,13 +31,14 @@ const mockState = vi.hoisted(() => ({
     canPollDashboard: true,
     canApplyRealtimeUpdates: true,
   },
+  profile: null as { id: string; has_pin: boolean } | null,
   pathname: "/",
 }));
 
 vi.mock("@/hooks/useAuth", () => {
   const useAuth = () => ({
     user: mockState.user,
-    profile: null,
+    profile: mockState.profile,
   });
   return { useAuth, useOptionalAuth: useAuth };
 });
@@ -53,7 +63,10 @@ class FakeWebSocket {
   onclose: (() => void) | null = null;
   readyState = FakeWebSocket.CONNECTING;
 
-  constructor(public url: string) {
+  constructor(
+    public url: string,
+    public protocols?: string[],
+  ) {
     FakeWebSocket.instances.push(this);
   }
 
@@ -74,22 +87,22 @@ class FakeWebSocket {
 }
 
 describe("buildEventsUrl", () => {
-  it("includes auth token and websocket scheme", () => {
+  it("uses the websocket scheme without URL credentials", () => {
     expect(
-      buildEventsUrl("token-123", {
+      buildEventsUrl({
         protocol: "https:",
         host: "example.com",
       }),
-    ).toBe("wss://example.com/api/v1/events/ws?token=token-123");
+    ).toBe("wss://example.com/api/v2/events/ws");
   });
 
   it("omits the query string when no token is available", () => {
     expect(
-      buildEventsUrl(null, {
+      buildEventsUrl({
         protocol: "http:",
         host: "localhost:5173",
       }),
-    ).toBe("ws://localhost:5173/api/v1/events/ws");
+    ).toBe("ws://localhost:5173/api/v2/events/ws");
   });
 });
 
@@ -173,6 +186,25 @@ describe("invalidateCatalogState", () => {
 
 describe("RealtimeEventsProvider", () => {
   beforeEach(() => {
+    setAccessToken("session-access");
+    setProfileId(null);
+    setProfileToken(null);
+    mockState.profile = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({
+              ticket: "a".repeat(43),
+              protocol: "silo.events.v2",
+              expires_in: 30,
+              max_connection_seconds: 300,
+            }),
+            { headers: { "Content-Type": "application/json" } },
+          ),
+      ),
+    );
     FakeWebSocket.instances = [];
     vi.useFakeTimers();
     vi.stubGlobal("WebSocket", FakeWebSocket);
@@ -192,7 +224,27 @@ describe("RealtimeEventsProvider", () => {
     vi.unstubAllGlobals();
   });
 
-  it("ignores stale close events from intentionally closed sockets", () => {
+  it("skips paginated job query state when looking for a cached terminal event", async () => {
+    const client = new QueryClient();
+    client.setQueryData([...adminKeys.jobs("__all"), "pages", 20], {
+      pages: [{ items: [] }],
+      pageParams: [undefined],
+    });
+    client.setQueryData(adminKeys.jobs("__all"), [{ id: "done", status: "completed" }]);
+    const { result } = renderHook(() => useRealtimeEvents(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>
+          <RealtimeEventsProvider>{children}</RealtimeEventsProvider>
+        </QueryClientProvider>
+      ),
+    });
+    await expect(result.current.awaitAdminJob("done")).resolves.toMatchObject({
+      id: "done",
+      status: "completed",
+    });
+  });
+
+  it("ignores stale close events from intentionally closed sockets", async () => {
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
@@ -207,10 +259,15 @@ describe("RealtimeEventsProvider", () => {
       </QueryClientProvider>,
     );
 
+    await act(async () => {});
     expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(FakeWebSocket.instances[0]?.protocols).toEqual([
+      "silo.events.v2",
+      `silo.ticket.${"a".repeat(43)}`,
+    ]);
     const firstSocket = FakeWebSocket.instances[0];
 
-    act(() => {
+    await act(async () => {
       mockState.pageActivity = {
         ...mockState.pageActivity,
         canApplyRealtimeUpdates: false,
@@ -224,7 +281,7 @@ describe("RealtimeEventsProvider", () => {
       );
     });
 
-    act(() => {
+    await act(async () => {
       mockState.pageActivity = {
         ...mockState.pageActivity,
         canApplyRealtimeUpdates: true,
@@ -240,7 +297,7 @@ describe("RealtimeEventsProvider", () => {
 
     expect(FakeWebSocket.instances).toHaveLength(2);
 
-    act(() => {
+    await act(async () => {
       firstSocket?.emitClose();
       vi.advanceTimersByTime(1_000);
     });
@@ -248,7 +305,170 @@ describe("RealtimeEventsProvider", () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
 
-  it("defers broad catch-up refetches until foreground playback exits", () => {
+  it("reconnects on same-profile PIN replacement and rejects old socket frames", async () => {
+    setProfileId("profile-1");
+    mockState.profile = { id: "profile-1", has_pin: false };
+    const queryClient = new QueryClient();
+    const detailKey = catalogKeys.itemDetail("movie-1");
+    queryClient.setQueryData(detailKey, { content_id: "movie-1", type: "movie" });
+    const provider = () => (
+      <QueryClientProvider client={queryClient}>
+        <RealtimeEventsProvider>
+          <div />
+        </RealtimeEventsProvider>
+      </QueryClientProvider>
+    );
+    const view = render(provider());
+    await act(async () => {});
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    const oldSocket = FakeWebSocket.instances[0]!;
+    // Preserve a queued callback even after cleanup removes the socket handler.
+    const oldMessage = oldSocket.onmessage!;
+    await act(async () => {
+      setProfileToken("replacement-pin-proof");
+      mockState.profile = { id: "profile-1", has_pin: true };
+      view.rerender(provider());
+    });
+    expect(oldSocket.readyState).toBe(FakeWebSocket.CLOSED);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    const mintCalls = vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) => String(url).endsWith("/api/v2/events/ws-ticket"));
+    expect(mintCalls).toHaveLength(2);
+    expect(new Headers(mintCalls[1]![1]?.headers).get("X-Profile-Token")).toBe(
+      "replacement-pin-proof",
+    );
+    const event = {
+      type: "event",
+      channel: "user_state",
+      event: "favorite.updated",
+      data: {
+        profile_id: "profile-1",
+        content_id: "movie-1",
+        change: "favorite",
+        is_favorite: true,
+      },
+    };
+    await act(async () => {
+      oldMessage({ data: JSON.stringify(event) } as MessageEvent);
+      oldSocket.emitClose();
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(queryClient.getQueryData(detailKey)).not.toHaveProperty("user_state");
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    await act(async () => {
+      FakeWebSocket.instances[1]!.emitMessage(event);
+    });
+    expect(queryClient.getQueryData(detailKey)).toMatchObject({
+      user_state: { is_favorite: true },
+    });
+    view.unmount();
+    setProfileId(null);
+    setProfileToken(null);
+  });
+
+  it.each(["snapshot", "event"])(
+    "keeps the complete 205-row cache while a capped 200-row %s triggers scoped refetch",
+    async (type) => {
+      setProfileId("primary");
+      mockState.profile = { id: "primary", has_pin: false };
+      const authority = captureProfileRequestContext()!;
+      const currentKey = adminSessionsKey(authority);
+      const otherKey = adminSessionsKey({ ...authority, profileId: "other" });
+      const queryClient = new QueryClient();
+      const complete = Array.from({ length: 205 }, (_, i) => ({ id: String(i) }));
+      for (const key of [currentKey, otherKey, adminKeys.sessions()]) {
+        queryClient.setQueryData(key, complete);
+      }
+      let finish!: (rows: typeof complete) => void;
+      const load = vi.fn(
+        () =>
+          new Promise<typeof complete>((resolve) => {
+            finish = resolve;
+          }),
+      );
+      function SessionsObserver() {
+        useQuery({ queryKey: currentKey, queryFn: load, staleTime: Infinity });
+        return null;
+      }
+      const publishedLengths: number[] = [];
+      const unsubscribe = queryClient.getQueryCache().subscribe(() => {
+        publishedLengths.push(queryClient.getQueryData<typeof complete>(currentKey)!.length);
+      });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <RealtimeEventsProvider>
+            <SessionsObserver />
+          </RealtimeEventsProvider>
+        </QueryClientProvider>,
+      );
+      await act(async () => {});
+      expect(load).not.toHaveBeenCalled();
+      const socket = FakeWebSocket.instances[0]!;
+      await act(async () => {
+        socket.emitMessage({
+          type,
+          channel: "sessions",
+          event: "sessions.replaced",
+          data: complete.slice(0, 200),
+        });
+      });
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(queryClient.getQueryData(currentKey)).toEqual(complete);
+      expect(queryClient.getQueryState(otherKey)?.isInvalidated).toBe(false);
+      expect(queryClient.getQueryState(adminKeys.sessions())?.isInvalidated).toBe(false);
+      const refreshed = complete.map((row) => ({ id: `fresh-${row.id}` }));
+      await act(async () => {
+        finish(refreshed);
+      });
+      expect(queryClient.getQueryData(currentKey)).toEqual(refreshed);
+      expect(queryClient.getQueryData(otherKey)).toEqual(complete);
+      expect(queryClient.getQueryData(adminKeys.sessions())).toEqual(complete);
+      expect(publishedLengths.every((length) => length === 205)).toBe(true);
+      setProfileToken("replacement-proof");
+      await act(async () => {
+        socket.emitMessage({ type, channel: "sessions", event: "sessions.replaced", data: [] });
+      });
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(queryClient.getQueryState(currentKey)?.isInvalidated).toBe(false);
+      expect(queryClient.getQueryData(currentKey)).toEqual(refreshed);
+      unsubscribe();
+    },
+  );
+
+  it("defers session refresh only for the captured scoped query on an inactive dashboard", async () => {
+    setProfileId("primary");
+    mockState.profile = { id: "primary", has_pin: false };
+    mockState.pathname = "/admin";
+    mockState.pageActivity.canPollDashboard = false;
+    const authority = captureProfileRequestContext()!;
+    const currentKey = adminSessionsKey(authority);
+    const otherKey = adminSessionsKey({ ...authority, profileId: "other" });
+    const queryClient = new QueryClient();
+    for (const key of [currentKey, otherKey, adminKeys.sessions()])
+      queryClient.setQueryData(key, []);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RealtimeEventsProvider>
+          <div />
+        </RealtimeEventsProvider>
+      </QueryClientProvider>,
+    );
+    await act(async () => {});
+    await act(async () => {
+      FakeWebSocket.instances[0]!.emitMessage({
+        type: "snapshot",
+        channel: "sessions",
+        data: [{ id: "running" }],
+      });
+    });
+    expect(queryClient.getQueryData(currentKey)).toEqual([]);
+    expect(queryClient.getQueryState(currentKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(otherKey)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(adminKeys.sessions())?.isInvalidated).toBe(false);
+  });
+
+  it("defers broad catch-up refetches until foreground playback exits", async () => {
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
@@ -267,7 +487,7 @@ describe("RealtimeEventsProvider", () => {
 
     const view = render(provider());
 
-    act(() => {
+    await act(async () => {
       mockState.pageActivity = {
         ...mockState.pageActivity,
         isVisible: false,
@@ -276,7 +496,7 @@ describe("RealtimeEventsProvider", () => {
       view.rerender(provider());
     });
 
-    act(() => {
+    await act(async () => {
       mockState.pageActivity = {
         ...mockState.pageActivity,
         isVisible: true,
@@ -287,7 +507,7 @@ describe("RealtimeEventsProvider", () => {
 
     expect(refetchQueries).not.toHaveBeenCalled();
 
-    act(() => {
+    await act(async () => {
       mockState.pathname = "/item/movie-1";
       view.rerender(provider());
     });
@@ -299,7 +519,7 @@ describe("RealtimeEventsProvider", () => {
     });
   });
 
-  it("preserves cached watched state when a favorite-only event arrives", () => {
+  it("preserves cached watched state when a favorite-only event arrives", async () => {
     const queryClient = new QueryClient();
     const detailKey = catalogKeys.itemDetail("movie-1");
     queryClient.setQueryData<ItemDetail>(detailKey, {
@@ -316,7 +536,8 @@ describe("RealtimeEventsProvider", () => {
       </QueryClientProvider>,
     );
 
-    act(() => {
+    await act(async () => {});
+    await act(async () => {
       FakeWebSocket.instances[0]?.emitMessage({
         type: "event",
         channel: "user_state",

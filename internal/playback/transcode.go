@@ -21,6 +21,7 @@ import (
 
 	"github.com/Silo-Server/silo-server/internal/mediaprobe"
 	"github.com/Silo-Server/silo-server/internal/models"
+	"github.com/Silo-Server/silo-server/internal/processmetrics"
 	"github.com/Silo-Server/silo-server/internal/tonemap"
 	"github.com/google/uuid"
 )
@@ -454,6 +455,7 @@ func StartTranscode(ctx context.Context, opts TranscodeOpts) (*TranscodeSession,
 	// this ffmpeg produces is strictly newer than the stamp.
 	startedAt := time.Now()
 	if err := cmd.Start(); err != nil {
+		processmetrics.Record(processmetrics.Transcode, nil, err, ctx.Err())
 		cancel()
 		releaseHWDevice()
 		s.logFFmpegEvent(ctx, "ffmpeg process exit error", err.Error())
@@ -477,6 +479,7 @@ func (s *TranscodeSession) monitorFFmpeg(ctx context.Context, cmd *exec.Cmd, don
 	// flushing/logging so slow diagnostics cannot make the allocator count a
 	// process that has already exited.
 	releaseHWDevice()
+	processmetrics.Record(processmetrics.Transcode, cmd.ProcessState, waitErr, ctx.Err())
 	s.flushStderr(ctx)
 	s.mu.Lock()
 	s.running = false
@@ -1009,19 +1012,15 @@ func appendTimestampNormalizationArgs(args []string, opts TranscodeOpts) []strin
 // appendSegmentBoundaryArgs forces keyframes on segment boundaries so each HLS
 // fragment starts cleanly and can be appended independently by the player.
 //
-// With -copyts, the output timestamp t starts at the seek position rather than
-// 0. Subtracting SeekSeconds prevents a "catch-up storm" where n_forced races
-// from 0 to seek_position/segment_duration, making every frame an I-frame and
-// grinding encoding to a halt for large seeks.
+// FFmpeg's force_key_frames expression clock starts at the first encoded
+// frame, even with -copyts. Subtracting the source seek would suppress forced
+// keyframes until that much output had elapsed. Segments would then follow the
+// encoder's GOP instead of the synthetic manifest's fixed-duration timeline,
+// giving the same segment number different source times after a seek restart.
 func appendSegmentBoundaryArgs(args []string, opts TranscodeOpts) []string {
 	args = append(args, "-sc_threshold", "0")
-	if opts.SeekSeconds > 0 {
-		args = append(args, "-force_key_frames",
-			fmt.Sprintf("expr:gte(t-%.3f,n_forced*%d)", opts.SeekSeconds, opts.SegmentDuration))
-	} else {
-		args = append(args, "-force_key_frames",
-			fmt.Sprintf("expr:gte(t,n_forced*%d)", opts.SegmentDuration))
-	}
+	args = append(args, "-force_key_frames",
+		fmt.Sprintf("expr:gte(t,n_forced*%d)", opts.SegmentDuration))
 
 	// Hardware encoders (QSV, VAAPI, NVENC, VideoToolbox) may not reliably
 	// honor force_key_frames expressions. Set explicit GOP size so segment
@@ -3065,6 +3064,7 @@ func (s *TranscodeSession) restart(
 	// As in StartTranscode, stamp the generation before the process can write.
 	startedAt := time.Now()
 	if err := cmd.Start(); err != nil {
+		processmetrics.Record(processmetrics.Transcode, nil, err, ctx.Err())
 		cancel()
 		releaseHWDevice()
 		s.mu.Lock()

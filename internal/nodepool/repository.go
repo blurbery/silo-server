@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -23,11 +24,13 @@ const (
 
 // Node represents a stream node in the database.
 type Node struct {
-	ID      int    `json:"id"`
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	URL     string `json:"url"`
-	Enabled bool   `json:"enabled"`
+	// AdminRevision is populated only by consistent administrator configuration reads.
+	AdminRevision int64  `json:"-"`
+	ID            int    `json:"id"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	URL           string `json:"url"`
+	Enabled       bool   `json:"enabled"`
 	// PublicURL is the base URL streaming clients are given for this node,
 	// when it differs from URL. URL is the backend address — what the server
 	// and other nodes dial — so on a split network a proxy carries its
@@ -327,8 +330,20 @@ func normalizeCap(v *int) *int {
 }
 
 // Repository provides CRUD operations for stream nodes.
+type nodeQueries interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
 type Repository struct {
-	pool *pgxpool.Pool
+	pool nodeQueries
+}
+
+// NewTransactionalRepository reuses the normal node validation and SQL inside
+// an administrator-owned transaction. The caller owns commit and rollback.
+func NewTransactionalRepository(tx pgx.Tx) *Repository {
+	return &Repository{pool: tx}
 }
 
 // NewRepository creates a new node repository.

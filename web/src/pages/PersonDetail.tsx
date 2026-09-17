@@ -3,7 +3,7 @@ import { useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Pencil, RefreshCw } from "lucide-react";
 
-import { getPerson } from "@/api/client";
+import { getPerson } from "@/api/v2/people";
 import { createEmptyQueryDefinition, type Person } from "@/api/types";
 import type { CatalogSearchState } from "@/pages/catalogSearchParams";
 import EditPersonDialog from "@/components/EditPersonDialog";
@@ -34,7 +34,7 @@ export default function PersonDetail() {
 
   const { data: person, isLoading: personLoading } = useQuery({
     queryKey: personKeys.detail(id!),
-    queryFn: () => getPerson(id!),
+    queryFn: ({ signal }) => getPerson(id!, { signal }),
     enabled: !!id,
     refetchInterval: (query) => {
       const data = query.state.data;

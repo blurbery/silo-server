@@ -66,6 +66,7 @@ interface PlayerControlsProps {
   mediaFileId?: number;
   playerConfig?: PlayerConfig;
   onRefreshSubtitles?: () => void;
+  onSubtitleJobAccepted?: (jobId: string) => void;
   sessionId?: string;
   getSubtitleStartPosition?: () => number;
   // Audio
@@ -133,6 +134,7 @@ export function PlayerControls({
   mediaFileId,
   playerConfig,
   onRefreshSubtitles,
+  onSubtitleJobAccepted,
   sessionId,
   getSubtitleStartPosition,
   audioTracks,
@@ -321,6 +323,7 @@ export function PlayerControls({
               mediaFileId={mediaFileId}
               playerConfig={playerConfig}
               onRefreshSubtitles={onRefreshSubtitles}
+              onSubtitleJobAccepted={onSubtitleJobAccepted}
               sessionId={sessionId}
               getSubtitleStartPosition={getSubtitleStartPosition}
               audioTracks={audioTracks}
@@ -494,6 +497,7 @@ export function PlayerControls({
                 mediaFileId={mediaFileId}
                 playerConfig={playerConfig}
                 onRefreshSubtitles={onRefreshSubtitles}
+                onSubtitleJobAccepted={onSubtitleJobAccepted}
                 sessionId={sessionId}
                 getSubtitleStartPosition={getSubtitleStartPosition}
                 audioTracks={audioTracks}

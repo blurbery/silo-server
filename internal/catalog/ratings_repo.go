@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -19,22 +18,14 @@ type UserRating struct {
 	RatedAt     time.Time `json:"rated_at"`
 }
 
-// CommunityRating is a profile's explicit rating plus its server-local reaction
-// totals. User and profile IDs stay internal; handlers expose only an opaque
-// per-rating key and an abbreviated display name.
-type CommunityRating struct {
-	UserID           int
-	ProfileID        string
-	ProfileName      string
-	Avatar           string
-	ProfileUpdatedAt time.Time
-	Rating           int
-	RatedAt          time.Time
-	UpCount          int
-	DownCount        int
-	ViewerReaction   int
-	AverageRating    float64
-	TotalVoteCount   int
+// RatingKey is the keyset position ListPage resumes after: the (RatedAt,
+// MediaItemID) of the last row a caller already holds, copied verbatim from
+// a UserRating the page returned. media_item_id is unique per profile, so
+// with the fixed ORDER BY rated_at DESC, media_item_id DESC the pair orders
+// every row totally.
+type RatingKey struct {
+	RatedAt     time.Time
+	MediaItemID string
 }
 
 // RatingsRepo provides access to the user_ratings table.
@@ -52,7 +43,7 @@ func (r *RatingsRepo) Set(ctx context.Context, userID int, profileID, mediaItemI
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO user_ratings (user_id, profile_id, media_item_id, rating, rated_at)
 		VALUES ($1, $2, $3, $4, NOW())
-		ON CONFLICT ON CONSTRAINT user_ratings_pkey
+		ON CONFLICT (user_id, profile_id, media_item_id)
 		DO UPDATE SET rating = EXCLUDED.rating, rated_at = EXCLUDED.rated_at`,
 		userID, profileID, mediaItemID, rating,
 	)
@@ -71,7 +62,7 @@ func (r *RatingsRepo) Get(ctx context.Context, userID int, profileID, mediaItemI
 		WHERE user_id = $1 AND profile_id = $2 AND media_item_id = $3`,
 		userID, profileID, mediaItemID,
 	).Scan(&ur.UserID, &ur.ProfileID, &ur.MediaItemID, &ur.Rating, &ur.RatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
@@ -94,6 +85,43 @@ func (r *RatingsRepo) Delete(ctx context.Context, userID int, profileID, mediaIt
 }
 
 // List returns all ratings for a user+profile with pagination.
+// ListPage is the keyset form of List: ordered by (rated_at DESC,
+// media_item_id DESC), at most limit rows strictly after the key in that
+// order (nil = from the most recently rated row). rated_at keeps the
+// column's own precision, so a key read back from a row compares equal to
+// the stored value.
+func (r *RatingsRepo) ListPage(ctx context.Context, userID int, profileID string, after *RatingKey, limit int) ([]UserRating, error) {
+	args := []any{userID, profileID}
+	query := `
+		SELECT user_id, profile_id, media_item_id, rating, rated_at
+		FROM user_ratings
+		WHERE user_id = $1 AND profile_id = $2`
+	if after != nil {
+		args = append(args, after.RatedAt, after.MediaItemID)
+		query += fmt.Sprintf(`
+		  AND (rated_at, media_item_id) < ($%d::timestamptz, $%d)`, len(args)-1, len(args))
+	}
+	args = append(args, limit)
+	query += fmt.Sprintf(`
+		ORDER BY rated_at DESC, media_item_id DESC
+		LIMIT $%d`, len(args))
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list ratings page: %w", err)
+	}
+	defer rows.Close()
+
+	var ratings []UserRating
+	for rows.Next() {
+		var ur UserRating
+		if err := rows.Scan(&ur.UserID, &ur.ProfileID, &ur.MediaItemID, &ur.Rating, &ur.RatedAt); err != nil {
+			return nil, fmt.Errorf("scan rating: %w", err)
+		}
+		ratings = append(ratings, ur)
+	}
+	return ratings, rows.Err()
+}
+
 func (r *RatingsRepo) List(ctx context.Context, userID int, profileID string, limit, offset int) ([]UserRating, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT user_id, profile_id, media_item_id, rating, rated_at
@@ -142,171 +170,4 @@ func (r *RatingsRepo) ListForItems(ctx context.Context, userID int, profileID st
 		result[itemID] = rating
 	}
 	return result, rows.Err()
-}
-
-// ListCommunity returns explicit profile ratings for an item. The returned
-// average is display-only and never feeds personal recommendation signals.
-func (r *RatingsRepo) ListCommunity(
-	ctx context.Context,
-	viewerUserID int,
-	viewerProfileID string,
-	mediaItemID string,
-	limit int,
-	offset int,
-) ([]CommunityRating, error) {
-	rows, err := r.pool.Query(ctx, `
-		WITH reaction_counts AS (
-			SELECT target_user_id,
-			       target_profile_id,
-			       COUNT(*) FILTER (WHERE reaction = 1)::integer AS up_count,
-			       COUNT(*) FILTER (WHERE reaction = -1)::integer AS down_count,
-			       COALESCE(
-				MAX(reaction) FILTER (
-					WHERE reactor_user_id = $2 AND reactor_profile_id = $3
-				),
-				0
-			   )::integer AS viewer_reaction
-			FROM household_rating_reactions
-			WHERE media_item_id = $1
-			GROUP BY target_user_id, target_profile_id
-		)
-		SELECT ur.user_id,
-		       ur.profile_id,
-		       up.name AS profile_name,
-		       up.avatar,
-		       up.updated_at AS profile_updated_at,
-		       ur.rating,
-		       ur.rated_at,
-		       COALESCE(rc.up_count, 0),
-		       COALESCE(rc.down_count, 0),
-		       COALESCE(rc.viewer_reaction, 0),
-		       AVG(ur.rating) OVER ()::double precision AS average_rating,
-		       COUNT(*) OVER ()::integer AS total_vote_count
-		FROM user_ratings ur
-		JOIN user_profiles up
-		  ON up.user_id = ur.user_id
-		 AND up.id = ur.profile_id
-		LEFT JOIN reaction_counts rc
-		  ON rc.target_user_id = ur.user_id
-		 AND rc.target_profile_id = ur.profile_id
-		WHERE ur.media_item_id = $1
-		ORDER BY (ur.user_id = $2 AND ur.profile_id = $3) DESC,
-		         ur.rated_at DESC,
-		         ur.user_id,
-		         ur.profile_id
-		LIMIT $4 OFFSET $5`,
-		mediaItemID, viewerUserID, viewerProfileID, limit, offset,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("list community ratings: %w", err)
-	}
-	defer rows.Close()
-
-	ratings := make([]CommunityRating, 0, limit)
-	for rows.Next() {
-		var rating CommunityRating
-		if err := rows.Scan(
-			&rating.UserID,
-			&rating.ProfileID,
-			&rating.ProfileName,
-			&rating.Avatar,
-			&rating.ProfileUpdatedAt,
-			&rating.Rating,
-			&rating.RatedAt,
-			&rating.UpCount,
-			&rating.DownCount,
-			&rating.ViewerReaction,
-			&rating.AverageRating,
-			&rating.TotalVoteCount,
-		); err != nil {
-			return nil, fmt.Errorf("scan community rating: %w", err)
-		}
-		ratings = append(ratings, rating)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate community ratings: %w", err)
-	}
-	return ratings, nil
-}
-
-// SetCommunityReaction records one profile-scoped reaction for an existing
-// rating. Selecting from user_ratings keeps a delete racing the request from
-// leaving an orphaned reaction.
-func (r *RatingsRepo) SetCommunityReaction(
-	ctx context.Context,
-	viewerUserID int,
-	viewerProfileID string,
-	mediaItemID string,
-	targetUserID int,
-	targetProfileID string,
-	reaction int,
-) (bool, error) {
-	var inserted int
-	err := r.pool.QueryRow(ctx, `
-		INSERT INTO household_rating_reactions (
-			media_item_id,
-			target_user_id,
-			target_profile_id,
-			reactor_user_id,
-			reactor_profile_id,
-			reaction,
-			reacted_at
-		)
-		SELECT ur.media_item_id, ur.user_id, ur.profile_id, $4, $5, $6, NOW()
-		FROM user_ratings ur
-		WHERE ur.media_item_id = $1
-		  AND ur.user_id = $2
-		  AND ur.profile_id = $3
-		ON CONFLICT (
-			media_item_id,
-			target_user_id,
-			target_profile_id,
-			reactor_user_id,
-			reactor_profile_id
-		) DO UPDATE
-		SET reaction = EXCLUDED.reaction,
-		    reacted_at = EXCLUDED.reacted_at
-		RETURNING 1`,
-		mediaItemID,
-		targetUserID,
-		targetProfileID,
-		viewerUserID,
-		viewerProfileID,
-		reaction,
-	).Scan(&inserted)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("set community rating reaction: %w", err)
-	}
-	return inserted == 1, nil
-}
-
-// DeleteCommunityReaction removes the current profile's reaction to a rating.
-func (r *RatingsRepo) DeleteCommunityReaction(
-	ctx context.Context,
-	viewerUserID int,
-	viewerProfileID string,
-	mediaItemID string,
-	targetUserID int,
-	targetProfileID string,
-) error {
-	_, err := r.pool.Exec(ctx, `
-		DELETE FROM household_rating_reactions
-		WHERE media_item_id = $1
-		  AND target_user_id = $2
-		  AND target_profile_id = $3
-		  AND reactor_user_id = $4
-		  AND reactor_profile_id = $5`,
-		mediaItemID,
-		targetUserID,
-		targetProfileID,
-		viewerUserID,
-		viewerProfileID,
-	)
-	if err != nil {
-		return fmt.Errorf("delete community rating reaction: %w", err)
-	}
-	return nil
 }

@@ -5,19 +5,11 @@ interface StarRatingProps {
   value: number | null;
   onChange: (rating: number | null) => void;
   size?: number;
-  communityAverage?: number | null;
-  communityVoteCount?: number;
 }
 
 const STAR_COUNT = 5;
 
-function StarRating({
-  value,
-  onChange,
-  size = 20,
-  communityAverage = null,
-  communityVoteCount = 0,
-}: StarRatingProps) {
+function StarRating({ value, onChange, size = 20 }: StarRatingProps) {
   function handleClick(star: number) {
     if (star === value) {
       onChange(null);
@@ -47,23 +39,17 @@ function StarRating({
   );
 
   const tabbableStar = value ?? 1;
-  const groupLabel =
-    communityAverage !== null && communityVoteCount > 0
-      ? `Rating. Server average ${communityAverage.toFixed(1)} from ${communityVoteCount} watched ${communityVoteCount === 1 ? "profile" : "profiles"}.`
-      : "Rating";
 
   return (
     <div
       role="radiogroup"
-      aria-label={groupLabel}
+      aria-label="Rating"
       className="star-rating flex items-center gap-0.5 rounded-full px-2.5 py-2"
       onKeyDown={handleKeyDown}
     >
       {Array.from({ length: STAR_COUNT }, (_, i) => {
         const star = i + 1;
         const filled = value !== null && star <= value;
-        const communityFill =
-          communityAverage === null ? 0 : Math.max(0, Math.min(1, communityAverage - i));
         return (
           <button
             key={star}
@@ -74,35 +60,10 @@ function StarRating({
             tabIndex={star === tabbableStar ? 0 : -1}
             data-filled={filled}
             data-rating={star}
-            data-community-fill={communityFill.toFixed(2)}
             className="star-rating-star focus-visible:ring-ring cursor-pointer rounded-sm border-none bg-transparent p-0.5 leading-none outline-none focus-visible:ring-2"
             onClick={() => handleClick(star)}
           >
-            <span
-              className="star-rating-glyph relative block"
-              style={{ width: size, height: size }}
-            >
-              {communityFill > 0 && (
-                <span
-                  aria-hidden="true"
-                  className="star-rating-community-fill absolute inset-y-0 left-0 overflow-hidden"
-                  style={{ width: `${communityFill * 100}%` }}
-                >
-                  <Star
-                    className="absolute top-0 left-0 fill-current"
-                    size={size}
-                    strokeWidth={1.5}
-                  />
-                </span>
-              )}
-              <Star
-                aria-hidden="true"
-                className="star-rating-personal relative"
-                size={size}
-                fill="none"
-                strokeWidth={1.5}
-              />
-            </span>
+            <Star size={size} fill="none" strokeWidth={1.5} />
           </button>
         );
       })}

@@ -33,6 +33,10 @@ vi.mock("@/hooks/queries/libraryCollections", () => ({
   useLibraryCollectionItems: (...args: unknown[]) => mockUseLibraryCollectionItems(...args),
 }));
 
+function collectionItemsResult(items: Array<{ content_id: string; title: string }>) {
+  return { data: { items, total: items.length, has_more: false }, isLoading: false };
+}
+
 vi.mock("@/components/MediaCarousel", () => ({
   default: ({
     title,
@@ -183,7 +187,7 @@ describe("LibraryRecommended", () => {
       }),
     );
     mockUseSidebarPins.mockReturnValue({ pins: {} });
-    mockUseLibraryCollectionItems.mockReturnValue({ data: [], isLoading: false });
+    mockUseLibraryCollectionItems.mockReturnValue(collectionItemsResult([]));
   });
 
   afterEach(async () => {
@@ -317,18 +321,10 @@ describe("LibraryRecommended", () => {
     });
     mockUseLibraryCollectionItems.mockImplementation((libraryId: number, collectionId: string) => {
       if (libraryId === 42 && collectionId === "col-1") {
-        return {
-          data: [
-            {
-              content_id: "item-1",
-              title: "Scream",
-            },
-          ],
-          isLoading: false,
-        };
+        return collectionItemsResult([{ content_id: "item-1", title: "Scream" }]);
       }
 
-      return { data: [], isLoading: false };
+      return collectionItemsResult([]);
     });
 
     await render(<LibraryRecommended libraryId={42} />);
@@ -336,6 +332,18 @@ describe("LibraryRecommended", () => {
     expect(container.textContent).toContain("Pinned Horror");
     expect(container.textContent).toContain("Scream");
     expect(container.textContent).not.toContain("Other Library Collection");
+    expect(container.querySelector('[data-testid="pinned-collection-load-more"]')).toBeNull();
     expect(mockUseLibraryCollectionItems).toHaveBeenCalledWith(42, "col-1");
+  });
+
+  it("renders nothing for a pinned collection with no visible items", async () => {
+    mockUseSidebarPins.mockReturnValue({
+      pins: { "42": [{ type: "collection", id: "col-1", label: "Pinned Horror" }] },
+    });
+    mockUseLibraryCollectionItems.mockReturnValue(collectionItemsResult([]));
+
+    await render(<LibraryRecommended libraryId={42} />);
+
+    expect(container.textContent).not.toContain("Pinned Horror");
   });
 });

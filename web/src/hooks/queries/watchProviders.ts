@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiClientError } from "@/api/client";
+import { captureProfileRequestContext } from "@/api/client";
+import { v2, V2ProblemError } from "@/api/v2/request";
 import { favoriteKeys, watchlistKeys, watchProviderKeys } from "./keys";
 import { toast } from "sonner";
 import { storage } from "@/utils/storage";
@@ -37,6 +38,7 @@ export interface WatchProviderCapabilities {
 }
 
 export interface WatchProviderConnection {
+  etag?: string;
   provider: string;
   display_name: string;
   capabilities: WatchProviderCapabilities;
@@ -109,15 +111,6 @@ export interface WatchProviderManualSyncResponse {
   retry_after_seconds: number;
 }
 
-type DeviceAuthResponse = DeviceAuthSession & {
-  ID?: string;
-  Provider?: string;
-  UserCode?: string;
-  VerificationURL?: string;
-  IntervalSeconds?: number;
-  ExpiresAt?: string;
-};
-
 export type UpdateWatchProviderConnection = Partial<
   Pick<
     WatchProviderConnection,
@@ -136,67 +129,87 @@ export type UpdateWatchProviderConnection = Partial<
   >
 >;
 
-export function fetchWatchProviders() {
-  return api<{ providers: WatchProviderSummary[] }>("/watch-providers");
+export async function fetchWatchProviders() {
+  const result = await v2("GET /api/v2/watch-providers");
+  return { providers: result.items as WatchProviderSummary[] };
 }
 
-export function fetchWatchProviderConnection(provider: string) {
-  return api<WatchProviderConnection>(`/watch-providers/${provider}/connection`);
+export async function fetchWatchProviderConnection(provider: string) {
+  const profileContext = captureProfileRequestContext();
+  const scope = profileContext ? { profileContext } : {};
+  const result = await v2("GET /api/v2/watch-providers/{provider}/connection", {
+    path: { provider },
+    ...scope,
+  });
+  if (!result.connected) return result as WatchProviderConnection;
+  let etag: string | undefined;
+  const settings = await v2("GET /api/v2/watch-providers/{provider}/connection/settings", {
+    path: { provider },
+    ...scope,
+    onResponse: (response) => {
+      etag = response.headers.get("ETag") ?? undefined;
+    },
+  });
+  return { ...result, ...settings, etag } as WatchProviderConnection;
 }
 
 export function startWatchProviderDeviceAuth(provider: string) {
-  return api<DeviceAuthResponse>(`/watch-providers/${provider}/auth/device-code`, {
-    method: "POST",
-  }).then((session) => ({
-    id: session.id ?? session.ID ?? "",
-    provider: session.provider ?? session.Provider ?? provider,
-    user_code: session.user_code ?? session.UserCode ?? "",
-    verification_url: session.verification_url ?? session.VerificationURL ?? "",
-    interval_seconds: session.interval_seconds ?? session.IntervalSeconds ?? 0,
-    expires_at: session.expires_at ?? session.ExpiresAt ?? "",
-  }));
+  return v2("POST /api/v2/watch-providers/{provider}/auth/device-code", { path: { provider } });
 }
 
-export function pollWatchProviderDeviceAuth(provider: string, authSessionId: string) {
-  return api<WatchProviderConnection>(`/watch-providers/${provider}/auth/poll`, {
-    method: "POST",
-    body: JSON.stringify({ auth_session_id: authSessionId }),
+export async function pollWatchProviderDeviceAuth(provider: string, authSessionId: string) {
+  const result = await v2("POST /api/v2/watch-providers/{provider}/auth/poll", {
+    path: { provider },
+    body: { auth_session_id: authSessionId },
   });
+  return result as WatchProviderConnection;
 }
 
-export function connectWatchProviderAPIKey(
+export async function connectWatchProviderAPIKey(
   provider: string,
   apiKey: string,
   connectionConfig: WatchProviderConnectionConfig = {},
 ) {
-  return api<WatchProviderConnection>(`/watch-providers/${provider}/auth/api-key`, {
-    method: "POST",
-    body: JSON.stringify({ api_key: apiKey, connection_config: connectionConfig }),
+  const result = await v2("POST /api/v2/watch-providers/{provider}/auth/api-key", {
+    path: { provider },
+    body: { api_key: apiKey, connection_config: connectionConfig },
   });
+  return result as WatchProviderConnection;
 }
 
-export function updateWatchProviderConnection(
+export async function updateWatchProviderConnection(
   provider: string,
   body: UpdateWatchProviderConnection,
+  expectedETag: string,
 ) {
-  return api<WatchProviderConnection>(`/watch-providers/${provider}/connection`, {
-    method: "PATCH",
-    body: JSON.stringify(body),
+  const profileContext = captureProfileRequestContext();
+  let etag: string | undefined;
+  const result = await v2("PATCH /api/v2/watch-providers/{provider}/connection", {
+    path: { provider },
+    ...(profileContext ? { profileContext } : {}),
+    onResponse: (response) => {
+      etag = response.headers.get("ETag") ?? undefined;
+    },
+    body,
+    headers: { "If-Match": expectedETag },
   });
+  return { ...result, etag };
 }
 
 export function deleteWatchProviderConnection(provider: string) {
-  return api(`/watch-providers/${provider}/connection`, { method: "DELETE" });
+  return v2("DELETE /api/v2/watch-providers/{provider}/connection", { path: { provider } });
 }
 
 export function triggerWatchProviderSync(provider: string) {
-  return api<WatchProviderManualSyncResponse>(`/watch-providers/${provider}/sync`, {
-    method: "POST",
-  });
+  return v2("POST /api/v2/watch-providers/{provider}/sync", { path: { provider } });
 }
 
-export function fetchWatchProviderSyncRuns(provider: string) {
-  return api<{ runs: WatchProviderSyncRun[] }>(`/watch-providers/${provider}/sync-runs`);
+export async function fetchWatchProviderSyncRuns(provider: string) {
+  const result = await v2("GET /api/v2/watch-providers/{provider}/sync-runs", {
+    path: { provider },
+    query: { limit: 10 },
+  });
+  return { runs: result.items as WatchProviderSyncRun[] };
 }
 
 function getActiveProfileId() {
@@ -236,6 +249,7 @@ export function useWatchProviderSyncRuns(provider: string, enabled = true) {
 
 export function useStartWatchProviderDeviceAuth(provider: string) {
   return useMutation({
+    retry: false,
     mutationFn: () => startWatchProviderDeviceAuth(provider),
     onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to start auth"),
   });
@@ -244,10 +258,14 @@ export function useStartWatchProviderDeviceAuth(provider: string) {
 export function usePollWatchProviderDeviceAuth(provider: string) {
   const queryClient = useQueryClient();
   return useMutation({
+    retry: false,
     mutationFn: (authSessionId: string) => pollWatchProviderDeviceAuth(provider, authSessionId),
     onSuccess: (connection) => {
       const profileId = getActiveProfileId();
       queryClient.setQueryData(watchProviderKeys.connection(profileId, provider), connection);
+      queryClient.invalidateQueries({
+        queryKey: watchProviderKeys.connection(profileId, provider),
+      });
       toast.success("Watch provider connected");
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to finish auth"),
@@ -257,6 +275,7 @@ export function usePollWatchProviderDeviceAuth(provider: string) {
 export function useConnectWatchProviderAPIKey(provider: string) {
   const queryClient = useQueryClient();
   return useMutation({
+    retry: false,
     mutationFn: ({
       apiKey,
       connectionConfig,
@@ -267,6 +286,9 @@ export function useConnectWatchProviderAPIKey(provider: string) {
     onSuccess: (connection) => {
       const profileId = getActiveProfileId();
       queryClient.setQueryData(watchProviderKeys.connection(profileId, provider), connection);
+      queryClient.invalidateQueries({
+        queryKey: watchProviderKeys.connection(profileId, provider),
+      });
       toast.success("Watch provider connected");
     },
     onError: (err) =>
@@ -277,19 +299,37 @@ export function useConnectWatchProviderAPIKey(provider: string) {
 export function useUpdateWatchProviderConnection(provider: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (body: UpdateWatchProviderConnection) =>
-      updateWatchProviderConnection(provider, body),
-    onSuccess: (connection) => {
-      const profileId = getActiveProfileId();
-      queryClient.setQueryData(watchProviderKeys.connection(profileId, provider), connection);
+    retry: false,
+    onMutate: () => ({ profileId: getActiveProfileId() }),
+    mutationFn: (body: UpdateWatchProviderConnection) => {
+      const current = queryClient.getQueryData<WatchProviderConnection>(
+        watchProviderKeys.connection(getActiveProfileId(), provider),
+      );
+      if (!current?.etag) throw new Error("Reload provider settings before saving changes.");
+      return updateWatchProviderConnection(provider, body, current.etag);
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to update provider"),
+    onSuccess: (settings, _variables, context) => {
+      queryClient.setQueryData<WatchProviderConnection>(
+        watchProviderKeys.connection(context?.profileId, provider),
+        (current) => (current ? { ...current, ...settings } : undefined),
+      );
+    },
+    onError: async (err, _variables, context) => {
+      if (err instanceof V2ProblemError && err.status === 412) {
+        await queryClient.invalidateQueries({
+          queryKey: watchProviderKeys.connection(context?.profileId, provider),
+        });
+        return;
+      }
+      toast.error(err instanceof Error ? err.message : "Failed to update provider");
+    },
   });
 }
 
 export function useDeleteWatchProviderConnection(provider: string) {
   const queryClient = useQueryClient();
   return useMutation({
+    retry: false,
     mutationFn: () => deleteWatchProviderConnection(provider),
     onSuccess: () => {
       const profileId = getActiveProfileId();
@@ -306,6 +346,7 @@ export function useDeleteWatchProviderConnection(provider: string) {
 export function useTriggerWatchProviderSync(provider: string) {
   const queryClient = useQueryClient();
   return useMutation({
+    retry: false,
     mutationFn: () => triggerWatchProviderSync(provider),
     onSuccess: (response) => {
       const profileId = getActiveProfileId();
@@ -321,8 +362,8 @@ export function useTriggerWatchProviderSync(provider: string) {
       toast.success("Watch provider sync started");
     },
     onError: (err) => {
-      if (err instanceof ApiClientError && err.status === 429) {
-        const retryAfter = err.details?.retry_after_seconds;
+      if (err instanceof V2ProblemError && err.status === 429) {
+        const retryAfter = err.retryAfterSeconds;
         toast.error(
           retryAfter ? `Sync available in ${formatRetryAfter(retryAfter)}` : "Sync is cooling down",
         );

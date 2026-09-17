@@ -198,6 +198,7 @@ describe("AdminPlugins", () => {
       catalog: [],
       installations: [],
       catalogSettings: {
+        etag: '"catalog-snapshot"',
         include_approved_community_plugins: true,
         approved_community_plugin_count: 2,
         installed_community_plugin_count: 2,
@@ -224,6 +225,7 @@ describe("AdminPlugins", () => {
       catalog: [],
       installations: [],
       catalogSettings: {
+        etag: '"catalog-snapshot"',
         include_approved_community_plugins: false,
         approved_community_plugin_count: 2,
         installed_community_plugin_count: 0,
@@ -243,6 +245,7 @@ describe("AdminPlugins", () => {
     onCheckedChange(true);
 
     expect(updatePluginCatalogSettingsMutateMock).toHaveBeenCalledWith({
+      etag: '"catalog-snapshot"',
       include_approved_community_plugins: true,
     });
   });
@@ -253,6 +256,7 @@ describe("AdminPlugins", () => {
       catalog: [],
       installations: [],
       catalogSettings: {
+        etag: '"catalog-snapshot"',
         include_approved_community_plugins: true,
         approved_community_plugin_count: 2,
         installed_community_plugin_count: 2,

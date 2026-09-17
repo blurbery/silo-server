@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { captureSuggestionDraft } from "@/api/v2/watchTogetherSuggestionCreate";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import {
@@ -13,7 +22,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { ApiClientError } from "@/api/client";
+import { ApiClientError, StaleApiRequestContextError } from "@/api/client";
 import { type BrowseItem } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -449,6 +458,23 @@ export default function WatchTogetherRoomPage() {
   const isHost = roomConnection.room?.self_can_manage_room === true;
   const isVoteMode = roomConnection.room?.selection_mode === "vote";
   const pendingAction: PendingAction = isVoteMode ? "suggest" : "select";
+  const suggestionDraft = useMemo(() => {
+    if (!candidate || !roomId || !roomToken || pendingAction !== "suggest") return null;
+    return captureSuggestionDraft(roomId, roomToken, {
+      content_id: candidate.content_id,
+      content_type: candidate.type === "episode" ? "episode" : "movie",
+      title: candidate.title,
+      subtitle: candidateContext ?? "",
+      poster_url: candidate.poster_url ?? "",
+    });
+  }, [candidate, candidateContext, roomId, roomToken, pendingAction]);
+  const currentSuggestionDraft = useRef(suggestionDraft);
+  useLayoutEffect(() => {
+    currentSuggestionDraft.current = suggestionDraft;
+    return () => {
+      currentSuggestionDraft.current = null;
+    };
+  }, [suggestionDraft]);
 
   const handleCopyInvite = useCallback(async () => {
     await copyWatchTogetherInvite(roomConnection.room?.invite_path, roomConnection.room?.code);
@@ -482,29 +508,28 @@ export default function WatchTogetherRoomPage() {
     setSubmitting(true);
     try {
       if (pendingAction === "suggest") {
-        await roomConnection.createSuggestion({
-          content_id: candidate.content_id,
-          content_type: candidate.type === "episode" ? "episode" : "movie",
-          title: candidate.title,
-          subtitle: candidateContext ?? "",
-          poster_url: candidate.poster_url ?? "",
-        });
+        if (!suggestionDraft) return;
+        await roomConnection.createSuggestion(suggestionDraft);
+        if (currentSuggestionDraft.current !== suggestionDraft) return;
         setCandidate(null);
         setCandidateContext(null);
         toast.success("Suggestion added");
       } else {
-        await roomConnection.selectItem({
+        const selected = await roomConnection.selectItem({
           content_id: candidate.content_id,
         });
+        if (!selected) return;
         setCandidate(null);
         setCandidateContext(null);
       }
     } catch (error) {
+      if (error instanceof StaleApiRequestContextError) return;
+      if (pendingAction === "suggest" && currentSuggestionDraft.current !== suggestionDraft) return;
       toast.error(error instanceof Error ? error.message : "Failed to update room");
     } finally {
       setSubmitting(false);
     }
-  }, [candidate, candidateContext, pendingAction, roomConnection, roomId]);
+  }, [candidate, pendingAction, roomConnection, roomId, suggestionDraft]);
 
   const handleSelectSearchResult = useCallback((item: BrowseItem) => {
     if (item.type === "series") {
@@ -914,6 +939,13 @@ export default function WatchTogetherRoomPage() {
                     </div>
                   ))}
                 </div>
+              ) : searchQuery.isError ? (
+                <div role="alert" className="space-y-2 py-8 text-center text-sm">
+                  <p>Could not load search results.</p>
+                  <Button variant="outline" onClick={() => void searchQuery.refetch()}>
+                    Retry search
+                  </Button>
+                </div>
               ) : searchResults.length > 0 ? (
                 <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
                   {searchResults.map((item, index) => (
@@ -974,9 +1006,7 @@ export default function WatchTogetherRoomPage() {
             onVote={(id: string) => roomConnection.vote(id)}
             onUnvote={(id: string) => roomConnection.unvote(id)}
             onDelete={(id: string) => roomConnection.deleteSuggestion(id)}
-            onPromote={async (id: string) => {
-              await roomConnection.promoteSuggestion(id);
-            }}
+            onPromote={(id: string) => roomConnection.promoteSuggestion(id)}
             onOpenSearch={() => {
               searchInputRef.current?.focus();
             }}

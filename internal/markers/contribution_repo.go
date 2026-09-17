@@ -306,3 +306,63 @@ func (s *ContributionStore) ListByFile(ctx context.Context, fileID int) ([]Contr
 	}
 	return out, rows.Err()
 }
+
+// ContributionPagePosition is a descending keyset position, not a snapshot.
+// Rows updated during traversal may move ahead of the current page.
+type ContributionPagePosition struct {
+	UpdatedAt time.Time
+	ID        string
+}
+
+func nullContributionTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
+}
+
+func (s *ContributionStore) ListByFilePage(ctx context.Context, fileID int, limit int, after ContributionPagePosition) ([]ContributionRow, bool, error) {
+	if s == nil || s.pool == nil {
+		return []ContributionRow{}, false, nil
+	}
+	if limit < 1 || limit > 200 {
+		return nil, false, fmt.Errorf("invalid contribution page limit")
+	}
+	if after.ID == "" {
+		after.ID = "00000000-0000-0000-0000-000000000000"
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, media_file_id, provider, segment_kind, source,
+		       submitted_start_ms, submitted_end_ms, video_duration_ms,
+		       content_hash, submission_id, status, http_status, error,
+		       submitted_at, updated_at
+		FROM marker_contributions WHERE media_file_id = $1
+		AND ($2::timestamptz IS NULL OR (updated_at, id) < ($2, $3::uuid))
+ ORDER BY updated_at DESC, id DESC LIMIT $4`, fileID, nullContributionTime(after.UpdatedAt), after.ID, limit+1)
+	if err != nil {
+		return nil, false, fmt.Errorf("list marker contributions: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ContributionRow
+	for rows.Next() {
+		var r ContributionRow
+		if err := rows.Scan(
+			&r.ID, &r.MediaFileID, &r.Provider, &r.SegmentKind, &r.Source,
+			&r.SubmittedStartMs, &r.SubmittedEndMs, &r.VideoDurationMs,
+			&r.ContentHash, &r.SubmissionID, &r.Status, &r.HTTPStatus, &r.Error,
+			&r.SubmittedAt, &r.UpdatedAt,
+		); err != nil {
+			return nil, false, fmt.Errorf("scan marker contribution: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	more := len(out) > limit
+	if more {
+		out = out[:limit]
+	}
+	return out, more, nil
+}

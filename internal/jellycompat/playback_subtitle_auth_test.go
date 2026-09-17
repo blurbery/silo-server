@@ -211,6 +211,10 @@ func TestHandleSubtitleStreamAllowsAPIAuxiliaryResourceForProxyRoutedSession(t *
 	}
 }
 
+func (r fakeSubtitleRepository) GetDownloadedSubtitleByContent(context.Context, *subtitles.DownloadedSubtitle) (*subtitles.DownloadedSubtitle, error) {
+	panic("unused")
+}
+
 func TestHandleSubtitleStreamUsesConfiguredFFmpegForEmbeddedText(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	counterPath := filepath.Join(t.TempDir(), "ffmpeg-calls")

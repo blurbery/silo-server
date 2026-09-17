@@ -11,7 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { ApiClientError } from "@/api/client";
+import { V2ProblemError } from "@/api/v2/request";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -369,7 +369,7 @@ function formatLastSync(connection: WatchProviderConnection, latestRun?: WatchPr
 }
 
 function WatchProviderCard({ providerKey }: { providerKey: string }) {
-  const { data: connection, isLoading } = useWatchProviderConnection(providerKey);
+  const { data: savedConnection, isLoading, isFetching } = useWatchProviderConnection(providerKey);
   const updateConnection = useUpdateWatchProviderConnection(providerKey);
   const startAuth = useStartWatchProviderDeviceAuth(providerKey);
   const pollAuth = usePollWatchProviderDeviceAuth(providerKey);
@@ -378,11 +378,17 @@ function WatchProviderCard({ providerKey }: { providerKey: string }) {
   const syncNow = useTriggerWatchProviderSync(providerKey);
   const { data: syncRunsData } = useWatchProviderSyncRuns(
     providerKey,
-    Boolean(connection?.connected),
+    Boolean(savedConnection?.connected),
   );
   const [authSession, setAuthSession] = useState<DeviceAuthSession | null>(null);
   const [codeCopied, setCodeCopied] = useState(false);
   const [apiKeyPrompt, setApiKeyPrompt] = useState(false);
+  const settingsConflict =
+    updateConnection.error instanceof V2ProblemError && updateConnection.error.status === 412;
+  const connection =
+    savedConnection && settingsConflict
+      ? { ...savedConnection, ...updateConnection.variables }
+      : savedConnection;
 
   if (isLoading || !connection) {
     return (
@@ -396,8 +402,8 @@ function WatchProviderCard({ providerKey }: { providerKey: string }) {
   const latestRun = syncRunsData?.runs?.[0];
   const syncRunning = latestRun?.status === "queued" || latestRun?.status === "running";
   const cooldownSeconds =
-    syncNow.error instanceof ApiClientError && syncNow.error.status === 429
-      ? syncNow.error.details?.retry_after_seconds
+    syncNow.error instanceof V2ProblemError && syncNow.error.status === 429
+      ? syncNow.error.retryAfterSeconds
       : undefined;
   const syncDisabled = syncNow.isPending || syncRunning || Boolean(cooldownSeconds);
   const syncButtonLabel = syncRunning
@@ -407,6 +413,7 @@ function WatchProviderCard({ providerKey }: { providerKey: string }) {
       : "Sync now";
 
   const isBusy =
+    (connection.connected && !connection.etag) ||
     updateConnection.isPending ||
     startAuth.isPending ||
     pollAuth.isPending ||
@@ -639,6 +646,31 @@ function WatchProviderCard({ providerKey }: { providerKey: string }) {
             </div>
           </div>
 
+          {settingsConflict && (
+            <div role="alert" className="border-border mb-4 rounded-xl border p-4 text-sm">
+              <p>These settings changed elsewhere. Your change is still shown below.</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  disabled={isFetching || updateConnection.isPending}
+                  onClick={() => {
+                    if (updateConnection.variables)
+                      updateConnection.mutate(updateConnection.variables);
+                  }}
+                >
+                  Apply my change
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={isFetching}
+                  onClick={() => updateConnection.reset()}
+                >
+                  Use latest settings
+                </Button>
+              </div>
+            </div>
+          )}
           <div className="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
             <ToggleRow
               id={`watch-provider-${providerKey}-import-watched`}

@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+// UpstreamHTTPError is the error a source server answering with status
+// produces. The client types that carry an upstream status are unexported;
+// tests of a mapping outside this package build one here without a client.
+func UpstreamHTTPError(status int) error { return &embyHTTPError{StatusCode: status} }
+
 // IsReachabilityError reports whether err indicates the upstream server could
 // not be reached due to URL, DNS, connection, timeout, or TLS issues.
 func IsReachabilityError(err error) bool {

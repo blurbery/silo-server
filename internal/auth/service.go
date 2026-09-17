@@ -8,9 +8,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Silo-Server/silo-server/internal/config"
 	"github.com/Silo-Server/silo-server/internal/models"
 	"github.com/Silo-Server/silo-server/internal/userstore"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // Sentinel errors for service operations.
@@ -301,6 +303,12 @@ func (s *Service) NeedsSetup(ctx context.Context) (bool, error) {
 }
 
 // SetupInitialUser creates the first admin account and signs it in.
+//
+// The emptiness check, account, optional profile, and login session share one
+// transaction under the database-wide setup lock (UserRepository.ClaimInitialSetup),
+// so competing callers on any replica see exactly one winner; every other
+// caller gets ErrSetupAlreadyComplete. The session and token pair match what
+// Login would issue for the new account.
 func (s *Service) SetupInitialUser(
 	ctx context.Context,
 	username, email, password string,
@@ -308,31 +316,57 @@ func (s *Service) SetupInitialUser(
 	defaultProfileName string,
 	deviceName, ip string,
 ) (*TokenPair, *models.User, error) {
-	needsSetup, err := s.NeedsSetup(ctx)
+	if err := ValidateNewPassword(password); err != nil {
+		return nil, nil, err
+	}
+
+	var (
+		user *models.User
+		pair *TokenPair
+	)
+	err := s.users.ClaimInitialSetup(ctx, func(tx pgx.Tx) error {
+		created, err := s.accounts.CreateInitialAccountInTransaction(ctx, tx, CreateAccountInput{
+			User: models.CreateUserInput{
+				Username: username,
+				Email:    email,
+				Password: password,
+				Role:     models.RoleAdmin,
+			},
+			DefaultProfile: DefaultProfileOptions{
+				Enabled: createDefaultProfile,
+				Name:    defaultProfileName,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("creating initial user: %w", err)
+		}
+
+		sessionID := uuid.New().String()
+		session := models.AuthSession{
+			ID:         sessionID,
+			UserID:     created.ID,
+			DeviceName: deviceName,
+			IPAddress:  ip,
+			ExpiresAt:  time.Now().Add(s.jwt.RefreshExpiry()),
+		}
+		if err := s.sessions.createWithQuerier(ctx, tx, session); err != nil {
+			return err
+		}
+		tokens, err := s.generateTokenPair(Claims{
+			UserID:    created.ID,
+			Role:      created.Role,
+			SessionID: sessionID,
+		})
+		if err != nil {
+			return err
+		}
+		user, pair = created, tokens
+		return nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}
-	if !needsSetup {
-		return nil, nil, ErrSetupAlreadyComplete
-	}
-
-	if _, err := s.accounts.CreateAccount(ctx, CreateAccountInput{
-		User: models.CreateUserInput{
-			Username: username,
-			Email:    email,
-			Password: password,
-			Role:     "admin",
-		},
-		DefaultProfile: DefaultProfileOptions{
-			Enabled: createDefaultProfile,
-			Name:    defaultProfileName,
-		},
-	}); err != nil {
-		return nil, nil, fmt.Errorf("creating initial user: %w", err)
-	}
-
-	// Reuse the standard login flow so setup creates a normal session pair.
-	return s.Login(ctx, username, password, deviceName, ip)
+	return pair, user, nil
 }
 
 // Signup creates a new user account using an invite code. Requires that
@@ -344,6 +378,9 @@ func (s *Service) Signup(
 	defaultProfileName string,
 	deviceName, ip string,
 ) (*TokenPair, *models.User, error) {
+	if err := ValidateNewPassword(password); err != nil {
+		return nil, nil, err
+	}
 	// Check global signup toggle.
 	if s.settings != nil {
 		enabled, err := s.settings.Get(ctx, "signup.enabled")
@@ -357,13 +394,8 @@ func (s *Service) Signup(
 		return nil, nil, ErrSignupDisabled
 	}
 
-	// Redeem the invite code (atomic increment).
-	if err := s.inviteCodes.RedeemCode(ctx, code); err != nil {
-		return nil, nil, err
-	}
-
 	// Create the user with standard role and access to all libraries.
-	if _, err := s.accounts.CreateAccount(ctx, CreateAccountInput{
+	if _, err := s.accounts.CreateInvitedAccount(ctx, CreateAccountInput{
 		User: models.CreateUserInput{
 			Username: username,
 			Email:    email,
@@ -374,12 +406,26 @@ func (s *Service) Signup(
 			Enabled: createDefaultProfile,
 			Name:    defaultProfileName,
 		},
-	}); err != nil {
+	}, code); err != nil {
 		return nil, nil, fmt.Errorf("creating user: %w", err)
 	}
 
 	// Log them in to create a session and return tokens.
 	return s.Login(ctx, username, password, deviceName, ip)
+}
+
+// SetupWizardCompleted reports whether the first-run setup wizard recorded
+// its completion. It is meaningful only once an account exists; before that
+// there is nothing to have completed.
+func (s *Service) SetupWizardCompleted(ctx context.Context) (bool, error) {
+	if s.settings == nil {
+		return false, nil
+	}
+	value, err := s.settings.Get(ctx, config.SetupCompletedSettingKey)
+	if err != nil {
+		return false, fmt.Errorf("checking setup completion: %w", err)
+	}
+	return value == "true", nil
 }
 
 // IsSignupEnabled reports whether public signups are enabled.
@@ -598,10 +644,17 @@ func validatePasswordChange(user *models.User, currentPassword, newPassword stri
 	if !CheckPassword(user, currentPassword) {
 		return ErrCurrentPasswordInvalid
 	}
-	if utf8.RuneCountInString(newPassword) < MinimumPasswordLength {
+	return ValidateNewPassword(newPassword)
+}
+
+// ValidateNewPassword applies the shared local credential policy before a new
+// account or password is persisted. The minimum counts characters; bcrypt
+// limits the UTF-8 encoding to 72 bytes.
+func ValidateNewPassword(password string) error {
+	if utf8.RuneCountInString(password) < MinimumPasswordLength {
 		return ErrPasswordTooShort
 	}
-	if len(newPassword) > MaximumPasswordBytes {
+	if len(password) > MaximumPasswordBytes {
 		return ErrPasswordTooLong
 	}
 	return nil
@@ -610,6 +663,12 @@ func validatePasswordChange(user *models.User, currentPassword, newPassword stri
 // GetSessions returns all sessions for the given user ID.
 func (s *Service) GetSessions(ctx context.Context, userID int) ([]*models.AuthSession, error) {
 	return s.sessions.ListByUser(ctx, userID)
+}
+
+// GetSessionsPage returns one keyset page of the user's live sessions; see
+// SessionRepository.ListByUserPage.
+func (s *Service) GetSessionsPage(ctx context.Context, userID int, after *SessionKey, limit int) ([]*models.AuthSession, error) {
+	return s.sessions.ListByUserPage(ctx, userID, after, limit)
 }
 
 // RevokeSession revokes a specific session. It verifies the session belongs

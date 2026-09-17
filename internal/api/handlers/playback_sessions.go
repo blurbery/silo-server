@@ -131,7 +131,12 @@ type playbackSessionsCapabilitiesResponse struct {
 // HandleGetSessionsCapabilities exposes additive feature support for the live
 // admin session payload (GET /admin/sessions/capabilities).
 func (h *AdminHandler) HandleGetSessionsCapabilities(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, playbackSessionsCapabilitiesResponse{
+	writeJSON(w, http.StatusOK, AdminPlaybackSessionFeatures())
+}
+
+// AdminPlaybackSessionFeatures is shared by the frozen bridge and native projection.
+func AdminPlaybackSessionFeatures() playbackSessionsCapabilitiesResponse {
+	return playbackSessionsCapabilitiesResponse{
 		EffectivePlayMethod:       true,
 		EffectivePlayMethodValues: []string{"direct", "remux", "transcode", "audio"},
 		IsJellyfinClient:          true,
@@ -142,7 +147,7 @@ func (h *AdminHandler) HandleGetSessionsCapabilities(w http.ResponseWriter, _ *h
 		ClientChannel:             true,
 		TargetAudioChannels:       true,
 		NodeRouting:               true,
-	})
+	}
 }
 
 type playbackRoutingCapabilitiesResponse struct {
@@ -155,12 +160,16 @@ type playbackRoutingCapabilitiesResponse struct {
 // HandleGetPlaybackRoutingCapabilities exposes the stable enum vocabulary
 // used by the atomic admin settings API.
 func (h *AdminHandler) HandleGetPlaybackRoutingCapabilities(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, playbackRoutingCapabilitiesResponse{
+	writeJSON(w, http.StatusOK, AdminPlaybackRoutingCapabilities())
+}
+
+func AdminPlaybackRoutingCapabilities() playbackRoutingCapabilitiesResponse {
+	return playbackRoutingCapabilitiesResponse{
 		Features:             []string{"playback_node_routing_v1"},
 		Workloads:            []string{"direct_play", "remux", "video_transcode"},
 		ExecutionPreferences: []string{"prefer_worker", "prefer_transcode", "worker_only", "prefer_api", "api_only"},
 		EgressPreferences:    []string{"prefer_proxy", "proxy_only", "prefer_api", "api_only"},
-	})
+	}
 }
 
 // PlaybackSessionsQuery scopes live session listing.
@@ -170,7 +179,7 @@ type PlaybackSessionsQuery struct {
 }
 
 type playbackSessionsReader interface {
-	Load(ctx context.Context, r *http.Request, query PlaybackSessionsQuery) ([]playbackSessionRow, error)
+	Load(ctx context.Context, query PlaybackSessionsQuery) ([]playbackSessionRow, error)
 }
 
 func resolvePlaybackSessionsLoader(
@@ -210,15 +219,47 @@ func NewPlaybackSessionsLoader(
 // Load returns the playback sessions visible to the current request.
 func (l *PlaybackSessionsLoader) Load(
 	ctx context.Context,
-	r *http.Request,
 	query PlaybackSessionsQuery,
 ) ([]playbackSessionRow, error) {
+	rows, _, err := l.load(ctx, query, "", 0, false)
+	return rows, err
+}
+
+// MaxSessionPageLimit guards the bounded loaders against an unbounded page
+// request. It matches both the API-wide maximum page size and the frozen
+// bridge's newest-200 snapshot, so the largest page a caller may ask for never
+// costs more observation work than Load already does on every v1 request.
+const MaxSessionPageLimit = 200
+
+// LoadPage bounds native observation work in SQL. The extra row identifies
+// continuation; Load retains the frozen bridge's newest-200 behavior.
+func (l *PlaybackSessionsLoader) LoadPage(ctx context.Context, query PlaybackSessionsQuery, after string, limit int) ([]AdminPlaybackSessionView, error) {
+	if limit < 1 || limit > MaxSessionPageLimit {
+		return nil, fmt.Errorf("session page limit must be between 1 and %d", MaxSessionPageLimit)
+	}
+	rows, _, err := l.load(ctx, query, after, limit, false)
+	return rows, err
+}
+
+// LoadSummary counts the filtered observations in the same snapshot as its bounded sample.
+func (l *PlaybackSessionsLoader) LoadSummary(ctx context.Context, query PlaybackSessionsQuery, limit int) ([]AdminPlaybackSessionView, int, error) {
+	if limit < 1 || limit > MaxSessionPageLimit {
+		return nil, 0, fmt.Errorf("session summary limit must be between 1 and %d", MaxSessionPageLimit)
+	}
+	return l.load(ctx, query, "", limit, true)
+}
+
+func (l *PlaybackSessionsLoader) load(ctx context.Context, query PlaybackSessionsQuery, after string, limit int, summary bool) ([]playbackSessionRow, int, error) {
 	if l == nil || l.pool == nil {
-		return nil, errors.New("database not configured")
+		return nil, 0, errors.New("database not configured")
 	}
 
+	totalColumn := "0"
+	if summary {
+		totalColumn = "count(*) OVER ()"
+	}
 	sql := `
-		SELECT
+		SELECT ` + totalColumn + `,
 			s.session_id,
 			s.user_id,
 			COALESCE(u.username, ''),
@@ -288,19 +329,40 @@ func (l *PlaybackSessionsLoader) Load(
 		 LEFT JOIN stream_nodes egress_node ON egress_node.id = s.routing_egress_node_id`
 
 	var args []any
+	var predicates []string
 	if query.UserID > 0 {
-		sql += " WHERE s.user_id = $1"
 		args = append(args, query.UserID)
+		predicates = append(predicates, "s.user_id = $1")
 	}
-	sql += " ORDER BY s.started_at DESC LIMIT 200"
+	if limit > 0 && !summary {
+		args = append(args, after)
+		predicates = append(predicates, fmt.Sprintf("s.session_id > $%d", len(args)))
+	}
+	if len(predicates) > 0 {
+		sql += " WHERE " + strings.Join(predicates, " AND ")
+	}
+	if limit > 0 {
+		if summary {
+			sql += " ORDER BY s.started_at DESC, s.session_id ASC"
+			args = append(args, limit)
+		} else {
+			// Immutable identity keeps pagination stable while observations update.
+			sql += " ORDER BY s.session_id ASC"
+			args = append(args, limit+1)
+		}
+		sql += fmt.Sprintf(" LIMIT $%d", len(args))
+	} else {
+		sql += " ORDER BY COALESCE(s.started_at, s.updated_at) DESC LIMIT 200"
+	}
 
 	rows, err := l.pool.Query(ctx, sql, args...)
 	if err != nil {
-		return nil, fmt.Errorf("querying playback sessions: %w", err)
+		return nil, 0, fmt.Errorf("querying playback sessions: %w", err)
 	}
 	defer rows.Close()
 
 	sessions := make([]playbackSessionRow, 0)
+	var total int
 	for rows.Next() {
 		var s playbackSessionRow
 		var posterPath string
@@ -311,6 +373,7 @@ func (l *PlaybackSessionsLoader) Load(
 		var sourceAudioChannels *int
 		var audioTracksJSON []byte
 		if err := rows.Scan(
+			&total,
 			&s.SessionID, &s.UserID, &s.Username, &s.ProfileID, &s.MediaFileID, &s.RequestedMediaFileID, &s.ContentID,
 			&s.MediaTitle, &s.MediaType, &s.SeriesName, &s.EpisodeName, &s.SeasonNumber, &s.EpisodeNumber,
 			&posterPath,
@@ -325,9 +388,11 @@ func (l *PlaybackSessionsLoader) Load(
 			&s.CompatOrigin, &s.RoutingWorkload, &s.RoutingExecution, &s.RoutingExecutionNodeID,
 			&s.RoutingExecutionNodeName, &s.RoutingEgress, &s.RoutingEgressNodeID, &s.RoutingEgressNodeName,
 		); err != nil {
-			return nil, fmt.Errorf("scanning playback session: %w", err)
+			return nil, 0, fmt.Errorf("scanning playback session: %w", err)
 		}
-		s.PosterURL = l.presignPosterURL(r, posterPath)
+		if !summary {
+			s.PosterURL = l.presignPosterURL(ctx, posterPath)
+		}
 		s.StreamBitrateKbps = streamBitrateKbps
 		s.TargetAudioChannels = targetAudioChannels
 		s.TargetBitrateKbps = targetBitrateKbps
@@ -345,16 +410,18 @@ func (l *PlaybackSessionsLoader) Load(
 		sessions = append(sessions, s)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	l.populateProfileNames(ctx, sessions)
+	if !summary {
+		l.populateProfileNames(ctx, sessions)
+	}
 
-	return sessions, nil
+	return sessions, total, nil
 }
 
-func (l *PlaybackSessionsLoader) presignPosterURL(r *http.Request, path string) string {
+func (l *PlaybackSessionsLoader) presignPosterURL(ctx context.Context, path string) string {
 	if l != nil && l.DetailSvc != nil {
-		return l.DetailSvc.PresignURL(r.Context(), cardThumbnailPath(path), "card")
+		return l.DetailSvc.PresignURL(ctx, cardThumbnailPath(path), "card")
 	}
 	return ""
 }
@@ -806,4 +873,28 @@ func (l *PlaybackSessionsLoader) populateProfileNames(ctx context.Context, sessi
 		}
 		sessions[i].ProfileName = names[sessions[i].ProfileID]
 	}
+}
+
+// AdminPlaybackSessionView is the shared enriched diagnostic read model. It does
+// not grant authority to control or terminate the observed session.
+type AdminPlaybackSessionView = playbackSessionRow
+
+func (h *AdminHandler) AdminPlaybackSessionsAvailable() bool {
+	return h != nil && (h.SessionsLoader != nil || h.pool != nil)
+}
+
+func (h *AdminHandler) ReadAdminPlaybackSessions(ctx context.Context, query PlaybackSessionsQuery, after string, limit int) ([]AdminPlaybackSessionView, error) {
+	loader, err := resolvePlaybackSessionsLoader(h.SessionsLoader, h.pool, h.storeProv, h.DetailSvc)
+	if err != nil {
+		return nil, err
+	}
+	return loader.LoadPage(ctx, query, after, limit)
+}
+
+func (h *AdminHandler) ReadAdminPlaybackSummary(ctx context.Context, query PlaybackSessionsQuery, limit int) ([]AdminPlaybackSessionView, int, error) {
+	loader, err := resolvePlaybackSessionsLoader(h.SessionsLoader, h.pool, h.storeProv, h.DetailSvc)
+	if err != nil {
+		return nil, 0, err
+	}
+	return loader.LoadSummary(ctx, query, limit)
 }

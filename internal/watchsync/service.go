@@ -104,7 +104,7 @@ func (s *Service) ListProviders() []ProviderSummary {
 func (s *Service) GetConnectionStatus(ctx context.Context, userID int, profileID string, providerKey string) (ConnectionStatus, error) {
 	provider, ok := s.registry.Get(providerKey)
 	if !ok {
-		return ConnectionStatus{}, fmt.Errorf("unknown provider %q", providerKey)
+		return ConnectionStatus{}, UnknownProviderError{Key: providerKey}
 	}
 	authMethod := authMethodOf(provider)
 	credentialsConfigured := authMethod == AuthMethodAPIKey
@@ -144,6 +144,7 @@ func (s *Service) GetConnectionStatus(ctx context.Context, userID int, profileID
 		status.ConnectionConfigSchema = configurable.ConnectionConfigSchema()
 	}
 	if connected {
+		status.Version = ConnectionVersion{ID: conn.ID, UpdatedAt: conn.UpdatedAt}
 		status.ProviderUsername = conn.ProviderUsername
 		status.ImportWatchedEnabled = conn.ImportWatchedEnabled
 		status.ImportProgressEnabled = conn.ImportProgressEnabled
@@ -172,61 +173,28 @@ func (s *Service) GetConnectionStatus(ctx context.Context, userID int, profileID
 }
 
 func (s *Service) UpdateConnection(ctx context.Context, userID int, profileID string, providerKey string, update ConnectionUpdate) (ConnectionStatus, error) {
-	conn, ok, err := s.repo.GetConnection(ctx, providerKey, userID, profileID)
-	if err != nil {
-		return ConnectionStatus{}, err
-	}
-	if !ok {
-		return ConnectionStatus{}, fmt.Errorf("watch provider connection not found")
-	}
-	if update.ImportWatchedEnabled != nil {
-		conn.ImportWatchedEnabled = *update.ImportWatchedEnabled
-	}
-	if update.ImportProgressEnabled != nil {
-		conn.ImportProgressEnabled = *update.ImportProgressEnabled
-	}
-	if update.ExportWatchedEnabled != nil {
-		conn.ExportWatchedEnabled = *update.ExportWatchedEnabled
-	}
-	if update.ExportUnwatchedEnabled != nil {
-		conn.ExportUnwatchedEnabled = *update.ExportUnwatchedEnabled
-	}
-	if update.ImportFavoritesEnabled != nil {
-		conn.ImportFavoritesEnabled = *update.ImportFavoritesEnabled
-	}
-	if update.ExportFavoritesEnabled != nil {
-		conn.ExportFavoritesEnabled = *update.ExportFavoritesEnabled
-	}
-	if update.SyncFavoriteRemovalsEnabled != nil {
-		conn.SyncFavoriteRemovalsEnabled = *update.SyncFavoriteRemovalsEnabled
-	}
-	if update.ImportWatchlistEnabled != nil {
-		conn.ImportWatchlistEnabled = *update.ImportWatchlistEnabled
-	}
-	if update.ExportWatchlistEnabled != nil {
-		conn.ExportWatchlistEnabled = *update.ExportWatchlistEnabled
-	}
-	if update.SyncWatchlistRemovalsEnabled != nil {
-		conn.SyncWatchlistRemovalsEnabled = *update.SyncWatchlistRemovalsEnabled
-	}
-	watchlistOrderDisabled := false
-	if update.SyncWatchlistOrderEnabled != nil {
-		watchlistOrderDisabled = conn.SyncWatchlistOrderEnabled && !*update.SyncWatchlistOrderEnabled
-		conn.SyncWatchlistOrderEnabled = *update.SyncWatchlistOrderEnabled
-	}
-	if update.ScrobbleEnabled != nil {
-		conn.ScrobbleEnabled = *update.ScrobbleEnabled
-	}
-	// Turning order mirroring off reverts the watchlist to added_at ordering.
-	// Clear the stored order *before* persisting the disable so a failure leaves
-	// both the order and the toggle intact (retriable) rather than reporting
-	// "disabled" while sort_index ordering is still active.
-	if watchlistOrderDisabled {
-		if err := s.clearWatchlistOrder(ctx, conn); err != nil {
-			return ConnectionStatus{}, err
+	return s.updateConnectionSettings(ctx, userID, profileID, providerKey, nil, update)
+}
+
+func (s *Service) UpdateConnectionConditional(ctx context.Context, userID int, profileID, providerKey string, expected ConnectionVersion, update ConnectionUpdate) (ConnectionStatus, error) {
+	return s.updateConnectionSettings(ctx, userID, profileID, providerKey, &expected, update)
+}
+
+func (s *Service) updateConnectionSettings(ctx context.Context, userID int, profileID, providerKey string, expected *ConnectionVersion, update ConnectionUpdate) (ConnectionStatus, error) {
+	_, err := s.repo.UpdateConnectionSettings(ctx, providerKey, userID, profileID, expected, update, func(current Connection) error {
+		if current.SyncWatchlistOrderEnabled && update.SyncWatchlistOrderEnabled != nil && !*update.SyncWatchlistOrderEnabled {
+			// The selected user store can share the connection repository's
+			// PostgreSQL pool. Bound pool acquisition during this separate
+			// write so an exhausted pool (including max=1) fails closed.
+			cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if err := s.clearWatchlistOrder(cleanupCtx, current); err != nil {
+				return fmt.Errorf("%w: %w", ErrSettingsCleanupUnavailable, err)
+			}
 		}
-	}
-	if _, err := s.repo.UpsertConnection(ctx, conn); err != nil {
+		return nil
+	})
+	if err != nil {
 		return ConnectionStatus{}, err
 	}
 	return s.GetConnectionStatus(ctx, userID, profileID, providerKey)
@@ -256,7 +224,7 @@ func (s *Service) RequestManualSync(ctx context.Context, userID int, profileID s
 		return ManualSyncResult{}, err
 	}
 	if !ok {
-		return ManualSyncResult{}, fmt.Errorf("watch provider connection not found")
+		return ManualSyncResult{}, ErrConnectionNotFound
 	}
 	// A manual sync against a rate-limited provider would fail immediately
 	// while still spending the account's request quota, so honor the deferral.
@@ -324,7 +292,7 @@ func (s *Service) ListSyncRuns(ctx context.Context, userID int, profileID string
 		return nil, err
 	}
 	if !ok {
-		return nil, fmt.Errorf("watch provider connection not found")
+		return nil, ErrConnectionNotFound
 	}
 	return s.repo.ListSyncRuns(ctx, conn.ID, limit)
 }
@@ -441,11 +409,11 @@ func (s *Service) StartDeviceAuth(
 	}
 	provider, ok := s.registry.Get(providerKey)
 	if !ok {
-		return DeviceAuthSession{}, fmt.Errorf("unknown provider %q", providerKey)
+		return DeviceAuthSession{}, UnknownProviderError{Key: providerKey}
 	}
 	authProvider, ok := provider.(AuthProvider)
 	if !ok {
-		return DeviceAuthSession{}, fmt.Errorf("provider %q does not support auth", providerKey)
+		return DeviceAuthSession{}, ProviderCapabilityError{Key: providerKey, What: "does not support auth"}
 	}
 
 	cfg, err := s.serverConfig(ctx, providerKey)
@@ -481,11 +449,11 @@ func (s *Service) PollDeviceAuth(
 	}
 	provider, ok := s.registry.Get(providerKey)
 	if !ok {
-		return Connection{}, fmt.Errorf("unknown provider %q", providerKey)
+		return Connection{}, UnknownProviderError{Key: providerKey}
 	}
 	authProvider, ok := provider.(AuthProvider)
 	if !ok {
-		return Connection{}, fmt.Errorf("provider %q does not support auth", providerKey)
+		return Connection{}, ProviderCapabilityError{Key: providerKey, What: "does not support auth"}
 	}
 
 	session, err := s.repo.GetAuthSession(ctx, sessionID)
@@ -493,13 +461,13 @@ func (s *Service) PollDeviceAuth(
 		return Connection{}, err
 	}
 	if session.UserID != userID || session.ProfileID != profileID || session.Provider != providerKey {
-		return Connection{}, fmt.Errorf("auth session does not match active profile")
+		return Connection{}, ErrAuthSessionMismatch
 	}
 	if session.CompletedAt != nil {
-		return Connection{}, fmt.Errorf("auth session is already completed")
+		return Connection{}, ErrAuthSessionCompleted
 	}
 	if !session.ExpiresAt.IsZero() && !session.ExpiresAt.After(s.now()) {
-		return Connection{}, fmt.Errorf("auth session has expired")
+		return Connection{}, ErrAuthSessionExpired
 	}
 
 	cfg, err := s.serverConfig(ctx, providerKey)
@@ -575,11 +543,11 @@ func (s *Service) ConnectAPIKeyWithConfig(
 	}
 	provider, ok := s.registry.Get(providerKey)
 	if !ok {
-		return Connection{}, fmt.Errorf("unknown provider %q", providerKey)
+		return Connection{}, UnknownProviderError{Key: providerKey}
 	}
 	authProvider, ok := provider.(APIKeyAuthProvider)
 	if !ok {
-		return Connection{}, fmt.Errorf("provider %q does not support api-key auth", providerKey)
+		return Connection{}, ProviderCapabilityError{Key: providerKey, What: "does not support api-key auth"}
 	}
 
 	var tokens TokenSet
@@ -589,7 +557,7 @@ func (s *Service) ConnectAPIKeyWithConfig(
 		tokens, account, err = configured.ConnectWithAPIKeyConfig(ctx, apiKey, connectionConfig)
 	} else {
 		if len(connectionConfig) > 0 {
-			return Connection{}, fmt.Errorf("provider %q does not accept connection configuration", providerKey)
+			return Connection{}, ProviderCapabilityError{Key: providerKey, What: "does not accept connection configuration"}
 		}
 		tokens, account, err = authProvider.ConnectWithAPIKey(ctx, apiKey)
 	}

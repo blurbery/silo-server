@@ -27,7 +27,6 @@ import QualityBadges from "./components/QualityBadges";
 import ScoreRow from "./components/ScoreRow";
 import HeroCrewLine from "./components/HeroCrewLine";
 import MediaUserActionBar from "./components/MediaUserActionBar";
-import RatingsSection from "./components/RatingsSection";
 import MediaInfoDialog from "./components/MediaInfoDialog";
 import SubtitleSearchDialog from "./components/SubtitleSearchDialog";
 import { sortByResolution } from "./components/VersionFlyout";
@@ -346,8 +345,6 @@ export default function MovieContent({ item }: { item: ItemDetail & { type: "mov
           similarData?.items &&
           similarData.items.length > 0 && <RecommendationGrid items={similarData.items} />
         )}
-
-        <RatingsSection itemId={item.content_id} />
       </div>
       {canCurateMetadata && (
         <EditMetadataDialog item={item} open={editOpen} onOpenChange={setEditOpen} />

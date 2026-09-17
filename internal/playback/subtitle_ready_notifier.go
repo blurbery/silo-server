@@ -27,9 +27,10 @@ type SubtitleInventoryResolver interface {
 // It satisfies the subtitles/ai Notifier interface structurally, keeping the ai
 // package free of any playback dependency.
 type SubtitleReadyNotifier struct {
-	sessions  subtitleReadySessionLookup
-	hub       *RealtimeHub
-	inventory SubtitleInventoryResolver
+	sessions           subtitleReadySessionLookup
+	hub                *RealtimeHub
+	inventory          SubtitleInventoryResolver
+	translationSession *Session
 }
 
 // NewSubtitleReadyNotifier returns a notifier, or nil if its dependencies are
@@ -70,14 +71,14 @@ func (n *SubtitleReadyNotifier) SubtitleReady(ctx context.Context, mediaFileID, 
 
 // TranslationStarted tells one session a live translation has begun.
 func (n *SubtitleReadyNotifier) TranslationStarted(ctx context.Context, sessionID string, fileID int, jobID int64, trackKey, language, label string, totalCues int) {
-	n.sendTranslation(sessionID, func() (EventEnvelope, error) {
+	n.sendTranslation(sessionID, fileID, func() (EventEnvelope, error) {
 		return NewSubtitleTranslationStartedEvent(sessionID, fileID, jobID, trackKey, language, label, totalCues)
 	})
 }
 
 // TranslationCues pushes a batch of translated cues to one session.
 func (n *SubtitleReadyNotifier) TranslationCues(ctx context.Context, sessionID string, fileID int, jobID int64, trackKey string, cues []StreamCue, done, total int) {
-	n.sendTranslation(sessionID, func() (EventEnvelope, error) {
+	n.sendTranslation(sessionID, fileID, func() (EventEnvelope, error) {
 		return NewSubtitleTranslationCuesEvent(sessionID, fileID, jobID, trackKey, cues, done, total)
 	})
 }
@@ -85,14 +86,14 @@ func (n *SubtitleReadyNotifier) TranslationCues(ctx context.Context, sessionID s
 // TranslationCompleted tells one session a live translation finished.
 func (n *SubtitleReadyNotifier) TranslationCompleted(ctx context.Context, sessionID string, fileID int, jobID int64, trackKey string, subtitleID int, language, label string) {
 	track := n.resolveTrack(ctx, sessionID, fileID, subtitleID)
-	n.sendTranslation(sessionID, func() (EventEnvelope, error) {
+	n.sendTranslation(sessionID, fileID, func() (EventEnvelope, error) {
 		return NewSubtitleTranslationCompletedEvent(sessionID, fileID, jobID, trackKey, subtitleID, language, label, track)
 	})
 }
 
 // TranslationFailed tells one session a live translation failed.
 func (n *SubtitleReadyNotifier) TranslationFailed(ctx context.Context, sessionID string, fileID int, jobID int64, trackKey, message string) {
-	n.sendTranslation(sessionID, func() (EventEnvelope, error) {
+	n.sendTranslation(sessionID, fileID, func() (EventEnvelope, error) {
 		return NewSubtitleTranslationFailedEvent(sessionID, fileID, jobID, trackKey, message)
 	})
 }
@@ -133,8 +134,8 @@ func (n *SubtitleReadyNotifier) resolveTrack(ctx context.Context, sessionID stri
 }
 
 // sendTranslation builds and delivers a translation event to a single session.
-func (n *SubtitleReadyNotifier) sendTranslation(sessionID string, build func() (EventEnvelope, error)) {
-	if n == nil || n.hub == nil || sessionID == "" {
+func (n *SubtitleReadyNotifier) sendTranslation(sessionID string, fileID int, build func() (EventEnvelope, error)) {
+	if n == nil || n.hub == nil || sessionID == "" || !n.translationSessionMatches(sessionID, fileID) {
 		return
 	}
 	event, err := build()

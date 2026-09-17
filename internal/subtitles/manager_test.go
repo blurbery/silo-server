@@ -25,11 +25,20 @@ func (m *mockSubtitleRepo) InsertDownloadedSubtitle(_ context.Context, sub *Down
 	m.nextID++
 	sub.ID = m.nextID
 	sub.CreatedAt = time.Now()
+	sub.Revision = 1
 	m.byKey[sub.S3Key] = sub
 	return nil
 }
 
-func (m *mockSubtitleRepo) GetDownloadedSubtitle(context.Context, int) (*DownloadedSubtitle, error) {
+func (m *mockSubtitleRepo) GetDownloadedSubtitle(_ context.Context, id int) (*DownloadedSubtitle, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, sub := range m.byKey {
+		if sub.ID == id {
+			copy := *sub
+			return &copy, nil
+		}
+	}
 	return nil, nil
 }
 
@@ -42,14 +51,19 @@ func (m *mockSubtitleRepo) UpdateDownloadedSubtitle(_ context.Context, id int, u
 	defer m.mu.Unlock()
 	for _, sub := range m.byKey {
 		if sub.ID == id {
-			sub.Language = update.Language
-			sub.ReleaseName = update.ReleaseName
-			sub.HearingImpaired = update.HearingImpaired
-			if sub.S3Key != update.S3Key {
-				delete(m.byKey, sub.S3Key)
-				sub.S3Key = update.S3Key
-				m.byKey[sub.S3Key] = sub
+			if update.Language != nil {
+				sub.Language = *update.Language
 			}
+			if update.ReleaseName != nil {
+				sub.ReleaseName = *update.ReleaseName
+			}
+			if update.HearingImpaired != nil {
+				sub.HearingImpaired = *update.HearingImpaired
+			}
+			if update.ContentSHA256 != "" {
+				sub.ContentSHA256 = update.ContentSHA256
+			}
+			sub.Revision++
 			copy := *sub
 			return &copy, nil
 		}
@@ -253,4 +267,16 @@ func TestManagerUploadRejectsOversizedFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for oversized file")
 	}
+}
+
+func (m *mockSubtitleRepo) GetDownloadedSubtitleByContent(_ context.Context, content *DownloadedSubtitle) (*DownloadedSubtitle, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, sub := range m.byKey {
+		if content.ContentSHA256 != "" && sub.MediaFileID == content.MediaFileID && sub.Provider == content.Provider && sub.Language == content.Language && sub.Format == content.Format && sub.ContentSHA256 == content.ContentSHA256 {
+			copy := *sub
+			return &copy, nil
+		}
+	}
+	return nil, nil
 }

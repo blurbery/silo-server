@@ -147,6 +147,33 @@ func (r *Reconciler) ReconcileNodeSessions(ctx context.Context, reportingNode st
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// Workers may still report playback for a deleted account. Keep those stale
+	// rows out of the snapshot and hold the remaining accounts until commit so
+	// concurrent deletion cannot invalidate the new user FK mid-reconciliation.
+	userIDs := make([]int, 0, len(sessions))
+	for _, session := range sessions {
+		userIDs = append(userIDs, session.UserID)
+	}
+	rows, err := tx.Query(ctx, `SELECT id FROM users WHERE id = ANY($1) ORDER BY id FOR KEY SHARE`, userIDs)
+	if err != nil {
+		return fmt.Errorf("locking snapshot accounts: %w", err)
+	}
+	existingIDs, err := pgx.CollectRows(rows, pgx.RowTo[int])
+	if err != nil {
+		return fmt.Errorf("reading snapshot accounts: %w", err)
+	}
+	existing := make(map[int]bool, len(existingIDs))
+	for _, id := range existingIDs {
+		existing[id] = true
+	}
+	liveSessions := make([]SessionSync, 0, len(sessions))
+	for _, session := range sessions {
+		if existing[session.UserID] {
+			liveSessions = append(liveSessions, session)
+		}
+	}
+	sessions = liveSessions
+
 	currentSessions, err := loadNodeSessionsSnapshot(ctx, tx, reportingNode)
 	if err != nil {
 		return fmt.Errorf("loading existing sessions for node %s: %w", reportingNode, err)

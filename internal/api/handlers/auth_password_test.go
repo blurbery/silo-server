@@ -145,8 +145,8 @@ func TestHandleChangePasswordMapsCredentialErrors(t *testing.T) {
 		wantCode   string
 	}{
 		{name: "wrong current password", err: auth.ErrCurrentPasswordInvalid, wantStatus: http.StatusBadRequest, wantCode: "invalid_current_password"},
-		{name: "weak password", err: auth.ErrPasswordTooShort, wantStatus: http.StatusBadRequest, wantCode: "weak_password"},
-		{name: "password too long", err: auth.ErrPasswordTooLong, wantStatus: http.StatusBadRequest, wantCode: "password_too_long"},
+		{name: "weak password", err: auth.ErrPasswordTooShort, wantStatus: http.StatusBadRequest, wantCode: codeWeakPassword},
+		{name: "password too long", err: auth.ErrPasswordTooLong, wantStatus: http.StatusBadRequest, wantCode: codePasswordTooLong},
 		{name: "local login disabled", err: auth.ErrPasswordLoginDisabled, wantStatus: http.StatusConflict, wantCode: "password_login_disabled"},
 		{name: "repository failure", err: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError, wantCode: "internal_error"},
 	}

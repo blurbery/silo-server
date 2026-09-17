@@ -1,0 +1,149 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router";
+import { beforeEach, expect, it, vi } from "vitest";
+import type { LibraryCollection } from "@/api/types";
+import type { CollectionBuilderProps } from "@/components/collections/CollectionBuilder";
+import CollectionEditor from "./CollectionEditor";
+import AdminCollectionEditor from "./AdminCollectionEditor";
+
+const mocks = vi.hoisted(() => ({
+  create: vi.fn(),
+  adminCreate: vi.fn(),
+  collection: null as LibraryCollection | null,
+}));
+vi.mock("@/hooks/queries/collections", () => ({
+  useCollections: () => ({ data: [] }),
+  useCollectionEditSnapshot: () => ({ data: undefined, isLoading: false }),
+  useCollectionCapabilities: () => ({ data: {} }),
+  useCreateCollection: () => ({ mutate: mocks.create }),
+  useUpdateCollection: () => ({}),
+  useDeleteUserCollectionImage: () => ({}),
+}));
+vi.mock("@/hooks/queries/admin/collections", () => ({
+  useAdminCollections: () => ({
+    data: mocks.collection ? [mocks.collection] : [],
+    isLoading: false,
+  }),
+  useAdminCollectionSnapshot: () => ({
+    data: mocks.collection ? { collection: mocks.collection, etag: '"revision"' } : undefined,
+    isLoading: false,
+  }),
+  useAdminCollectionCapabilities: () => ({ data: {} }),
+  useCreateAdminCollection: () => ({ mutate: mocks.adminCreate }),
+  useUpdateAdminCollection: () => ({}),
+}));
+vi.mock("@/hooks/queries/profiles", () => ({ useProfiles: () => ({ data: [] }) }));
+vi.mock("@/hooks/queries/libraries", () => ({ useUserLibraries: () => ({ data: [] }) }));
+vi.mock("@/hooks/queries/admin/libraries", () => ({ useAdminLibraries: () => ({ data: [] }) }));
+vi.mock("@/hooks/useCurrentProfile", () => ({
+  useCurrentProfile: () => ({ profile: { id: "p" } }),
+}));
+vi.mock("@/components/CollectionTemplateGallery", () => ({
+  CollectionTemplateGallery: () => null,
+}));
+vi.mock("@/components/ImageUploadField", () => ({ ImageUploadField: () => null }));
+vi.mock("./SmartCollectionWizard", () => ({ default: () => <div>Smart wizard</div> }));
+vi.mock("@/components/collections/CollectionBuilder", async () => ({
+  ...(await vi.importActual<typeof import("@/components/collections/CollectionBuilder")>(
+    "@/components/collections/CollectionBuilder",
+  )),
+  default: ({ value, onChange, onSubmit, lockCollectionType }: CollectionBuilderProps) => (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSubmit();
+      }}
+    >
+      <input
+        aria-label="Name"
+        value={value.title}
+        onChange={(event) => onChange({ ...value, title: event.target.value })}
+      />
+      <select
+        aria-label="Collection Mode"
+        disabled={lockCollectionType}
+        value={value.collection_type}
+        onChange={(event) =>
+          onChange({ ...value, collection_type: event.target.value as "manual" | "smart" })
+        }
+      >
+        <option value="smart">Smart</option>
+        <option value="manual">Manual</option>
+      </select>
+      <button>Save Collection</button>
+    </form>
+  ),
+}));
+vi.mock("@/components/collections/ManualCollectionItemsEditor", () => ({
+  ManualCollectionItemsEditor: ({
+    collectionId,
+    source,
+  }: {
+    collectionId: string;
+    source: string;
+  }) => <div data-testid="manual-items" data-source={source} data-collection={collectionId} />,
+}));
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.collection = null;
+});
+function show(admin = false, edit = false) {
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <MemoryRouter initialEntries={[edit ? "/collection-1/edit" : "/new"]}>
+        <Routes>
+          <Route path="/new" element={admin ? <AdminCollectionEditor /> : <CollectionEditor />} />
+          <Route path="/:id/edit" element={<AdminCollectionEditor />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+it("creates a personal manual collection from the new collection route", () => {
+  show();
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "My picks" } });
+  fireEvent.change(screen.getByLabelText("Collection Mode"), { target: { value: "manual" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save Collection" }));
+  expect(mocks.create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      body: expect.objectContaining({
+        name: "My picks",
+        collection_type: "manual",
+        query_definition: undefined,
+      }),
+    }),
+    expect.anything(),
+  );
+});
+it("opens a manual admin form and submits a manual collection after selecting Manual", () => {
+  show(true);
+  fireEvent.click(screen.getByRole("button", { name: /Manual Curate items by hand/ }));
+  expect(screen.getByLabelText("Collection Mode")).toHaveValue("manual");
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Staff picks" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save Collection" }));
+  expect(mocks.adminCreate).toHaveBeenCalledWith(
+    expect.objectContaining({
+      body: expect.objectContaining({
+        title: "Staff picks",
+        collection_type: "manual",
+        query_definition: undefined,
+      }),
+    }),
+    expect.anything(),
+  );
+});
+
+it("mounts the library item picker outside the metadata form for a saved manual collection", () => {
+  mocks.collection = {
+    id: "collection-1",
+    title: "Staff picks",
+    collection_type: "manual",
+    library_ids: [1],
+  } as LibraryCollection;
+  show(true, true);
+  const editor = screen.getByTestId("manual-items");
+  expect(editor).toHaveAttribute("data-source", "library");
+  expect(editor).toHaveAttribute("data-collection", "collection-1");
+  expect(editor.closest("form")).toBeNull();
+});

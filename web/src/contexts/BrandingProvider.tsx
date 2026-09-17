@@ -2,7 +2,7 @@ import { createContext, useEffect } from "react";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { api } from "@/api/client";
+import { v2 } from "@/api/v2/request";
 import { themeKeys } from "@/hooks/queries/keys";
 import { setAppDocumentTitle } from "@/lib/documentTitle";
 
@@ -103,7 +103,7 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
   // the error state.
   const { data } = useQuery({
     queryKey: themeKeys.branding(),
-    queryFn: () => api<BrandingApiResponse>("/theme/branding"),
+    queryFn: () => v2("GET /api/v2/theme/branding"),
     staleTime: 5 * 60_000,
   });
 

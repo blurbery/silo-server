@@ -17,7 +17,12 @@ type AccessFilter struct {
 	AllowedContentIDs     []string
 	DisabledLibraryIDs    []int // libraries whose membership globally hides an item
 	PresentationLibraryID *int
-	PresentationLanguage  string
+	// ScopeFilesToLibrary limits file versions to PresentationLibraryID when
+	// both are set. Callers opt in per read from the server setting
+	// catalog.scope_versions_to_library; playback and watch-together reads never
+	// set it, so an item always plays from its full accessible version list.
+	ScopeFilesToLibrary  bool
+	PresentationLanguage string
 	// ProfilePreferredLanguage is the viewer profile's preferred metadata
 	// language. Presentation language resolves: explicit PresentationLanguage
 	// → ProfilePreferredLanguage → the library's metadata_language.
@@ -208,12 +213,15 @@ func intInSlice(value int, values []int) bool {
 	return false
 }
 
-// FilterMediaFilesByAccess drops file versions the viewer cannot access:
-// files in libraries outside their allowed set, in libraries they disabled,
-// or above their effective quality ceiling — the same predicate as
-// FileAllowedByAccess.
+// FilterMediaFilesByAccess drops file versions the viewer cannot access —
+// the FileAllowedByAccess predicate — and, when the read opted in through
+// ScopeFilesToLibrary, versions stored outside the presentation library. The
+// library scope is Go-only: MediaFileAccessSQL does not mirror it because no
+// SQL caller sets a presentation library.
 func FilterMediaFilesByAccess(files []*models.MediaFile, filter AccessFilter) []*models.MediaFile {
+	scopeLibrary := filter.ScopeFilesToLibrary && filter.PresentationLibraryID != nil
 	unrestricted := filter.AllowedLibraryIDs == nil &&
+		!scopeLibrary &&
 		len(filter.DisabledLibraryIDs) == 0 &&
 		strings.TrimSpace(filter.MaxPlaybackQuality) == ""
 	if len(files) == 0 || unrestricted {
@@ -222,9 +230,65 @@ func FilterMediaFilesByAccess(files []*models.MediaFile, filter AccessFilter) []
 
 	filtered := make([]*models.MediaFile, 0, len(files))
 	for _, file := range files {
-		if FileAllowedByAccess(file, filter) {
+		if FileAllowedByAccess(file, filter) &&
+			(!scopeLibrary || file.MediaFolderID == *filter.PresentationLibraryID) {
 			filtered = append(filtered, file)
 		}
 	}
 	return filtered
+}
+
+// SQLTrimSpaceChars is a PostgreSQL E-string holding exactly the runes Go's
+// strings.TrimSpace strips: ASCII whitespace plus every rune with the Unicode
+// White_Space property. Pass it as BTRIM's second argument wherever SQL has to
+// trim a value the way Go would, so a resolution such as "\u00a02160p" ranks
+// the same on both sides instead of falling through to the ELSE branch.
+//
+// Use octal \013 for vertical tab; PostgreSQL treats \v as a literal v. The
+// \uXXXX escapes need a UTF-8 database, which Silo requires anyway.
+const SQLTrimSpaceChars = `E' \t\n\013\f\r\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004` +
+	`\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000'`
+
+// MediaFileQualityCeilingSQL renders the playback-quality ceiling as a SQL
+// condition over the given media_files alias, or "" when the filter sets no
+// ceiling. It mirrors access.QualityAllowed, trimming whitespace the way Go
+// does (see SQLTrimSpaceChars).
+func MediaFileQualityCeilingSQL(alias string, maxPlaybackQuality string) string {
+	quality := access.NormalizePlaybackQuality(maxPlaybackQuality)
+	if quality == "" {
+		return ""
+	}
+	maxRank := 3
+	if quality == access.PlaybackQuality4K {
+		maxRank = 4
+	}
+	return fmt.Sprintf(`CASE UPPER(BTRIM(COALESCE(%s.resolution, ''), %s))
+		WHEN '480P' THEN 1 WHEN '720P' THEN 2 WHEN '1080P' THEN 3
+		WHEN '2160P' THEN 4 WHEN '4320P' THEN 5 ELSE 0 END <= %d`, alias, SQLTrimSpaceChars, maxRank)
+}
+
+// MediaFileAccessSQL renders FileAllowedByAccess as SQL conditions over the
+// given media_files alias, appending any bind values to args and numbering
+// placeholders from the resulting argument positions. Callers must append the
+// returned args in order.
+//
+// This is the SQL mirror of FileAllowedByAccess and must stay in step with it:
+// it exists so queries that would otherwise ship every candidate file to Go can
+// filter and reduce inside PostgreSQL instead.
+func MediaFileAccessSQL(alias string, filter AccessFilter, args []any) ([]string, []any) {
+	conditions := make([]string, 0, 3)
+
+	if filter.AllowedLibraryIDs != nil {
+		args = append(args, filter.AllowedLibraryIDs)
+		conditions = append(conditions, fmt.Sprintf("%s.media_folder_id = ANY($%d)", alias, len(args)))
+	}
+	if len(filter.DisabledLibraryIDs) > 0 {
+		args = append(args, filter.DisabledLibraryIDs)
+		conditions = append(conditions, fmt.Sprintf("NOT (%s.media_folder_id = ANY($%d))", alias, len(args)))
+	}
+	if ceiling := MediaFileQualityCeilingSQL(alias, filter.MaxPlaybackQuality); ceiling != "" {
+		conditions = append(conditions, ceiling)
+	}
+
+	return conditions, args
 }

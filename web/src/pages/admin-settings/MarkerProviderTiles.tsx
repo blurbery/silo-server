@@ -56,7 +56,7 @@ function markerCredentialsReady(
 ): boolean | undefined {
   if (!installations) return undefined;
   const installation = installations.find(
-    (candidate) => candidate.id === provider.plugin_installation_id,
+    (candidate) => String(candidate.id) === provider.plugin_installation_id,
   );
   if (!installation) return undefined;
   return installationConfigReady(installation);

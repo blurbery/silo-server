@@ -1,14 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { PlayerConfig } from "../context/PlayerConfigContext";
-import { playerFetch } from "../player-fetch";
-import type {
-  SubtitleLanguageDetection,
-  SubtitleSearchResponse,
-  SubtitleResult,
-} from "@/api/types";
+import { playerV2 } from "../player-v2";
+import type { SubtitleLanguageDetection, SubtitleResult } from "@/api/types";
 import { SubtitleUploadForm } from "@/components/subtitles/SubtitleUploadForm";
 import { LANGUAGES } from "../utils/languageNames";
+import { canonicalLanguageWireValue } from "@/lib/languageNames";
 
 interface SubtitleSearchModalProps {
   mediaFileId: number;
@@ -52,6 +49,14 @@ export function SubtitleSearchModal({
   const modalRef = useRef<HTMLDivElement>(null);
   const previousActiveElementRef = useRef<HTMLElement | null>(null);
   const searchInputRef = useRef<HTMLSelectElement>(null);
+  const downloadGeneration = useRef(0);
+  useEffect(() => {
+    downloadGeneration.current++;
+    setDownloading(null);
+    return () => {
+      downloadGeneration.current++;
+    };
+  }, [playerConfig, mediaFileId, isOpen]);
 
   const handleClose = useCallback(() => {
     previousActiveElementRef.current?.focus();
@@ -118,17 +123,12 @@ export function SubtitleSearchModal({
     setWarnings([]);
 
     try {
-      const response = await playerFetch<SubtitleSearchResponse>(
-        playerConfig,
-        "/subtitles/search",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            media_file_id: mediaFileId,
-            languages: [selectedLang],
-          }),
+      const response = await playerV2(playerConfig, "POST /api/v2/subtitles/search", {
+        body: {
+          media_file_id: String(mediaFileId),
+          languages: [canonicalLanguageWireValue(selectedLang) ?? selectedLang],
         },
-      );
+      });
       setResults(response.results ?? []);
       setWarnings(response.warnings ?? []);
     } catch (err) {
@@ -146,39 +146,47 @@ export function SubtitleSearchModal({
       languageOverride?: boolean;
       hearingImpaired: boolean;
     }) => {
-      const form = new FormData();
-      form.set("media_file_id", String(input.mediaFileId));
-      if (input.language) {
-        form.set("language", input.language);
-      }
-      if (input.languageOverride) {
-        form.set("language_override", "true");
-      }
-      form.set("file", input.file);
-      if (input.hearingImpaired) {
-        form.set("hearing_impaired", "true");
-      }
-
-      await playerFetch(playerConfig, "/subtitles/upload", {
-        method: "POST",
-        body: form,
+      const token = playerConfig.getAccessToken(),
+        profile = playerConfig.getProfileId(),
+        pin = playerConfig.getProfileToken?.();
+      const generation = downloadGeneration.current;
+      await playerV2(playerConfig, "POST /api/v2/subtitles/upload", {
+        form: {
+          media_file_id: String(input.mediaFileId),
+          file: input.file,
+          language: input.language,
+          language_override: input.languageOverride ? "true" : "false",
+          hearing_impaired: input.hearingImpaired ? "true" : "false",
+        },
       });
+      if (
+        generation !== downloadGeneration.current ||
+        token !== playerConfig.getAccessToken() ||
+        profile !== playerConfig.getProfileId() ||
+        pin !== playerConfig.getProfileToken?.()
+      )
+        throw new DOMException("Subtitle upload context changed", "AbortError");
     },
     [playerConfig],
   );
 
   const handleDetectLanguage = useCallback(
     async (file: File, fallbackLanguage?: string): Promise<SubtitleLanguageDetection> => {
-      const form = new FormData();
-      form.set("file", file);
-      if (fallbackLanguage) {
-        form.set("language", fallbackLanguage);
-      }
-
-      return playerFetch<SubtitleLanguageDetection>(playerConfig, "/subtitles/detect-language", {
-        method: "POST",
-        body: form,
+      const token = playerConfig.getAccessToken(),
+        profile = playerConfig.getProfileId(),
+        pin = playerConfig.getProfileToken?.();
+      const generation = downloadGeneration.current;
+      const result = await playerV2(playerConfig, "POST /api/v2/subtitles/detect-language", {
+        form: { file, language: fallbackLanguage },
       });
+      if (
+        generation !== downloadGeneration.current ||
+        token !== playerConfig.getAccessToken() ||
+        profile !== playerConfig.getProfileId() ||
+        pin !== playerConfig.getProfileToken?.()
+      )
+        throw new DOMException("Subtitle detection context changed", "AbortError");
+      return result;
     },
     [playerConfig],
   );
@@ -190,30 +198,38 @@ export function SubtitleSearchModal({
 
   const handleDownload = useCallback(
     async (result: SubtitleResult) => {
+      const generation = downloadGeneration.current;
+      const token = playerConfig.getAccessToken();
+      const profile = playerConfig.getProfileId();
+      const pin = playerConfig.getProfileToken?.();
+      const current = () =>
+        generation === downloadGeneration.current &&
+        token === playerConfig.getAccessToken() &&
+        profile === playerConfig.getProfileId() &&
+        pin === playerConfig.getProfileToken?.();
       const key = `${result.provider}:${result.id}`;
       setDownloading(key);
       setError(null);
 
       try {
-        await playerFetch<unknown>(playerConfig, "/subtitles/download", {
-          method: "POST",
-          body: JSON.stringify({
-            media_file_id: mediaFileId,
+        await playerV2(playerConfig, "POST /api/v2/subtitles/download", {
+          body: {
+            media_file_id: String(mediaFileId),
             provider: result.provider,
             subtitle_id: result.id,
             language: result.language,
             release_name: result.release_name,
-            format: result.format,
             score: result.score,
             hearing_impaired: result.hearing_impaired,
-          }),
+          },
         });
+        if (!current()) return;
         onSubtitleDownloaded();
         handleClose();
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Download failed");
+        if (current()) setError(err instanceof Error ? err.message : "Download failed");
       } finally {
-        setDownloading(null);
+        if (current()) setDownloading(null);
       }
     },
     [playerConfig, mediaFileId, onSubtitleDownloaded, handleClose],

@@ -107,6 +107,16 @@ func TestSubtitleFontIdentitySurvivesExternalInsertion(t *testing.T) {
 	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != "[]" {
 		t.Fatalf("frozen font identity failed after scan insertion: %d %q", response.Code, response.Body.String())
 	}
+	query := url.Values{"file_id": {"42"}, playback.EmbeddedSubtitleStreamIndexParamV3: {"4"}}
+	fonts, err := handler.SubtitleFonts(newAuthorizedPlaybackContext(), SubtitleFontRequest{SessionID: session.ID, Track: "0", Query: query})
+	if err != nil || fonts == nil || len(fonts) != 0 {
+		t.Fatalf("shared font service failed after scan insertion: fonts=%v err=%v", fonts, err)
+	}
+	query[playback.EmbeddedSubtitleStreamIndexParamV3] = []string{"4", "7"}
+	_, err = handler.SubtitleFonts(newAuthorizedPlaybackContext(), SubtitleFontRequest{SessionID: session.ID, Track: "0", Query: query})
+	if failure, ok := errors.AsType[*APIError](err); !ok || failure.Status != http.StatusBadRequest {
+		t.Fatalf("conflicting identity pins were accepted: %v", err)
+	}
 }
 
 func TestSubtitleExternalIdentitySurvivesReordering(t *testing.T) {

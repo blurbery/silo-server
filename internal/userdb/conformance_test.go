@@ -77,3 +77,17 @@ func TestSQLiteAddFavoriteAtReportsInsertion(t *testing.T) {
 		t.Fatal("duplicate AddFavoriteAt reported an insertion")
 	}
 }
+
+// TestSQLiteProgressPage runs the keyset progress paging conformance test
+// against the real SQLite backend; the Postgres backend runs the same suite in
+// internal/userstore/pgstore.
+func TestSQLiteProgressPage(t *testing.T) {
+	storetest.RunProgressPage(t, newConformanceStore)
+}
+
+// TestSQLitePersonalListPage runs the keyset favorites/watchlist paging
+// conformance test against the real SQLite backend, which is what pins the
+// text comparison of added_at to the RFC 3339 form AddFavoriteAt writes.
+func TestSQLitePersonalListPage(t *testing.T) {
+	storetest.RunPersonalListPage(t, newConformanceStore)
+}

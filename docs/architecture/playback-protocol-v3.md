@@ -144,9 +144,10 @@ smoke probe for the applicable PQ, HLG, or SDR fallback-base source kind. A
 client must not assume a transformation exists because this document names it.
 
 `enabled` survives from the rollout period and is now constant `true`; the
-negative shape was deliberately removed before v1 lock because v3 is the only
-playback protocol. `reason` remains an optional diagnostic for a future
-non-rollout condition, but it never changes the meaning of `enabled`.
+negative shape was deliberately removed while the alpha `/api/v1` contract was
+still changeable, because v3 is the only playback protocol. `reason` remains an
+optional diagnostic for a future non-rollout condition, but it never changes the
+meaning of `enabled`.
 
 ### 2.2 `POST /playback/start`
 

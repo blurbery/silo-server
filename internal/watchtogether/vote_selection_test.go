@@ -27,15 +27,15 @@ func (s *stubSuggestions) GetSuggestion(_ context.Context, id string) (*Suggesti
 	return nil, ErrSuggestionNotFound
 }
 
-func (s *stubSuggestions) ListSuggestions(context.Context, string, string) ([]Suggestion, error) {
+func (s *stubSuggestions) ListSuggestions(context.Context, string, int, string) ([]Suggestion, error) {
 	out := make([]Suggestion, len(s.ordered))
 	copy(out, s.ordered)
 	return out, nil
 }
 
-func (s *stubSuggestions) DeleteSuggestion(context.Context, string) error { return nil }
-func (s *stubSuggestions) AddVote(context.Context, string, string) error  { return nil }
-func (s *stubSuggestions) RemoveVote(context.Context, string, string) error {
+func (s *stubSuggestions) DeleteSuggestion(context.Context, string) error     { return nil }
+func (s *stubSuggestions) AddVote(context.Context, string, int, string) error { return nil }
+func (s *stubSuggestions) RemoveVote(context.Context, string, int, string) error {
 	return nil
 }
 
@@ -139,4 +139,9 @@ func TestHostPickRoomIsUntouchedByTheVoteGates(t *testing.T) {
 	if _, err := service.PromoteSuggestion(context.Background(), "room-1", "a", 7, "host"); err != nil {
 		t.Fatalf("PromoteSuggestion() error = %v, want a host_pick room to promote freely", err)
 	}
+}
+
+func (s *stubSuggestions) ListSuggestionsPage(ctx context.Context, room string, _ int, profile string, _ int, _ *SuggestionPosition) ([]Suggestion, bool, error) {
+	rows, err := s.ListSuggestions(ctx, room, 7, profile)
+	return rows, false, err
 }

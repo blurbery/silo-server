@@ -7,6 +7,9 @@ COPY web/vendor/foliate-js ./vendor/foliate-js
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 COPY web/ .
+# The v2 contract fixtures are imported by web tests, which `tsc -b` type-checks
+# as part of the build; they live outside web/ so copy them explicitly.
+COPY contracts/api/v2/fixtures/ /app/contracts/api/v2/fixtures/
 RUN pnpm run build
 
 # Allow CI to inject prebuilt frontend assets via a named `frontend_dist`
@@ -79,7 +82,7 @@ RUN if [ "${TARGETARCH}" = "amd64" ]; then \
       cd / && \
       rm -rf "${runtime_dir}" /var/lib/apt/lists/*; \
     fi
-RUN mkdir -p /tmp/silo-transcode /var/lib/silo/compat/jellyfin-web
+RUN mkdir -p /tmp/silo-transcode /var/lib/silo/artwork /var/lib/silo/compat/jellyfin-web
 COPY --from=frontend /usr/local/bin/node /usr/local/bin/node
 COPY --from=frontend /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \

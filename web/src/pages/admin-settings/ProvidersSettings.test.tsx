@@ -1,7 +1,9 @@
-import { render as renderDOM, screen, within } from "@testing-library/react";
+import { setAccessToken, setProfileId, setProfileToken } from "@/api/client";
+import { adminSubtitleListScope } from "@/api/v2/adminSubtitles";
+import { render as renderDOM, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MarkerProviderConfig, PluginInstallation } from "@/api/types";
 
@@ -29,7 +31,7 @@ function markerProvider(overrides: Partial<MarkerProviderConfig> = {}): MarkerPr
     display_name: "TheIntroDB",
     source_type: "plugin",
     plugin_id: "silo.theintrodb",
-    plugin_installation_id: 6,
+    plugin_installation_id: "6",
     capability_id: "introdb",
     is_submitter: true,
     fetch_enabled: true,
@@ -99,6 +101,7 @@ vi.mock("@/hooks/queries/admin/settings", () => ({
 
 vi.mock("@/hooks/queries/admin/subtitles", () => ({
   useSubtitleProviders: () => ({
+    scope: adminSubtitleListScope(),
     data: {
       providers: [
         {
@@ -138,9 +141,28 @@ vi.mock("sonner", () => ({
   },
 }));
 
+afterEach(() => vi.unstubAllGlobals());
 describe("ProvidersSettings", () => {
   beforeEach(() => {
     localStorage.clear();
+    setAccessToken("admin");
+    setProfileId("owner");
+    setProfileToken(null);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation(async (input) => {
+        const provider = String(input).split("/").pop();
+        return new Response(
+          JSON.stringify({
+            provider_name: provider,
+            enabled: provider === "opensubtitles",
+            has_api_key: provider === "subsource",
+            has_credentials: provider === "opensubtitles",
+          }),
+          { headers: { "Content-Type": "application/json", ETag: '"captured"' } },
+        );
+      }),
+    );
     sensitiveConfigured = ["mdblist.api_key"];
     settingsValues = {};
     markerProviders = [];
@@ -281,9 +303,104 @@ describe("ProvidersSettings", () => {
     await user.click(within(subdl).getByRole("button", { name: "Save" }));
 
     expect(mocks.updateProvider).toHaveBeenCalledWith(
-      { provider: "subdl", config: { enabled: false, api_key: "key-123" } },
+      {
+        editor: expect.objectContaining({
+          etag: '"captured"',
+          intent: expect.objectContaining({ provider: "subdl" }),
+        }),
+        config: { enabled: false, api_key: "key-123" },
+      },
       expect.anything(),
     );
+  });
+
+  it("retains subtitle draft after uncertain save and requires explicit reload", async () => {
+    const user = userEvent.setup();
+    mocks.updateProvider.mockImplementation((_vars, options) =>
+      options.onError(new Error("lost response")),
+    );
+    render(<ProvidersSettings />);
+    await user.click(
+      within(screen.getByRole("group", { name: "SubDL" })).getByRole("button", { name: "Connect" }),
+    );
+    const panel = screen.getByRole("group", { name: "SubDL" });
+    await user.type(within(panel).getByLabelText("API key"), "retained-secret");
+    await user.click(within(panel).getByRole("button", { name: "Save" }));
+    expect(within(panel).getByLabelText("API key")).toHaveValue("retained-secret");
+    expect(within(panel).getByText(/Save not confirmed/)).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(mocks.updateProvider).toHaveBeenCalledTimes(1);
+    await user.click(
+      within(panel).getByRole("button", { name: "Reload saved configuration (discard draft)" }),
+    );
+    await waitFor(() => expect(within(panel).getByRole("button", { name: "Save" })).toBeEnabled());
+    expect(within(panel).getByLabelText("API key")).toHaveValue("");
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows subtitle saved with local failure without claiming immediate removal", async () => {
+    const user = userEvent.setup();
+    mocks.updateProvider.mockImplementation((_vars, options) =>
+      options.onSuccess({ saved_revision: "5", local_apply: "failed" }),
+    );
+    render(<ProvidersSettings />);
+    await user.click(
+      within(screen.getByRole("group", { name: "SubSource" })).getByRole("button", {
+        name: "Manage",
+      }),
+    );
+    const panel = screen.getByRole("group", { name: "SubSource" });
+    await user.click(within(panel).getByRole("button", { name: "Disconnect" }));
+    expect(
+      screen.getByText(/Applying this change on this server is reported separately/),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear and turn off" }));
+    expect(mocks.updateProvider).toHaveBeenCalledWith(
+      {
+        editor: expect.objectContaining({ etag: '"captured"' }),
+        config: { enabled: false, clear_credentials: true },
+      },
+      expect.anything(),
+    );
+    expect(within(panel).getByText(/Settings saved, but not applied/)).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("does not enable the subtitle editor when authority changes during canonical load", async () => {
+    let finish!: (r: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    );
+    const user = userEvent.setup();
+    render(<ProvidersSettings />);
+    await user.click(
+      within(screen.getByRole("group", { name: "SubDL" })).getByRole("button", { name: "Connect" }),
+    );
+    setProfileToken("changed");
+    finish(
+      new Response(
+        JSON.stringify({
+          provider_name: "subdl",
+          enabled: false,
+          has_api_key: false,
+          has_credentials: false,
+        }),
+        { headers: { "Content-Type": "application/json", ETag: '"v4"' } },
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByText(/Unable to load saved configuration/)).toBeInTheDocument(),
+    );
+    expect(
+      within(screen.getByRole("group", { name: "SubDL" })).getByRole("button", { name: "Save" }),
+    ).toBeDisabled();
+    expect(mocks.updateProvider).not.toHaveBeenCalled();
   });
 
   it("surfaces a failed provider test on the tile itself", async () => {

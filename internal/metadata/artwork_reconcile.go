@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/Silo-Server/silo-server/internal/artworkstore"
 	"github.com/Silo-Server/silo-server/internal/catalog"
 )
 
@@ -74,11 +75,9 @@ func retryOnDeadlock(ctx context.Context, op func() error) error {
 	}
 }
 
-// ArtworkObjectChecker is the S3 surface the reconciler needs: existence
-// checks against the public asset bucket. Satisfied by *s3client.Client.
+// ArtworkObjectChecker is the storage surface used to verify artwork objects.
 type ArtworkObjectChecker interface {
-	ObjectExists(ctx context.Context, bucket, key string) (bool, error)
-	Bucket() string
+	Stat(context.Context, string) (artworkstore.ObjectInfo, error)
 }
 
 // nonProviderImageSchemesSQL mirrors isNonProviderImageScheme for use inside
@@ -181,7 +180,6 @@ type artworkSweepKeyKind uint8
 
 const (
 	artworkSweepKeyText artworkSweepKeyKind = iota
-	artworkSweepKeyInt32
 	artworkSweepKeyInt64
 )
 
@@ -194,10 +192,6 @@ func textSweepKey(column string) artworkSweepKey {
 	return artworkSweepKey{column: column, kind: artworkSweepKeyText}
 }
 
-func int32SweepKey(column string) artworkSweepKey {
-	return artworkSweepKey{column: column, kind: artworkSweepKeyInt32}
-}
-
 func int64SweepKey(column string) artworkSweepKey {
 	return artworkSweepKey{column: column, kind: artworkSweepKeyInt64}
 }
@@ -206,9 +200,6 @@ func (k artworkSweepKey) parse(raw string) (any, error) {
 	switch k.kind {
 	case artworkSweepKeyText:
 		return raw, nil
-	case artworkSweepKeyInt32:
-		value, err := strconv.ParseInt(raw, 10, 32)
-		return int32(value), err
 	case artworkSweepKeyInt64:
 		return strconv.ParseInt(raw, 10, 64)
 	default:
@@ -340,7 +331,7 @@ func artworkSweepSurfaces() []artworkSweepSurface {
 		{name: artworkCollectionPostersName, table: "library_collections", keyCols: []artworkSweepKey{textSweepKey("id")}, pathCol: artworkPosterURLColumn, clearSet: `poster_url = '', poster_thumbhash = '', poster_auto_generated = FALSE, poster_from_template = FALSE, updated_at = NOW()`, alwaysVerify: true, coordinatePosterMutation: true},
 		{name: "collection backdrops", table: "library_collections", keyCols: []artworkSweepKey{textSweepKey("id")}, pathCol: "backdrop_url", clearSet: `backdrop_url = '', backdrop_thumbhash = '', updated_at = NOW()`, alwaysVerify: true},
 		{name: "user collection posters", table: "user_personal_collections", keyCols: []artworkSweepKey{textSweepKey("id")}, pathCol: artworkPosterURLColumn, clearSet: `poster_url = '', poster_thumbhash = '', updated_at = NOW()`, alwaysVerify: true},
-		{name: "library posters", table: "media_folders", keyCols: []artworkSweepKey{int32SweepKey("id")}, pathCol: posterPathColumn, clearSet: `poster_path = ''`, alwaysVerify: true},
+		{name: "library posters", table: "media_folders", keyCols: []artworkSweepKey{int64SweepKey("id")}, pathCol: posterPathColumn, clearSet: `poster_path = ''`, alwaysVerify: true},
 	}
 }
 
@@ -753,7 +744,6 @@ type headVerdict struct {
 
 // headKeys HEADs every key with bounded concurrency, preserving order.
 func (r *ArtworkCacheReconciler) headKeys(ctx context.Context, keys []string) []headVerdict {
-	bucket := r.s3.Bucket()
 	verdicts := make([]headVerdict, len(keys))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, artworkReconcileHeadWorkers)
@@ -763,7 +753,7 @@ func (r *ArtworkCacheReconciler) headKeys(ctx context.Context, keys []string) []
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			exists, err := r.objectExistsWithRetry(ctx, bucket, key)
+			exists, err := r.objectExistsWithRetry(ctx, key)
 			verdicts[i] = headVerdict{missing: err == nil && !exists, err: err}
 		}(i, key)
 	}
@@ -771,17 +761,20 @@ func (r *ArtworkCacheReconciler) headKeys(ctx context.Context, keys []string) []
 	return verdicts
 }
 
-func (r *ArtworkCacheReconciler) objectExistsWithRetry(ctx context.Context, bucket, key string) (bool, error) {
+func (r *ArtworkCacheReconciler) objectExistsWithRetry(ctx context.Context, key string) (bool, error) {
 	const maxAttempts = 3
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		// Per-attempt deadline: a stalled HEAD must fail this attempt and
 		// move on, not hold the retry loop open until the run's context dies.
 		attemptCtx, cancel := context.WithTimeout(ctx, artworkReconcileHeadTimeout)
-		exists, err := r.s3.ObjectExists(attemptCtx, bucket, key)
+		_, err := r.s3.Stat(attemptCtx, key)
 		cancel()
 		if err == nil {
-			return exists, nil
+			return true, nil
+		}
+		if errors.Is(err, artworkstore.ErrNotFound) {
+			return false, nil
 		}
 		lastErr = err
 		if attempt == maxAttempts-1 {
@@ -948,7 +941,7 @@ func (r *ArtworkCacheReconciler) resetCollectionPosterIfStillMissing(
 		unlockLocal()
 	}()
 
-	exists, err := r.objectExistsWithRetry(ctx, r.s3.Bucket(), row.path)
+	exists, err := r.objectExistsWithRetry(ctx, row.path)
 	if err != nil {
 		if ctx.Err() != nil {
 			return coordinatedPosterResetResult{}, ctx.Err()

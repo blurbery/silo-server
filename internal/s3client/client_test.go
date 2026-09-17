@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 type recordedRequest struct {
@@ -311,7 +313,9 @@ func TestClientObjectAvailableUsesExternalDeliveryPath(t *testing.T) {
 		PathStyle:      true,
 		URLAuth:        URLAuthCloudflareToken,
 		TokenSecret:    "secret",
+		Role:           "metadata",
 	})
+	dialsBefore := testutil.ToFloat64(s3Dials.WithLabelValues("metadata"))
 
 	available, err := client.ObjectAvailable(t.Context(), client.Bucket(), "poster/w780.webp")
 	if err != nil || available {
@@ -327,6 +331,9 @@ func TestClientObjectAvailableUsesExternalDeliveryPath(t *testing.T) {
 	mu.Unlock()
 	if len(gotRequests) != 2 {
 		t.Fatalf("delivery requests = %#v, want two", gotRequests)
+	}
+	if testutil.ToFloat64(s3Dials.WithLabelValues("metadata")) < dialsBefore+1 {
+		t.Fatal("external delivery probe dial was not counted")
 	}
 	for _, req := range gotRequests {
 		if req.Method != http.MethodGet || req.Body != "bytes=0-0" {
@@ -463,4 +470,17 @@ func parseQuery(raw string) url.Values {
 		panic(err)
 	}
 	return values
+}
+
+func TestArtworkDeliveryScopeExcludesCredentials(t *testing.T) {
+	client := &Client{endpoint: "https://storage.example", bucket: "artwork", publicEndpoint: "https://images.example", tokenSecret: "first-secret"}
+	scope := client.ArtworkDeliveryScope()
+	client.tokenSecret = "rotated-secret"
+	if got := client.ArtworkDeliveryScope(); got != scope {
+		t.Fatal("credential entered persisted scope digest")
+	}
+	client.publicEndpoint = "https://other-images.example"
+	if got := client.ArtworkDeliveryScope(); got == scope {
+		t.Fatal("delivery endpoint change did not change scope")
+	}
 }

@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const schemaVersion = 20
+const schemaVersion = 25
 
 func runMigrations(db *sql.DB) error {
 	version, err := userVersion(db)
@@ -196,6 +196,58 @@ func runMigrations(db *sql.DB) error {
 		}
 	}
 
+	if version < 21 {
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_watch_history_item_witness ON watch_history (profile_id, media_item_id, watched_at DESC, id DESC)`); err != nil {
+			return fmt.Errorf("migration v21 failed: %w", err)
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 21"); err != nil {
+			return err
+		}
+	}
+
+	if version < 22 {
+		// Normalize legacy NULLs once; all future direct writes are normalized by
+		// the schema triggers, preserving indexed tuple continuation.
+		if _, err := tx.Exec(`UPDATE personal_collection_items SET position = 0 WHERE position IS NULL`); err != nil {
+			return fmt.Errorf("migration v22 failed: %w", err)
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 22"); err != nil {
+			return err
+		}
+	}
+
+	if version < 23 {
+		if _, err := tx.Exec(playbackSinkSchema); err != nil {
+			return fmt.Errorf("migration v23 failed: %w", err)
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 23"); err != nil {
+			return err
+		}
+	}
+
+	if version < 24 {
+		if _, err := tx.Exec(playbackSourceSchema); err != nil {
+			return fmt.Errorf("migration v24 failed: %w", err)
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 24"); err != nil {
+			return err
+		}
+	}
+	if version < 25 {
+		// InitSchema runs before migrations and creates the current table when
+		// opening pre-v14 stores, which did not yet have onboarding state.
+		if !columnExists(tx, "profile_onboarding", "revision") {
+			if _, err := tx.Exec(`ALTER TABLE profile_onboarding ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0)`); err != nil {
+				return fmt.Errorf("migration v25 failed: %w", err)
+			}
+		}
+		if _, err := tx.Exec(onboardingRevisionSchema); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 25"); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 

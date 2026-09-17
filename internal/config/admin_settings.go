@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/mail"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -29,6 +30,18 @@ const (
 	PlaybackTranscodeSoftwareToneMapSettingKey = "playback.transcode_software_tone_map_enabled"
 )
 
+// SetupCompletedSettingKey records that the first-run setup wizard reached its
+// final screen. The public setup-status endpoint reports it so the web client
+// can refuse to reopen the wizard once an install has been through it; it says
+// nothing about whether any optional step was configured.
+const SetupCompletedSettingKey = "setup.completed"
+
+// CatalogScopeVersionsToLibrarySettingKey makes a library-scoped catalog read
+// (library_id on the v2 item, versions, and episode operations) return only
+// the files stored in that library. Off, the default, keeps every accessible
+// version of an item visible no matter which library it was opened from.
+const CatalogScopeVersionsToLibrarySettingKey = "catalog.scope_versions_to_library"
+
 // Shared server-setting keys used by playback and prepared-download policy
 // readers. Keep them here with the effective admin-setting defaults.
 const (
@@ -40,6 +53,15 @@ const (
 // stored alongside server settings for durability but must not be exposed or
 // edited through the administrator settings API.
 const ArtworkStorageReconcileCheckpointKey = "s3.public_storage_reconcile_checkpoint"
+
+// ArtworkStorageSweepCheckpointKey is the machine-managed cursor for the
+// artwork storage sweep, kept out of the administrator settings API for the
+// same reason as the reconcile checkpoint.
+const ArtworkStorageSweepCheckpointKey = "artwork.storage_sweep_checkpoint"
+
+// MetadataImageWorkersSettingKey sizes the artwork encode pool. 0 means one
+// worker per CPU core, resolved when the task runs.
+const MetadataImageWorkersSettingKey = "metadata.image_workers"
 
 // adminSettingDefaults is the effective value shown by the Admin UI when no
 // row exists in server_settings. Keep these values aligned with the runtime
@@ -55,6 +77,7 @@ var adminSettingDefaults = map[string]string{
 	"auth.refresh_token_expiry": "30d",
 	"server.log_level":          "info",
 	"server.log_quiet":          "",
+	"server.public_url":         "",
 	"branding.server_name":      "Silo",
 	"branding.login_subtitle":   "Sign in with an existing account.",
 	"clientip.trusted_proxies":  "10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, ::1/128",
@@ -73,6 +96,7 @@ var adminSettingDefaults = map[string]string{
 	"userdb.idle_timeout":        "12h",
 
 	"scanner.workers":                      "8",
+	MetadataImageWorkersSettingKey:         "0",
 	"scanner.max_concurrent_libraries":     "1",
 	"scanner.max_concurrent_scoped":        "2",
 	"scanner.file_removal_grace":           "24h",
@@ -81,7 +105,9 @@ var adminSettingDefaults = map[string]string{
 	"matcher.batch_size":                   "500",
 	"matcher.enable_tv_series_root_queue":  "true",
 	"matcher.enable_tv_series_group_queue": "false",
-	"metadata.cache_images":                "false",
+	"metadata.cache_images":                "true",
+	"artwork.storage_backend":              "auto",
+	"artwork.local_path":                   "/var/lib/silo/artwork",
 	"markers.mode":                         "local",
 	"markers.lazy_playback":                "false",
 
@@ -102,6 +128,7 @@ var adminSettingDefaults = map[string]string{
 	chapterThumbnailSoftwareToneMapKey:               "false",
 	PlaybackTranscodeHardwareToneMapSettingKey:       "false",
 	PlaybackTranscodeSoftwareToneMapSettingKey:       "false",
+	CatalogScopeVersionsToLibrarySettingKey:          "false",
 	"playback.watched_threshold":                     "90",
 	"playback.min_resume_threshold":                  "5",
 	Allow4KTranscodeSettingKey:                       "false",
@@ -192,8 +219,8 @@ var adminSettingDefaults = map[string]string{
 	"notifications.server_channels.batch_seconds":              "300",
 	"notifications.server_channels.mention_requesters":         "false",
 	"notifications.web_push_enabled":                           "true",
-	"notifications.apple_push_delivery_enabled":                "false",
-	"notifications.android_push_delivery_enabled":              "false",
+	"notifications.apple_push_delivery_enabled":                "true",
+	"notifications.android_push_delivery_enabled":              "true",
 
 	"taskmanager.history_retention_days": "30",
 	"taskmanager.history_keep_per_task":  "1000",
@@ -205,6 +232,7 @@ var adminSettingDefaults = map[string]string{
 	"opslog.max_size_mb":              "1024",
 	"overlays.enabled":                "true",
 	"signup.enabled":                  "false",
+	SetupCompletedSettingKey:          "false",
 
 	"catalog.search.provider":                             "postgres",
 	"catalog.search.meilisearch.index":                    "silo_media_items",
@@ -323,12 +351,12 @@ func NormalizeAdminSetting(key, raw string) (string, error) {
 	switch key {
 	case "metadata.cache_images", "playback.transcode_enabled",
 		chapterThumbnailSoftwareToneMapKey, PlaybackTranscodeHardwareToneMapSettingKey,
-		PlaybackTranscodeSoftwareToneMapSettingKey,
+		PlaybackTranscodeSoftwareToneMapSettingKey, CatalogScopeVersionsToLibrarySettingKey,
 		Allow4KTranscodeSettingKey, "enable_transcode_throttle", "audiobookshelf_compat.enabled",
 		"jellyfin_compat.enabled", "jellyfin_compat.web_enabled", "recommendations.enabled",
 		"subtitle_ai.enabled", "subtitle_ai.transcribe_enabled", "metadata_ai.enabled",
 		"download.enabled", "download.transcode_enabled", DownloadLocalTranscodeFallbackSettingKey,
-		"email.enabled", "signup.enabled",
+		"email.enabled", "signup.enabled", SetupCompletedSettingKey,
 		"scanner.empty_trash_after_scan", "matcher.enable_tv_series_root_queue",
 		"matcher.enable_tv_series_group_queue", "policy.editor_enabled",
 		"overlays.enabled", "notifications.release_events_enabled", "notifications.fanout_enabled",
@@ -342,6 +370,14 @@ func NormalizeAdminSetting(key, raw string) (string, error) {
 		"s3.public_path_style", "s3.private_path_style", "s3.user_db_path_style":
 		return normalizeAdminBool(key, value)
 
+	case "artwork.storage_backend":
+		return normalizeAdminEnum(key, value, "auto", "local", "s3")
+	case "artwork.local_path":
+		if value == "" || !filepath.IsAbs(value) {
+			return "", fmt.Errorf("%s must be an absolute path", key)
+		}
+		return filepath.Clean(value), nil
+
 	case "database.max_connections":
 		return normalizeAdminInt(key, value, 1, 10000)
 	case "userdb.pool_max_open":
@@ -351,6 +387,8 @@ func NormalizeAdminSetting(key, raw string) (string, error) {
 		return normalizeAdminInt(key, value, 1, 1024)
 	case "matcher.batch_size":
 		return normalizeAdminInt(key, value, 1, 100000)
+	case MetadataImageWorkersSettingKey:
+		return normalizeAdminInt(key, value, 0, 256)
 	case "playback.chapter_thumbnail_workers", "playback.chapter_thumbnail_node_capacity":
 		return normalizeAdminInt(key, value, 1, 1024)
 	case "playback.watched_threshold":
@@ -497,7 +535,7 @@ func NormalizeAdminSetting(key, raw string) (string, error) {
 		return value, nil
 
 	case "ai.base_url", "ai.asr_base_url", "recommendations.embedding_base_url",
-		"jellyfin_compat.public_url", "notifications.email.external_url",
+		"server.public_url", "jellyfin_compat.public_url",
 		"s3.public_endpoint", "s3.public_read_endpoint", "s3.private_endpoint",
 		"s3.user_db_endpoint", "catalog.search.meilisearch.url":
 		return normalizeAdminURL(key, value)
@@ -581,6 +619,10 @@ func ValidateAdminSettingsWithCapabilities(values map[string]string, capabilitie
 		if (accessKey == "") != (secretKey == "") {
 			return fmt.Errorf("%s access key and secret key must be configured together", strings.ReplaceAll(prefix, ".", " "))
 		}
+	}
+
+	if err := ValidateArtworkStorageSettings(effective); err != nil {
+		return err
 	}
 
 	switch effective["s3.public_url_auth"] {
@@ -684,6 +726,19 @@ func normalizeAdminDuration(key, value string) (string, error) {
 		return "", fmt.Errorf("%s must be a positive duration", key)
 	}
 	return value, nil
+}
+
+// ValidateArtworkStorageSettings rejects an explicit S3 artwork backend with
+// no public bucket to back it. artworkstore.Open fails on that combination, so
+// accepting it here would only surface as a fatal restart.
+func ValidateArtworkStorageSettings(effective map[string]string) error {
+	if strings.ToLower(strings.TrimSpace(effective["artwork.storage_backend"])) != "s3" {
+		return nil
+	}
+	if strings.TrimSpace(effective["s3.public_bucket"]) == "" {
+		return fmt.Errorf("artwork.storage_backend s3 requires s3.public_bucket")
+	}
+	return nil
 }
 
 func normalizeAdminEnum(key, value string, allowed ...string) (string, error) {

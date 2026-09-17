@@ -113,14 +113,14 @@
   --font-family-display: var(--font-display, var(--font-body));
 
   /* ── Hero Backdrop Defaults ─────────────────────────────────── */
-  --hero-backdrop-brightness: 0.75;
-  --hero-backdrop-saturate: 0.9;
+  --hero-backdrop-brightness: 0.9;
+  --hero-backdrop-saturate: 1;
   /* Detail heroes tint their artwork with a flat `--background` wash instead
      of a `filter`, so a viewport resize does not re-rasterize a filtered
      layer every frame. This is the detail-page equivalent of
-     `--hero-backdrop-brightness`: 25% over a dark background lands close to
-     brightness(0.75). Themes tune it here rather than losing the knob. */
-  --hero-backdrop-scrim: 25%;
+     `--hero-backdrop-brightness`: 10% over a dark background lands close to
+     brightness(0.9). Themes tune it here rather than losing the knob. */
+  --hero-backdrop-scrim: 10%;
   --hero-text-shadow: 0 18px 50px rgb(0 0 0 / 45%);
 }
 
@@ -578,11 +578,11 @@ html[data-navigation-direction]::view-transition-new(main-content) {
     --ambient-glow-opacity: 0.05;
 
     /* Hero: light-mode overrides */
-    --hero-backdrop-brightness: 1.15;
-    --hero-backdrop-saturate: 0.6;
+    --hero-backdrop-brightness: 1.1;
+    --hero-backdrop-saturate: 0.7;
     /* A heavier wash of the near-white background both lifts and desaturates,
-       matching what brightness(1.15)/saturate(0.6) did for this theme. */
-    --hero-backdrop-scrim: 35%;
+       matching what brightness(1.1)/saturate(0.7) did for this theme. */
+    --hero-backdrop-scrim: 24%;
     --hero-text-shadow: 0 1px 3px rgb(255 255 255 / 60%);
   }
 
@@ -896,16 +896,18 @@ html[data-navigation-direction]::view-transition-new(main-content) {
          <div class="hero-gradient" />
          <div class="hero-gradient-radial" />  // optional vignette
        </div>                                                    */
+  /* The fade is anchored to the bottom third where the copy sits; the upper
+     two thirds stay clear so the artwork reads as artwork rather than a tint. */
   .hero-gradient {
     position: absolute;
     inset: 0;
     background: linear-gradient(
       to top,
       var(--background) 0%,
-      color-mix(in srgb, var(--background) 92%, transparent) 20%,
-      color-mix(in srgb, var(--background) 55%, transparent) 50%,
-      color-mix(in srgb, var(--background) 20%, transparent) 75%,
-      transparent 100%
+      color-mix(in srgb, var(--background) 88%, transparent) 12%,
+      color-mix(in srgb, var(--background) 48%, transparent) 30%,
+      color-mix(in srgb, var(--background) 12%, transparent) 50%,
+      transparent 66%
     );
     pointer-events: none;
   }
@@ -928,30 +930,24 @@ html[data-navigation-direction]::view-transition-new(main-content) {
     inset: 0;
     background: linear-gradient(
       to right,
-      var(--background) 0%,
-      color-mix(in srgb, var(--background) 80%, transparent) 20%,
-      color-mix(in srgb, var(--background) 40%, transparent) 40%,
-      transparent 60%
+      color-mix(in srgb, var(--background) 88%, transparent) 0%,
+      color-mix(in srgb, var(--background) 58%, transparent) 16%,
+      color-mix(in srgb, var(--background) 22%, transparent) 34%,
+      transparent 50%
     );
     pointer-events: none;
   }
 
+  /* Soft edge darkening only. It used to repeat the bottom and left fades,
+     which stacked with them and washed out the middle of the frame. */
   .hero-vignette {
     position: absolute;
     inset: 0;
-    background:
-      linear-gradient(
-        90deg,
-        color-mix(in srgb, var(--background) 92%, transparent) 0%,
-        color-mix(in srgb, var(--background) 64%, transparent) 28%,
-        transparent 58%
-      ),
-      linear-gradient(
-        to top,
-        var(--background) 0%,
-        color-mix(in srgb, var(--background) 75%, transparent) 28%,
-        transparent 62%
-      );
+    background: radial-gradient(
+      ellipse 120% 100% at 60% 45%,
+      transparent 55%,
+      rgb(0 0 0 / 18%) 100%
+    );
     pointer-events: none;
   }
 
@@ -964,11 +960,11 @@ html[data-navigation-direction]::view-transition-new(main-content) {
     background: linear-gradient(
       to top,
       var(--background) 0%,
-      var(--background) 12%,
-      color-mix(in srgb, var(--background) 88%, transparent) 30%,
-      color-mix(in srgb, var(--background) 55%, transparent) 55%,
-      color-mix(in srgb, var(--background) 18%, transparent) 80%,
-      transparent 100%
+      var(--background) 10%,
+      color-mix(in srgb, var(--background) 86%, transparent) 26%,
+      color-mix(in srgb, var(--background) 45%, transparent) 48%,
+      color-mix(in srgb, var(--background) 12%, transparent) 70%,
+      transparent 88%
     );
     pointer-events: none;
   }
@@ -1044,10 +1040,10 @@ html[data-navigation-direction]::view-transition-new(main-content) {
     background:
       linear-gradient(
         to right,
-        var(--background) 0%,
-        color-mix(in srgb, var(--background) 80%, transparent) 20%,
-        color-mix(in srgb, var(--background) 40%, transparent) 40%,
-        transparent 60%
+        color-mix(in srgb, var(--background) 92%, transparent) 0%,
+        color-mix(in srgb, var(--background) 62%, transparent) 18%,
+        color-mix(in srgb, var(--background) 24%, transparent) 36%,
+        transparent 52%
       ),
       linear-gradient(
         color-mix(in srgb, var(--background) var(--hero-backdrop-scrim, 25%), transparent),
@@ -1056,28 +1052,20 @@ html[data-navigation-direction]::view-transition-new(main-content) {
   }
 
   /* These layers sat above the ambient artwork glow in the original hero. */
+  /* One bottom fade anchored to the copy block plus a soft edge vignette.
+     Three stacked bottom fades and a second left fade used to multiply into
+     a near-solid wash by mid-frame. */
   .detail-hero-scrim-over {
     background:
       linear-gradient(
-        90deg,
-        color-mix(in srgb, var(--background) 92%, transparent) 0%,
-        color-mix(in srgb, var(--background) 64%, transparent) 28%,
-        transparent 58%
-      ),
-      linear-gradient(
         to top,
         var(--background) 0%,
-        color-mix(in srgb, var(--background) 75%, transparent) 28%,
-        transparent 62%
+        color-mix(in srgb, var(--background) 86%, transparent) 14%,
+        color-mix(in srgb, var(--background) 46%, transparent) 34%,
+        color-mix(in srgb, var(--background) 12%, transparent) 54%,
+        transparent 70%
       ),
-      linear-gradient(
-        to top,
-        var(--background) 0%,
-        color-mix(in srgb, var(--background) 92%, transparent) 20%,
-        color-mix(in srgb, var(--background) 55%, transparent) 50%,
-        color-mix(in srgb, var(--background) 20%, transparent) 75%,
-        transparent 100%
-      );
+      radial-gradient(ellipse 120% 100% at 62% 40%, transparent 55%, rgb(0 0 0 / 18%) 100%);
   }
 
   .detail-hero-ambient {

@@ -31,7 +31,6 @@ const mocks = vi.hoisted(() => {
     useSimilarItems: vi.fn(),
     useSetRating: vi.fn(),
     useDeleteRating: vi.fn(),
-    useCommunityRatings: vi.fn(),
     setRatingMutate: vi.fn(),
     deleteRatingMutate: vi.fn(),
   };
@@ -81,7 +80,6 @@ vi.mock("@/playback/watchPlaybackContext", () => ({
 vi.mock("@/hooks/queries/ratings", () => ({
   useSetRating: mocks.useSetRating,
   useDeleteRating: mocks.useDeleteRating,
-  useCommunityRatings: mocks.useCommunityRatings,
 }));
 
 vi.mock("@/components/CastCarousel", () => ({
@@ -117,10 +115,6 @@ vi.mock("./components/ActionBar", () => ({
     mocks.capturedActionBarProps.value = props;
     return <div />;
   },
-}));
-
-vi.mock("./components/RatingsSection", () => ({
-  default: () => <div />,
 }));
 
 function makeSeason(overrides: Partial<Season> = {}): Season {
@@ -205,7 +199,6 @@ describe("SeriesContent", () => {
     mocks.useSimilarItems.mockReturnValue({ data: undefined, isLoading: false });
     mocks.useSetRating.mockReturnValue({ mutate: mocks.setRatingMutate });
     mocks.useDeleteRating.mockReturnValue({ mutate: mocks.deleteRatingMutate });
-    mocks.useCommunityRatings.mockReturnValue({ data: undefined });
   });
 
   it("passes rating state and change handler to ActionBar", () => {

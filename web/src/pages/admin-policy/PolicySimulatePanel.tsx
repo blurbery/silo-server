@@ -1,3 +1,4 @@
+import { policyDomain } from "@/api/adminPolicy";
 import { Play } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -109,7 +110,7 @@ export function PolicySimulatePanel({ domains, domain, source }: PolicySimulateP
 
     try {
       await simulate.mutateAsync({
-        domain: selectedDomain,
+        domain: policyDomain(selectedDomain),
         source: source?.trim() ? source : undefined,
         input: parsedInput,
       });

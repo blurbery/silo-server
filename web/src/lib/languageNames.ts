@@ -24,13 +24,32 @@ function displayName(names: Intl.DisplayNames, value: string): string | null {
 
 /** Canonical BCP 47 identity used only for comparison; wire values stay untouched. */
 export function canonicalLanguageTag(value: string): string | null {
-  const trimmed = value.trim();
+  const aliases: Record<string, string> = {
+    arabic: "ar",
+    english: "en",
+    spanish: "es",
+    french: "fr",
+    german: "de",
+    portuguese: "pt",
+    "brazilian portuguese": "pt-BR",
+    "portuguese (brazil)": "pt-BR",
+    "chinese (traditional)": "zh-Hant",
+    "traditional chinese": "zh-Hant",
+  };
+  const trimmed = (aliases[value.trim().toLowerCase()] ?? value).trim();
   if (!trimmed) return null;
   try {
-    return new Intl.Locale(trimmed.replace(/_/g, "-")).toString();
+    const locale = new Intl.Locale(trimmed.replace(/_/g, "-"));
+    if (!/^[a-z]{2,3}$/i.test(locale.language)) return null;
+    return locale.toString();
   } catch {
     return null;
   }
+}
+
+/** Canonical value for API request bodies; invalid values stay absent. */
+export function canonicalLanguageWireValue(value: string | null | undefined): string | null {
+  return value == null ? null : canonicalLanguageTag(value);
 }
 
 /** Stable identity that de-duplicates ISO aliases without collapsing script or region subtags. */

@@ -1,3 +1,4 @@
+import { buildLibraryCollectionCatalogHref } from "./catalogSearchParams";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HomeSectionItemsResponse, ResolvedSection } from "@/api/types";
@@ -326,16 +327,21 @@ function PinnedCollectionCarousel({
   collectionId: string;
   name: string;
 }) {
-  const { data: items, isLoading } = useLibraryCollectionItems(libraryId, collectionId);
+  const { data, isLoading } = useLibraryCollectionItems(libraryId, collectionId);
+  const items = data?.items ?? [];
   const { prefs: overlayPrefs, quickActionMode } = useOverlayPrefs();
   const { cardPresentation } = useUICustomization();
   const posterWidthClasses = carouselCardWidthClasses(cardPresentation.poster_size);
 
-  if (!isLoading && (!items || items.length === 0)) return null;
+  if (items.length === 0 && !isLoading && !data?.has_more) return null;
 
   return (
-    <MediaCarousel title={name} loading={isLoading}>
-      {(items ?? []).map((item) => (
+    <MediaCarousel
+      title={name}
+      titleHref={buildLibraryCollectionCatalogHref(collectionId, name, libraryId)}
+      loading={isLoading}
+    >
+      {items.map((item) => (
         <div key={item.content_id} className={posterWidthClasses}>
           <ItemCard item={item} overlayPrefs={overlayPrefs} quickActionMode={quickActionMode} />
         </div>

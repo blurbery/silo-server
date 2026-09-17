@@ -12,7 +12,8 @@ const mocks = vi.hoisted(() => ({
       category: "metadata",
       state: "running",
       progress: 0,
-      progress_message: "Processed 1,000 images across 1 batch",
+      manual_only: false,
+      execution_scope: "process",
       triggers: [],
     },
   ] as TaskInfo[],
@@ -47,7 +48,6 @@ describe("ServerActivity task progress", () => {
     fireEvent.click(screen.getByRole("button", { name: "Server activity: 1 active" }));
 
     expect(screen.getByText("Running")).toBeInTheDocument();
-    expect(screen.getByText("Processed 1,000 images across 1 batch")).toBeInTheDocument();
     expect(screen.queryByText("0%")).not.toBeInTheDocument();
   });
 });

@@ -1,0 +1,10 @@
+{
+  "revision": "fc20b1000288c8729013eeca7ccd093584c4788c66f53c244c77543ada324491",
+  "state": "available",
+  "allowed": true,
+  "available": true,
+  "guarded_configuration": true,
+  "default_profile": true,
+  "exact_identity_filter": true,
+  "access_groups": true
+}

@@ -16,7 +16,7 @@ describe("PolicySimulatePanel", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async (input, init) => {
-        expect(String(input)).toBe("/api/v1/admin/policy/simulate");
+        expect(String(input)).toBe("/api/v2/admin/policy/simulate");
         expect(JSON.parse(String(init?.body))).toMatchObject({
           domain: "scope",
           source: "package silo_custom.scope",

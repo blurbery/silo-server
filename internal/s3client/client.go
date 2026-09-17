@@ -26,6 +26,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go/middleware"
+
+	"github.com/Silo-Server/silo-server/internal/telemetry"
 )
 
 // ErrNotFound is returned when the requested S3 object does not exist.
@@ -42,15 +45,15 @@ const (
 // S3-compatible backends require parts of at least 5 MiB (except the last).
 const streamUploadPartSize = 8 * 1024 * 1024
 
-// publicDeliveryProbeTimeout bounds request-path latency when the external
-// artwork endpoint is unavailable. Ladder resolution probes candidates in
-// descending order, so an unbounded client could stall a whole browse page.
+// publicDeliveryProbeTimeout bounds background artwork delivery verification.
 const publicDeliveryProbeTimeout = 5 * time.Second
 
 // BucketConfig holds the configuration for connecting to a single S3 bucket.
 // Each bucket may have different credentials and endpoints, allowing per-bucket
 // configuration for metadata, operational, and user-db buckets.
 type BucketConfig struct {
+	// Role is an operational category, never a bucket name or endpoint.
+	Role           string
 	Endpoint       string
 	PublicEndpoint string // optional: public CDN domain for reads (e.g. R2 custom domain)
 	Region         string
@@ -67,6 +70,7 @@ type BucketConfig struct {
 
 // Client wraps an AWS SDK v2 S3 client configured for a specific bucket.
 type Client struct {
+	role           string
 	s3Client       *s3.Client
 	presignClient  *s3.PresignClient
 	bucket         string
@@ -85,6 +89,7 @@ type ObjectInfo struct {
 	Key          string
 	SizeBytes    int64
 	LastModified *time.Time
+	ETag         string
 }
 
 // NewClient creates a new S3 Client from the given BucketConfig.
@@ -95,7 +100,10 @@ func NewClient(cfg BucketConfig) *Client {
 		region = "us-east-1"
 	}
 
+	role := telemetry.Role(cfg.Role)
 	s3Client := s3.New(s3.Options{
+		APIOptions:   []func(*middleware.Stack) error{observeS3(role)},
+		HTTPClient:   observedHTTPClient{inner: sharedHTTPClient(), role: role},
 		Region:       region,
 		BaseEndpoint: aws.String(cfg.Endpoint),
 		Credentials: credentials.NewStaticCredentialsProvider(
@@ -106,7 +114,13 @@ func NewClient(cfg BucketConfig) *Client {
 		UsePathStyle: cfg.PathStyle,
 	})
 
-	presignClient := s3.NewPresignClient(s3Client)
+	// URL signing is local work, so it must not appear as a storage call.
+	presignClient := s3.NewPresignClient(s3Client, s3.WithPresignClientFromClientOptions(func(o *s3.Options) {
+		o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
+			_, _ = stack.Initialize.Remove("SiloObserve")
+			return nil
+		})
+	}))
 
 	tokenParam := cfg.TokenParam
 	if tokenParam == "" {
@@ -119,6 +133,7 @@ func NewClient(cfg BucketConfig) *Client {
 	keyPrefix := NormalizeKeyPrefix(cfg.KeyPrefix)
 
 	return &Client{
+		role:           role,
 		s3Client:       s3Client,
 		presignClient:  presignClient,
 		bucket:         cfg.Bucket,
@@ -137,6 +152,12 @@ func NewClient(cfg BucketConfig) *Client {
 func (c *Client) Bucket() string {
 	return c.bucket
 }
+
+// Endpoint returns the S3 API endpoint objects are written to.
+func (c *Client) Endpoint() string { return c.endpoint }
+
+// KeyPrefix returns the normalized key prefix applied to every object key.
+func (c *Client) KeyPrefix() string { return c.keyPrefix }
 
 // GetObject fetches the object at the given key and returns its contents.
 // Returns ErrNotFound if the object does not exist.
@@ -165,6 +186,12 @@ func (c *Client) GetObject(ctx context.Context, bucket, key string) ([]byte, err
 // GetObjectStream fetches the object at the given key and returns a streaming
 // body. The caller must close the returned ReadCloser.
 func (c *Client) GetObjectStream(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
+	body, _, err := c.GetObjectStreamInfo(ctx, bucket, key)
+	return body, err
+}
+
+// GetObjectStreamInfo returns metadata from the same read as the object bytes.
+func (c *Client) GetObjectStreamInfo(ctx context.Context, bucket, key string) (io.ReadCloser, ObjectInfo, error) {
 	objectKey := c.prefixedKey(key)
 	out, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
@@ -172,12 +199,12 @@ func (c *Client) GetObjectStream(ctx context.Context, bucket, key string) (io.Re
 	})
 	if err != nil {
 		if isNotFoundErr(err) {
-			return nil, ErrNotFound
+			return nil, ObjectInfo{}, ErrNotFound
 		}
-		return nil, fmt.Errorf("s3 GetObject %s/%s: %w", bucket, key, err)
+		return nil, ObjectInfo{}, fmt.Errorf("s3 GetObject %s/%s: %w", bucket, key, err)
 	}
 
-	return out.Body, nil
+	return out.Body, ObjectInfo{Key: key, SizeBytes: aws.ToInt64(out.ContentLength), LastModified: out.LastModified, ETag: aws.ToString(out.ETag)}, nil
 }
 
 // PutObject uploads data to the given key, inferring Content-Type from the
@@ -429,19 +456,38 @@ func (c *Client) HeadBucket(ctx context.Context, bucket string) error {
 
 // ObjectExists checks whether an object exists at the given key.
 func (c *Client) ObjectExists(ctx context.Context, bucket, key string) (bool, error) {
+	_, err := c.HeadObject(ctx, bucket, key)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// HeadObject returns metadata for an object without downloading its bytes.
+func (c *Client) HeadObject(ctx context.Context, bucket, key string) (ObjectInfo, error) {
 	objectKey := c.prefixedKey(key)
-	_, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+	result, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(objectKey),
 	})
 	if err != nil {
 		if isNotFoundErr(err) {
-			return false, nil
+			return ObjectInfo{}, ErrNotFound
 		}
-		return false, fmt.Errorf("s3 HeadObject %s/%s: %w", bucket, key, err)
+		return ObjectInfo{}, fmt.Errorf("s3 HeadObject %s/%s: %w", bucket, key, err)
 	}
+	return ObjectInfo{Key: key, SizeBytes: aws.ToInt64(result.ContentLength), LastModified: result.LastModified, ETag: aws.ToString(result.ETag)}, nil
+}
 
-	return true, nil
+// ArtworkDeliveryScope invalidates verification when storage or delivery
+// endpoint or URL policy changes. Credentials are excluded from this persisted
+// digest. Rotated credentials sign fresh URLs and use normal background checks.
+func (c *Client) ArtworkDeliveryScope() string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		c.endpoint, c.bucket, c.keyPrefix, c.publicEndpoint, c.urlAuth,
+		c.tokenParam,
+	}, "\x00")))
+	return hex.EncodeToString(sum[:])
 }
 
 // ObjectAvailable reports whether a client-facing read URL is fetchable now.
@@ -466,7 +512,9 @@ func (c *Client) ObjectAvailable(ctx context.Context, bucket, key string) (bool,
 	}
 	req.Header.Set("Range", "bytes=0-0")
 
-	resp, err := http.DefaultClient.Do(req)
+	// The probe shares the S3 transport and its dial metrics: external
+	// delivery GETs are part of the same verifier burst as the storage HEADs.
+	resp, err := observedHTTPClient{inner: sharedDeliveryHTTPClient, role: c.role}.Do(req)
 	if err != nil {
 		// The underlying url.Error includes the signed URL, so do not wrap it:
 		// token-auth query values must never reach logs.

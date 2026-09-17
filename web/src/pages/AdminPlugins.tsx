@@ -792,7 +792,11 @@ function CatalogCard({ entry, isInstalled }: { entry: PluginCatalogEntry; isInst
   );
 }
 
-function CommunityCatalogControl({ settings }: { settings: PluginCatalogSettings }) {
+function CommunityCatalogControl({
+  settings,
+}: {
+  settings: PluginCatalogSettings & { etag: string };
+}) {
   const updateSettings = useUpdatePluginCatalogSettings();
   const [confirmDisable, setConfirmDisable] = useState(false);
 
@@ -801,11 +805,11 @@ function CommunityCatalogControl({ settings }: { settings: PluginCatalogSettings
       setConfirmDisable(true);
       return;
     }
-    updateSettings.mutate({ include_approved_community_plugins: include });
+    updateSettings.mutate({ include_approved_community_plugins: include, etag: settings.etag });
   }
 
   function disableCommunityCatalog() {
-    updateSettings.mutate({ include_approved_community_plugins: false });
+    updateSettings.mutate({ include_approved_community_plugins: false, etag: settings.etag });
     setConfirmDisable(false);
   }
 
@@ -870,7 +874,7 @@ function CommunityCatalogControl({ settings }: { settings: PluginCatalogSettings
 /* ─── Repository management ─────────────────────────────────────── */
 
 function RepositorySection() {
-  const { repositories } = useAdminPlugins();
+  const { repositories, repositoriesError } = useAdminPlugins();
   const createRepository = useCreatePluginRepository();
   const updateRepository = useUpdatePluginRepository();
   const deleteRepository = useDeletePluginRepository();
@@ -904,6 +908,12 @@ function RepositorySection() {
           {showForm ? "Cancel" : "Add"}
         </Button>
       </div>
+
+      {repositoriesError && (
+        <p role="alert" className="text-destructive text-sm">
+          Failed to load plugin repositories.
+        </p>
+      )}
 
       {showForm && (
         <form

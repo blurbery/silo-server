@@ -79,7 +79,7 @@ function mockFontBundleResponse(bytes: string): Response {
   return {
     ok: true,
     status: 200,
-    json: vi.fn().mockResolvedValue([{ name: "Attached.ttf", data: btoa(bytes) }]),
+    json: vi.fn().mockResolvedValue({ items: [{ name: "Attached.ttf", data: btoa(bytes) }] }),
   } as unknown as Response;
 }
 

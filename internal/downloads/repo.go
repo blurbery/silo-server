@@ -17,7 +17,7 @@ import (
 
 const downloadColumns = `id, user_id, profile_id, device_id, media_file_id, content_id, episode_id, batch_id,
 	kind, status, format, quality, effective_quality, target_bitrate_kbps, revision, artifact_id, file_size, bytes_sent, error_message,
-	created_at, updated_at, completed_at`
+	created_at, updated_at, completed_at, status_event_at`
 
 const insertDownloadSQL = `INSERT INTO downloads (id, user_id, profile_id, device_id, media_file_id, content_id,
 		episode_id, batch_id, kind, status, format, quality, effective_quality, target_bitrate_kbps, revision, artifact_id, file_size, bytes_sent, error_message,
@@ -32,6 +32,20 @@ type Repository struct {
 // NewRepository creates a new Repository backed by the given pool.
 func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
+}
+
+// managedQueryer lets subscription registration use its monitor transaction.
+// Only registration reads/writes use this seam; transfer/quota lifecycle stays
+// on the ordinary repository.
+type managedQueryer interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+type managedRegistryStore struct{ db managedQueryer }
+type managedRegistrationRepository interface {
+	GetManagedEntriesByKeys(context.Context, int, string, string, []ManagedEntryKey) (map[ManagedEntryKey]*Download, error)
+	CreateManagedEntriesBatch(context.Context, []*Download) ([]*Download, error)
+	SumManagedFileSize(context.Context, int, string, string) (int64, error)
 }
 
 // downloadQuotaLockClassID is the advisory-lock classid for per-user download
@@ -90,7 +104,7 @@ func scanInto(row pgx.Row, d *Download) error {
 	err := row.Scan(
 		&d.ID, &d.UserID, &profileID, &deviceID, &d.MediaFileID, &d.ContentID, &episodeID, &batchID,
 		&d.Kind, &d.Status, &d.Format, &d.Quality, &d.EffectiveQuality, &d.TargetBitrateKbps, &d.Revision, &artifactID, &d.FileSize, &d.BytesSent, &d.ErrorMessage,
-		&d.CreatedAt, &d.UpdatedAt, &d.CompletedAt,
+		&d.CreatedAt, &d.UpdatedAt, &d.CompletedAt, &d.StatusEventAt,
 	)
 	if err != nil {
 		return err
@@ -126,7 +140,7 @@ func scanDownloads(rows pgx.Rows) ([]*Download, error) {
 	return downloads, rows.Err()
 }
 
-func (r *Repository) insertArgs(d *Download) []any {
+func downloadInsertArgs(d *Download) []any {
 	format := d.Format
 	if format == "" {
 		format = FormatOriginal
@@ -153,7 +167,7 @@ func (r *Repository) insertArgs(d *Download) []any {
 
 // Create inserts a new download record.
 func (r *Repository) Create(ctx context.Context, d *Download) error {
-	if _, err := r.pool.Exec(ctx, insertDownloadSQL, r.insertArgs(d)...); err != nil {
+	if _, err := r.pool.Exec(ctx, insertDownloadSQL, downloadInsertArgs(d)...); err != nil {
 		return fmt.Errorf("inserting download: %w", err)
 	}
 	return nil
@@ -168,7 +182,7 @@ func (r *Repository) CreateBatch(ctx context.Context, downloads []*Download) err
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	for _, d := range downloads {
-		if _, err := tx.Exec(ctx, insertDownloadSQL, r.insertArgs(d)...); err != nil {
+		if _, err := tx.Exec(ctx, insertDownloadSQL, downloadInsertArgs(d)...); err != nil {
 			return fmt.Errorf("inserting batch download: %w", err)
 		}
 	}
@@ -369,6 +383,10 @@ type ManagedEntryKey struct {
 // registration paths use this instead of a per-item GetManagedEntry loop (a
 // 300-episode series would otherwise issue 300 sequential lookups).
 func (r *Repository) GetManagedEntriesByKeys(ctx context.Context, userID int, profileID, deviceID string, keys []ManagedEntryKey) (map[ManagedEntryKey]*Download, error) {
+	return (managedRegistryStore{r.pool}).GetManagedEntriesByKeys(ctx, userID, profileID, deviceID, keys)
+}
+
+func (r managedRegistryStore) GetManagedEntriesByKeys(ctx context.Context, userID int, profileID, deviceID string, keys []ManagedEntryKey) (map[ManagedEntryKey]*Download, error) {
 	out := make(map[ManagedEntryKey]*Download, len(keys))
 	if len(keys) == 0 {
 		return out, nil
@@ -383,7 +401,7 @@ func (r *Repository) GetManagedEntriesByKeys(ctx context.Context, userID int, pr
 	}
 	// ANY() on each column over-selects the cross product within this device's
 	// rows; the exact-pair filter below trims it.
-	rows, err := r.pool.Query(ctx,
+	rows, err := r.db.Query(ctx,
 		`SELECT `+downloadColumns+` FROM downloads
 		 WHERE user_id = $1 AND profile_id = $2 AND device_id = $3
 		   AND content_id = ANY($4) AND COALESCE(episode_id, '') = ANY($5)`,
@@ -411,6 +429,10 @@ func (r *Repository) GetManagedEntriesByKeys(ctx context.Context, userID int, pr
 // CONFLICT DO NOTHING on the managed-entry unique index. Returns only the rows
 // actually inserted, so callers can report an honest newly-registered count.
 func (r *Repository) CreateManagedEntriesBatch(ctx context.Context, ds []*Download) ([]*Download, error) {
+	return (managedRegistryStore{r.pool}).CreateManagedEntriesBatch(ctx, ds)
+}
+
+func (r managedRegistryStore) CreateManagedEntriesBatch(ctx context.Context, ds []*Download) ([]*Download, error) {
 	if len(ds) == 0 {
 		return nil, nil
 	}
@@ -433,10 +455,10 @@ func (r *Repository) CreateManagedEntriesBatch(ctx context.Context, ds []*Downlo
 			sb.WriteString(strconv.Itoa(i*insertCols + j + 1))
 		}
 		sb.WriteByte(')')
-		args = append(args, r.insertArgs(d)...)
+		args = append(args, downloadInsertArgs(d)...)
 	}
 	sb.WriteString(` ON CONFLICT (user_id, profile_id, device_id, content_id, (COALESCE(episode_id, ''))) WHERE device_id IS NOT NULL DO NOTHING RETURNING ` + downloadColumns)
-	rows, err := r.pool.Query(ctx, sb.String(), args...)
+	rows, err := r.db.Query(ctx, sb.String(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("batch inserting managed entries: %w", err)
 	}
@@ -462,6 +484,7 @@ func (r *Repository) ReplaceManagedEntry(ctx context.Context, existing *Download
 			error_message = '',
 			completed_at = NULL,
 			revision = revision + 1,
+ status_event_at = NULL,
 			updated_at = now()
 		WHERE id = $1 AND user_id = $2 AND profile_id = $3 AND device_id = $4 AND revision = $5
 		RETURNING ` + downloadColumns
@@ -509,8 +532,12 @@ func (r *Repository) UpdateManagedBatch(ctx context.Context, existing *Download,
 // best-effort view, since the client is the source of truth for what is actually
 // on disk.
 func (r *Repository) SumManagedFileSize(ctx context.Context, userID int, profileID, deviceID string) (int64, error) {
+	return (managedRegistryStore{r.pool}).SumManagedFileSize(ctx, userID, profileID, deviceID)
+}
+
+func (r managedRegistryStore) SumManagedFileSize(ctx context.Context, userID int, profileID, deviceID string) (int64, error) {
 	var total int64
-	err := r.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`SELECT COALESCE(SUM(file_size), 0) FROM downloads
 		 WHERE user_id = $1 AND profile_id = $2 AND device_id = $3
 		   AND status NOT IN ('revoked', 'failed', 'cancelled')`,
@@ -591,7 +618,7 @@ func (r *Repository) ListEphemeral(ctx context.Context, userID int) ([]*Download
 // downloading/completed. Returns ErrNotFound when nothing matches the gate.
 func (r *Repository) UpdateManagedStatus(ctx context.Context, id string, userID int, profileID, deviceID, status string, completedAt *time.Time) error {
 	tag, err := r.pool.Exec(ctx,
-		`UPDATE downloads SET status = $5, completed_at = $6, updated_at = now()
+		`UPDATE downloads SET status = $5, completed_at = $6, status_event_at = now(), updated_at = now()
 		WHERE id = $1 AND user_id = $2 AND profile_id = $3 AND device_id = $4
 		  AND status IN ('ready', 'downloading', 'completed')`,
 		id, userID, profileID, deviceID, status, completedAt,

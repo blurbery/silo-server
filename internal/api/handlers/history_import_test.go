@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"testing"
+
+	"github.com/Silo-Server/silo-server/internal/historyimport"
 )
 
 func TestHistoryImportUpstreamError(t *testing.T) {
@@ -47,5 +50,13 @@ func TestHistoryImportUpstreamError(t *testing.T) {
 				t.Fatalf("got (%d, %q, %q), want (%d, %q, %q)", gotStatus, gotCode, gotMsg, tt.wantStatus, tt.wantCode, tt.wantMsg)
 			}
 		})
+	}
+}
+
+func TestHistoryImportDurableAdmissionErrorsDoNotExposeCauses(t *testing.T) {
+	err := errors.Join(historyimport.ErrPersonalAdmissionUncertain, errors.New("private credential detail"))
+	out := historyImportAPIError(err)
+	if out.Status != http.StatusServiceUnavailable || out.Message != historyimport.ErrPersonalAdmissionUncertain.Error() || !errors.Is(out, historyimport.ErrPersonalAdmissionUncertain) {
+		t.Fatalf("unsafe uncertain admission mapping: %+v", out)
 	}
 }

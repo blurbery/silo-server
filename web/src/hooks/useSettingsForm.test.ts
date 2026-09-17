@@ -6,7 +6,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useHasUnsavedChanges } from "./useUnsavedChanges";
 import { useSettingsForm } from "./useSettingsForm";
 
-const { mutateAsync } = vi.hoisted(() => ({ mutateAsync: vi.fn() }));
+const { mutateAsync, authority } = vi.hoisted(() => ({
+  mutateAsync: vi.fn(),
+  authority: { profileId: "profile-a" },
+}));
+vi.mock("@/api/client", () => ({
+  captureProfileRequestContext: () => ({
+    serverOrigin: "https://example.invalid",
+    authContextVersion: 1,
+    profileId: authority.profileId,
+  }),
+}));
 
 // Stable identities: useSettingsForm's sync effect depends on the settings
 // object and keys array (pages memoize keys), so fresh objects per render
@@ -24,9 +34,23 @@ vi.mock("@/hooks/queries/admin/settings", () => ({
 afterEach(() => {
   cleanup();
   mutateAsync.mockReset();
+  authority.profileId = "profile-a";
 });
 
 describe("useSettingsForm save()", () => {
+  it("clears staged secrets when the acting profile changes", () => {
+    const { result, rerender } = renderHook(() =>
+      useSettingsForm({ keys: ["email.smtp_password"] }),
+    );
+    act(() => result.current.setValue("email.smtp_password", "draft-secret"));
+    expect(result.current.dirtyCount).toBe(1);
+    authority.profileId = "profile-b";
+    rerender();
+    expect(result.current.getValue("email.smtp_password")).toBe("");
+    expect(result.current.dirtyCount).toBe(0);
+    expect(result.current.restartRequired).toBe(false);
+  });
+
   it("does not flag a restart when no saved key requires one", async () => {
     mutateAsync.mockResolvedValue({
       values: { "branding.server_name": "Casa" },

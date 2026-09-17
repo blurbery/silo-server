@@ -303,6 +303,12 @@ export default function MatchItemDialog({ item, open, onOpenChange }: MatchItemD
             Search
           </Button>
 
+          {searchMutation.data?.truncated && (
+            <p className="text-muted-foreground text-sm">
+              Showing the first 500 matches. Refine the title, year, or provider ID to narrow the
+              results.
+            </p>
+          )}
           {/* Candidate list */}
           {candidates.length > 0 && (
             <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden">

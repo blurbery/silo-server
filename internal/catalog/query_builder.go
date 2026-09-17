@@ -18,13 +18,14 @@ import (
 var EbookFinishedProgressThresholdSQL = strconv.FormatFloat(models.EbookFinishedProgressThreshold, 'f', -1, 64)
 
 type QueryBuilder struct {
-	alias      string
-	argIdx     int
-	args       []any
-	userID     int
-	profileID  string
-	libraryIDs []int
-	mediaScope string
+	cursorTerms []queryCursorTerm
+	alias       string
+	argIdx      int
+	args        []any
+	userID      int
+	profileID   string
+	libraryIDs  []int
+	mediaScope  string
 	// requireUserHistoryCTE is set when an emitted clause references the
 	// per-user history aggregate (audit 2026-05-01 §3.1 Pattern B). The
 	// executor reads this flag to inject the user_last_watched CTE and
@@ -33,6 +34,7 @@ type QueryBuilder struct {
 }
 
 type QuerySortPlan struct {
+	terms   []queryCursorTerm
 	Joins   []string
 	OrderBy string
 	Args    []any
@@ -222,7 +224,12 @@ func (qb *QueryBuilder) BuildSortClause(sortConfig QuerySort) (string, []any, er
 	return plan.OrderBy, plan.Args, nil
 }
 
-func (qb *QueryBuilder) BuildSortPlan(sortConfig QuerySort) (QuerySortPlan, error) {
+func (qb *QueryBuilder) BuildSortPlan(sortConfig QuerySort) (result QuerySortPlan, err error) {
+	qb.cursorTerms = nil
+	defer func() {
+		result.terms = append([]queryCursorTerm(nil), qb.cursorTerms...)
+		setCursorTermKinds(result.terms, NormalizeQuerySort(sortConfig).Field)
+	}()
 	sortConfig = NormalizeQuerySort(sortConfig)
 	sortDef, ok := querySortDefs[sortConfig.Field]
 	if !ok {
@@ -245,6 +252,7 @@ func (qb *QueryBuilder) BuildSortPlan(sortConfig QuerySort) (QuerySortPlan, erro
 
 	switch sortConfig.Field {
 	case "title":
+		qb.cursorTerms = []queryCursorTerm{{expression: titleExpr, descending: dir == "DESC"}, {expression: qb.alias + ".content_id"}}
 		plan.OrderBy = fmt.Sprintf("ORDER BY %s %s, %s.content_id ASC", titleExpr, dir, qb.alias)
 		return plan, nil
 	case "release_date":
@@ -259,6 +267,7 @@ func (qb *QueryBuilder) BuildSortPlan(sortConfig QuerySort) (QuerySortPlan, erro
 	case "content_rating":
 		rankExpr := qb.contentRatingRankExpr()
 		labelExpr := qb.contentRatingLabelExpr()
+		qb.cursorTerms = []queryCursorTerm{{expression: rankExpr, descending: dir == "DESC"}, {expression: labelExpr, descending: dir == "DESC"}, {expression: titleExpr}, {expression: qb.alias + ".content_id"}}
 		plan.OrderBy = fmt.Sprintf(
 			"ORDER BY %s %s, %s %s, %s ASC, %s.content_id ASC",
 			rankExpr,
@@ -318,6 +327,7 @@ func (qb *QueryBuilder) BuildSortPlan(sortConfig QuerySort) (QuerySortPlan, erro
 			qb.bookSeriesTable(),
 			qb.alias,
 		)}
+		qb.cursorTerms = []queryCursorTerm{{expression: "sort_series.series_name", descending: dir == "DESC", nullsLast: true}, {expression: "sort_series.series_index", nullsLast: true}, {expression: titleExpr}, {expression: qb.alias + ".content_id"}}
 		// Sort by series name primarily, then by series_index so books
 		// within the same series come back in narrative order. Title
 		// breaks ties for books that don't have a series_index.
@@ -1363,6 +1373,7 @@ func (qb *QueryBuilder) addedAtFilterExpr() string {
 }
 
 func (qb *QueryBuilder) orderByExpr(expr, dir string, nullsLast bool, titleExpr string) string {
+	qb.cursorTerms = []queryCursorTerm{{expression: expr, descending: dir == "DESC", nullsLast: nullsLast || dir != "DESC"}, {expression: titleExpr, nullsLast: true}, {expression: qb.alias + ".content_id", nullsLast: true}}
 	clause := fmt.Sprintf("ORDER BY %s %s", expr, dir)
 	if nullsLast {
 		clause += " NULLS LAST"

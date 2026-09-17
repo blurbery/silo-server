@@ -1,3 +1,5 @@
+import { V2ProblemError } from "@/api/v2/request";
+import { setAccessToken, setProfileId, setProfileToken } from "@/api/client";
 // @vitest-environment jsdom
 
 import { render, screen, waitFor, within } from "@testing-library/react";
@@ -12,12 +14,14 @@ import { SETTING_KEYS } from "@/lib/settingsContract";
 import AdminUserDetail from "./AdminUserDetail";
 
 interface UpdateUserMutationArg {
-  id: number;
+  editor: { user: { id: number } };
   body: UpdateUserRequest;
 }
 
 const mocks = vi.hoisted(() => ({
   updateUserMutate: vi.fn(),
+  getReads: 0,
+  impersonate: vi.fn(),
   beginImpersonation: vi.fn(),
   updateSettingMutate: vi.fn(),
   deleteSettingMutate: vi.fn(),
@@ -88,11 +92,20 @@ function installPointerCaptureMocks() {
   });
 }
 
+vi.mock("@/api/v2/adminUsers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/v2/adminUsers")>()),
+  getAdminUser: async () => ({
+    user: mocks.user!,
+    etag: `"read-${++mocks.getReads}"`,
+    profileContext: (await import("@/api/client")).captureProfileRequestContext()!,
+  }),
+}));
 vi.mock("@/hooks/queries/admin/users", () => ({
+  useAdminUserCapabilities: () => ({ data: { available: true, default_profile: true } }),
   useAdminUser: () => ({ data: mocks.user, isLoading: false, error: null }),
-  useUpdateUser: () => ({ mutate: mocks.updateUserMutate, isPending: false }),
+  useUpdateUser: () => ({ mutateAsync: mocks.updateUserMutate, isPending: false }),
   useDeleteUser: () => ({ mutate: vi.fn(), isPending: false }),
-  useImpersonateUser: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useImpersonateUser: () => ({ mutateAsync: mocks.impersonate, reset: vi.fn(), isPending: false }),
   useAdminUserDeviceSettings: () => ({ data: [], isLoading: false }),
   useAdminUserSettings: () => ({ data: mocks.userSettings, isLoading: false }),
   useDeleteAdminUserDeviceSetting: () => ({ mutate: vi.fn(), isPending: false }),
@@ -173,9 +186,14 @@ function renderUserDetail() {
 }
 
 beforeEach(() => {
+  setAccessToken("account");
+  setProfileId("owner");
+  setProfileToken(null);
   vi.stubGlobal("ResizeObserver", MockResizeObserver);
   installPointerCaptureMocks();
   mocks.updateUserMutate.mockReset();
+  mocks.getReads = 0;
+  mocks.impersonate.mockReset();
   mocks.beginImpersonation.mockReset();
   mocks.updateSettingMutate.mockReset();
   mocks.deleteSettingMutate.mockReset();
@@ -207,7 +225,7 @@ describe("AdminUserDetail access group picker", () => {
     await waitFor(() => expect(mocks.updateUserMutate).toHaveBeenCalled());
     const call = mocks.updateUserMutate.mock.calls[0]?.[0] as UpdateUserMutationArg | undefined;
     expect(call).toBeDefined();
-    expect(call?.id).toBe(7);
+    expect(call?.editor.user.id).toBe(7);
     expect(call?.body.access_group_id).toBe(5);
   });
 
@@ -522,3 +540,67 @@ describe("AdminUserDetail effective values", () => {
 function rowValue(label: string): string | undefined {
   return screen.getByText(label).nextElementSibling?.textContent ?? undefined;
 }
+
+it("preserves user draft and frozen guard after conflict until explicit reload", async () => {
+  const user = userEvent.setup();
+  mocks.updateUserMutate
+    .mockRejectedValueOnce(
+      new V2ProblemError(
+        "updateAdminUser",
+        {
+          type: "https://silo.example/problems/precondition_failed",
+          title: "Changed",
+          status: 412,
+          detail: "The user changed",
+          instance: "/api/v2/admin/users/7",
+        },
+        null,
+        '"do-not-adopt"',
+      ),
+    )
+    .mockResolvedValue(undefined);
+  renderUserDetail();
+  await user.click(screen.getByRole("button", { name: /edit/i }));
+  const dialog = await screen.findByRole("dialog");
+  const inputs = within(dialog).getAllByRole("textbox");
+  const username = inputs[0]!;
+  await user.clear(username);
+  await user.type(username, "My draft");
+  await user.click(within(dialog).getByRole("button", { name: "Save" }));
+  await screen.findByText(/Your draft is preserved/);
+  expect(username).toHaveValue("My draft");
+  expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+  expect(mocks.getReads).toBe(1);
+  expect(mocks.updateUserMutate.mock.calls[0]![0].editor.etag).toBe('"read-1"');
+  await user.click(within(dialog).getByRole("button", { name: "Reload current user" }));
+  await waitFor(() => expect(within(dialog).getByRole("button", { name: "Save" })).toBeEnabled());
+  expect(username).toHaveValue("My draft");
+  await user.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(mocks.updateUserMutate).toHaveBeenCalledTimes(2));
+  expect(mocks.updateUserMutate.mock.calls[1]![0]).toMatchObject({
+    editor: { etag: '"read-2"' },
+    body: { username: "My draft" },
+  });
+});
+
+it("does not install an impersonation session after the captured profile changes", async () => {
+  const user = userEvent.setup();
+  let finish!: (value: unknown) => void;
+  mocks.impersonate.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  renderUserDetail();
+  await user.click(screen.getByRole("button", { name: "Impersonate" }));
+  await user.click(
+    within(screen.getByRole("alertdialog")).getByRole("button", { name: "Impersonate" }),
+  );
+  const captured = mocks.impersonate.mock.calls[0]![0].profileContext;
+  setProfileId("different-profile");
+  finish({ session: {}, profileContext: captured });
+  await screen.findByText(/account or server changed/);
+  expect(mocks.beginImpersonation).not.toHaveBeenCalled();
+  expect(mocks.impersonate).toHaveBeenCalledTimes(1);
+});

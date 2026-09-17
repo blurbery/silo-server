@@ -484,3 +484,37 @@ func TestTaskManagerTriggerSkipsConditionalTaskOnPreflightError(t *testing.T) {
 			triggers[0].next.Format(time.RFC3339Nano))
 	}
 }
+
+type reservedTask struct {
+	stubTask
+	entered chan struct{}
+	done    chan struct{}
+}
+
+func (t reservedTask) Execute(ctx context.Context, _ taskmanager.ProgressReporter) error {
+	close(t.entered)
+	<-ctx.Done()
+	close(t.done)
+	return ctx.Err()
+}
+func TestStartTaskReservesBeforeAcknowledgment(t *testing.T) {
+	task := reservedTask{stubTask: stubTask{key: "reserved"}, entered: make(chan struct{}), done: make(chan struct{})}
+	manager := taskmanager.New(&fakeTriggerRepository{}, fakeExecutionRepository{}, nil, nil)
+	manager.Register(task)
+	info, err := manager.StartTask(task.Key())
+	if err != nil || info.State != taskmanager.TaskStateRunning {
+		t.Fatalf("start: %+v, %v", info, err)
+	}
+	t.Cleanup(manager.Stop)
+	if _, err := manager.StartTask(task.Key()); !errors.Is(err, taskmanager.ErrTaskAlreadyRunning) {
+		t.Fatalf("second start: %v", err)
+	}
+	if err := manager.CancelTask(task.Key()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-task.done:
+	case <-time.After(time.Second):
+		t.Fatal("reserved work did not receive cancellation")
+	}
+}

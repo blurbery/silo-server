@@ -1,8 +1,10 @@
+import { adminSessionsKey } from "@/api/v2/adminSessionsCache";
+import { jellyfinCompatStatusKey } from "@/api/v2/jellyfinStatusCache";
+import { fetchAdminTaskJob } from "@/api/v2/adminTasks";
 import type { QueryClient } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import type {
   AdminJob,
-  AdminSession,
   AppNotification,
   EventChannel,
   EventsEventMessage,
@@ -15,7 +17,12 @@ import type {
   ScanRun,
   TaskInfo,
 } from "@/api/types";
-import { api, getAccessToken } from "@/api/client";
+import { isCapturedProfileAuthorityActive, type ProfileRequestContextSnapshot } from "@/api/client";
+import {
+  mintEventsSocketTicket,
+  captureEventsAuthority,
+  isEventsAuthorityActive,
+} from "@/api/v2/eventsSocket";
 import {
   applyNotificationCreated,
   applyNotificationRead,
@@ -69,52 +76,9 @@ const CATALOG_ITEM_CHANGED_EVENTS = new Set([
   "library.item_added",
   "metadata.updated",
 ]);
-const DASHBOARD_QUERY_KEYS = [
-  adminKeys.stats(),
-  adminKeys.sessions(),
-  adminKeys.libraries(),
-  adminKeys.users(),
-] as const;
-
-function buildEventsUrl(
-  token: string | null,
-  location: Pick<Location, "protocol" | "host">,
-  ticket?: string | null,
-) {
+function buildEventsUrl(location: Pick<Location, "protocol" | "host">) {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  const search = new URLSearchParams();
-  if (token) {
-    search.set("token", token);
-  }
-  if (ticket) {
-    search.set("ticket", ticket);
-  }
-  return `${protocol}//${location.host}/api/v1/events/ws${search.toString() ? `?${search.toString()}` : ""}`;
-}
-
-/**
- * Mints a short-lived single-use websocket ticket binding the connection to
- * the active profile (required for the notifications channel). Returns null
- * when no profile is active or the mint fails — the connection then proceeds
- * unbound, and the subscribed-message handler retries the binding with
- * backoff when the notifications subscription is rejected.
- */
-async function mintEventsTicket(hasProfile: boolean): Promise<string | null> {
-  if (!hasProfile) {
-    return null;
-  }
-  try {
-    const response = await api<{ ticket: string }>("/events/ws-ticket", {
-      method: "POST",
-      // A hung mint must settle: connect() awaits this before any socket
-      // exists, so without a timeout no onclose fires and no reconnect is
-      // ever scheduled — realtime would stay "connecting" forever.
-      signal: AbortSignal.timeout(10_000),
-    });
-    return response.ticket || null;
-  } catch {
-    return null;
-  }
+  return `${protocol}//${location.host}/api/v2/events/ws`;
 }
 
 function parseEventsMessage(value: unknown): EventsStreamMessage | null {
@@ -139,7 +103,7 @@ function isTerminalJob(job: AdminJob) {
 
 async function pollAdminJobUntilTerminal(jobId: string): Promise<AdminJob> {
   for (;;) {
-    const job = await api<AdminJob>(`/admin/jobs/${jobId}`);
+    const job = await fetchAdminTaskJob(jobId);
     if (job.status === "completed") {
       return job;
     }
@@ -180,16 +144,19 @@ function upsertJob(existing: AdminJob[] | undefined, nextJob: AdminJob, limit = 
   return sortJobs(jobs).slice(0, limit);
 }
 
-function applyJellyfinCompatOperationUpdate(
+export function applyJellyfinCompatOperationUpdate(
   queryClient: QueryClient,
   operation: JellyfinCompatOperationStatus,
+  authority: ProfileRequestContextSnapshot | null,
 ) {
+  if (!authority || !isCapturedProfileAuthorityActive(authority)) return;
+  const key = jellyfinCompatStatusKey(authority);
   if (!operation?.id) {
-    void queryClient.invalidateQueries({ queryKey: adminKeys.jellyfinCompatStatus() });
+    void queryClient.invalidateQueries({ queryKey: key, exact: true });
     return;
   }
 
-  queryClient.setQueryData<JellyfinCompatStatus>(adminKeys.jellyfinCompatStatus(), (existing) => {
+  queryClient.setQueryData<JellyfinCompatStatus>(key, (existing) => {
     if (!existing) {
       return existing;
     }
@@ -201,7 +168,7 @@ function applyJellyfinCompatOperationUpdate(
   });
 
   if (operation.state !== "running") {
-    void queryClient.invalidateQueries({ queryKey: adminKeys.jellyfinCompatStatus() });
+    void queryClient.invalidateQueries({ queryKey: key, exact: true });
   }
 }
 
@@ -221,6 +188,7 @@ function jellyfinCompatOperationWebState(
 }
 
 function hydrateAdminJobSnapshot(queryClient: QueryClient, jobs: AdminJob[]) {
+  void queryClient.invalidateQueries({ queryKey: adminKeys.jobs("__all") });
   const sorted = sortJobs(jobs);
   queryClient.setQueryData<AdminJob[]>(adminKeys.jobs("__all"), sorted);
 
@@ -231,11 +199,14 @@ function hydrateAdminJobSnapshot(queryClient: QueryClient, jobs: AdminJob[]) {
     jobsByType.set(job.job_type, list);
   }
   for (const [jobType, entries] of jobsByType) {
+    void queryClient.invalidateQueries({ queryKey: adminKeys.jobs(jobType) });
     queryClient.setQueryData<AdminJob[]>(adminKeys.jobs(jobType), entries);
   }
 }
 
 function applyAdminJobUpdate(queryClient: QueryClient, job: AdminJob) {
+  void queryClient.invalidateQueries({ queryKey: adminKeys.jobs(job.job_type) });
+  void queryClient.invalidateQueries({ queryKey: adminKeys.jobs("__all") });
   queryClient.setQueryData<AdminJob[]>(adminKeys.jobs(job.job_type), (existing) =>
     upsertJob(existing, job, 50),
   );
@@ -254,6 +225,7 @@ function findCachedAdminJob(queryClient: QueryClient, jobId: string) {
 
   for (const query of matches) {
     const jobs = query.state.data as AdminJob[] | undefined;
+    if (!Array.isArray(jobs)) continue;
     const job = jobs?.find((entry) => entry.id === jobId);
     if (job) {
       return job;
@@ -261,15 +233,6 @@ function findCachedAdminJob(queryClient: QueryClient, jobId: string) {
   }
 
   return null;
-}
-
-function invalidateDashboardQueries(queryClient: QueryClient, allowRefetch: boolean) {
-  for (const queryKey of DASHBOARD_QUERY_KEYS) {
-    void queryClient.invalidateQueries({
-      queryKey,
-      refetchType: allowRefetch ? "active" : "none",
-    });
-  }
 }
 
 function catalogEventLibraryID(data: unknown) {
@@ -311,45 +274,31 @@ function handleJobSideEffects(
   }
 }
 
-function hydrateSessions(
+function invalidateSessions(
   queryClient: QueryClient,
-  sessions: AdminSession[],
   allowDashboardUpdates: boolean,
+  authority: ProfileRequestContextSnapshot | null,
 ) {
-  if (!allowDashboardUpdates) {
-    invalidateDashboardQueries(queryClient, false);
-    return;
-  }
-  queryClient.setQueryData(adminKeys.sessions(), sessions);
-  void queryClient.invalidateQueries({ queryKey: adminKeys.stats() });
+  if (!authority?.profileId || !isCapturedProfileAuthorityActive(authority)) return;
+  const queryKey = adminSessionsKey(authority);
+  // Legacy session frames contain at most 200 rows. Only the v2 HTTP reader
+  // can publish the complete collection, so frames trigger scoped refreshes.
+  const refetchType = allowDashboardUpdates ? "active" : "none";
+  void queryClient.invalidateQueries({ queryKey, exact: true, refetchType });
+  void queryClient.invalidateQueries({ queryKey: adminKeys.stats(), refetchType });
 }
 
 function hydrateTasks(queryClient: QueryClient, tasks: TaskInfo[]) {
-  queryClient.setQueryData(adminKeys.tasks(), tasks);
   for (const task of tasks) {
-    queryClient.setQueryData(adminKeys.task(task.key), task);
+    void queryClient.invalidateQueries({ queryKey: adminKeys.task(task.key) });
   }
+  void queryClient.invalidateQueries({ queryKey: adminKeys.tasks() });
 }
 
 function applyTaskUpdate(queryClient: QueryClient, task: TaskInfo) {
-  const previousTask = queryClient.getQueryData<TaskInfo>(adminKeys.task(task.key));
-  queryClient.setQueryData<TaskInfo[]>(adminKeys.tasks(), (existing) => {
-    const tasks = existing ? [...existing] : [];
-    const index = tasks.findIndex((entry) => entry.key === task.key);
-    if (index >= 0) {
-      tasks[index] = task;
-    } else {
-      tasks.push(task);
-    }
-    return tasks.sort((left, right) => left.key.localeCompare(right.key));
-  });
-  queryClient.setQueryData(adminKeys.task(task.key), task);
-
-  if (
-    task.state === "idle" &&
-    task.last_execution?.completed_at &&
-    previousTask?.last_execution?.completed_at !== task.last_execution.completed_at
-  ) {
+  void queryClient.invalidateQueries({ queryKey: adminKeys.tasks() });
+  void queryClient.invalidateQueries({ queryKey: adminKeys.task(task.key) });
+  if (task.state === "idle") {
     void queryClient.invalidateQueries({ queryKey: adminKeys.taskHistory(task.key) });
     void queryClient.invalidateQueries({ queryKey: adminKeys.taskMetrics(task.key) });
   }
@@ -486,6 +435,7 @@ export function RealtimeEventsProvider({ children }: { children: ReactNode }) {
   const pageActivity = usePageActivity();
   const location = useLocation();
   const authenticatedUserID = user?.id ?? null;
+  const renderedAuthority = captureEventsAuthority();
   const isForegroundPlaybackRoute = location.pathname.startsWith("/watch/");
   const isDashboardRoute = location.pathname === "/admin" || location.pathname === "/admin/";
   const allowDashboardRealtimeUpdates = !isDashboardRoute || pageActivity.canPollDashboard;
@@ -610,7 +560,10 @@ export function RealtimeEventsProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  function handleSnapshot(message: EventsSnapshotMessage) {
+  function handleSnapshot(
+    message: EventsSnapshotMessage,
+    authority: ProfileRequestContextSnapshot | null,
+  ) {
     switch (message.channel) {
       case "jobs":
         if (Array.isArray(message.data)) {
@@ -621,11 +574,7 @@ export function RealtimeEventsProvider({ children }: { children: ReactNode }) {
         }
         break;
       case "sessions":
-        hydrateSessions(
-          queryClient,
-          (message.data as AdminSession[]) ?? [],
-          allowDashboardRealtimeUpdatesRef.current,
-        );
+        invalidateSessions(queryClient, allowDashboardRealtimeUpdatesRef.current, authority);
         break;
       case "tasks":
         hydrateTasks(queryClient, (message.data as TaskInfo[]) ?? []);
@@ -690,7 +639,10 @@ export function RealtimeEventsProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  function handleEvent(message: EventsEventMessage) {
+  function handleEvent(
+    message: EventsEventMessage,
+    realtimeAuthority: ProfileRequestContextSnapshot | null,
+  ) {
     switch (message.channel) {
       case "catalog":
         {
@@ -717,10 +669,10 @@ export function RealtimeEventsProvider({ children }: { children: ReactNode }) {
         break;
       case "sessions":
         if (message.event === "sessions.replaced") {
-          hydrateSessions(
+          invalidateSessions(
             queryClient,
-            (message.data as AdminSession[]) ?? [],
             allowDashboardRealtimeUpdatesRef.current,
+            realtimeAuthority,
           );
         }
         break;
@@ -740,6 +692,7 @@ export function RealtimeEventsProvider({ children }: { children: ReactNode }) {
           applyJellyfinCompatOperationUpdate(
             queryClient,
             message.data as JellyfinCompatOperationStatus,
+            realtimeAuthority,
           );
         }
         break;
@@ -799,6 +752,12 @@ export function RealtimeEventsProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    const authority = captureEventsAuthority();
+    if (!authority) {
+      setConnectionState("disconnected");
+      return;
+    }
+    const authorityActive = () => isEventsAuthorityActive(authority);
     let closedByEffect = false;
     let activeSocket: WebSocket | null = null;
 
@@ -833,25 +792,26 @@ export function RealtimeEventsProvider({ children }: { children: ReactNode }) {
       setConnectionState("connecting");
       helloReceivedRef.current = false;
 
-      // The ticket binds the connection to the active profile so the server
-      // can authorize the notifications channel. Failure degrades gracefully
-      // to an unbound connection; without a profile we connect synchronously.
-      if (!activeProfileIDRef.current) {
-        openSocket(null);
-        return;
-      }
-      void mintEventsTicket(true).then((ticket) => {
-        if (closedByEffect) {
-          return;
-        }
-        openSocket(ticket);
-      });
+      void mintEventsSocketTicket(authority)
+        .then((ticket) => {
+          if (closedByEffect || !authorityActive()) return;
+          openSocket(ticket.ticket);
+        })
+        .catch(() => {
+          if (closedByEffect || !authorityActive()) return;
+          setConnectionState("disconnected");
+          scheduleReconnect();
+        });
     };
 
-    const openSocket = (ticket: string | null) => {
+    const openSocket = (ticket: string) => {
       let socket: WebSocket;
       try {
-        socket = new WebSocket(buildEventsUrl(getAccessToken(), window.location, ticket));
+        if (!authorityActive()) return;
+        socket = new WebSocket(buildEventsUrl(window.location), [
+          "silo.events.v2",
+          `silo.ticket.${ticket}`,
+        ]);
       } catch {
         setConnectionState("disconnected");
         scheduleReconnect();
@@ -862,14 +822,14 @@ export function RealtimeEventsProvider({ children }: { children: ReactNode }) {
       socketRef.current = socket;
 
       socket.onopen = () => {
-        if (closedByEffect || socketRef.current !== socket) {
+        if (closedByEffect || socketRef.current !== socket || !authorityActive()) {
           return;
         }
         setConnectionState("live");
       };
 
       socket.onmessage = (event) => {
-        if (closedByEffect || socketRef.current !== socket) {
+        if (closedByEffect || socketRef.current !== socket || !authorityActive()) {
           return;
         }
         if (!canApplyRealtimeUpdatesRef.current) {
@@ -911,10 +871,10 @@ export function RealtimeEventsProvider({ children }: { children: ReactNode }) {
             return;
           }
           case "snapshot":
-            handleSnapshot(message);
+            handleSnapshot(message, authority);
             return;
           case "event":
-            handleEvent(message);
+            handleEvent(message, authority);
             return;
           case "error":
             return;
@@ -922,7 +882,7 @@ export function RealtimeEventsProvider({ children }: { children: ReactNode }) {
       };
 
       socket.onerror = () => {
-        if (closedByEffect || socketRef.current !== socket) {
+        if (closedByEffect || socketRef.current !== socket || !authorityActive()) {
           return;
         }
         setConnectionState("disconnected");
@@ -964,12 +924,15 @@ export function RealtimeEventsProvider({ children }: { children: ReactNode }) {
         socket.close();
       }
     };
-    // profile?.id is a dependency on purpose: the websocket binds to the
-    // active profile via the handshake ticket, so a profile switch must
-    // reconnect (and resubscribe) under the new identity.
+    // Rebind on authority changes, including a replacement PIN proof for the
+    // same profile. Ordinary access-token refresh preserves this authority.
   }, [
     authenticatedUserID,
     profile?.id,
+    renderedAuthority?.authContextVersion,
+    renderedAuthority?.serverOrigin,
+    renderedAuthority?.profileId,
+    renderedAuthority?.profileToken,
     pageActivity.canApplyRealtimeUpdates,
     queryClient,
     sendSubscribe,

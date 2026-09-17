@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Silo-Server/silo-server/internal/workmetrics"
+
 	"github.com/google/uuid"
 
 	"github.com/Silo-Server/silo-server/internal/userstore"
@@ -33,7 +35,9 @@ type Service struct {
 	bgContext  context.Context
 
 	// runSemaphore limits concurrent run goroutines to maxConcurrentRuns.
-	runSemaphore chan struct{}
+	runSemaphore   chan struct{}
+	queueWake      chan struct{}
+	backgroundOnce sync.Once
 
 	// runCancels allows in-process cancellation of running import goroutines.
 	runCancels   map[string]context.CancelFunc
@@ -55,10 +59,16 @@ func NewService(bgContext context.Context, repo *Repository, storeProvider users
 		stores:       storeProvider,
 		bgContext:    bgContext,
 		runSemaphore: make(chan struct{}, maxConcurrentRuns),
+		queueWake:    make(chan struct{}, 1),
 		runCancels:   make(map[string]context.CancelFunc),
 	}
-	service.startStaleRunMonitor()
 	return service
+}
+
+// StartBackgroundWork activates recovery and dispatch after the resolver and
+// observers have been configured. Construction must not consume persisted jobs.
+func (s *Service) StartBackgroundWork() {
+	s.backgroundOnce.Do(func() { s.startStaleRunMonitor(); s.startImportQueue() })
 }
 
 func (s *Service) SetStableIdentityResolver(identity *watchstate.StableIdentityResolver) {
@@ -215,51 +225,6 @@ func (s *Service) CreateRun(ctx context.Context, userID int, input CreateRunInpu
 		return nil, fmt.Errorf("profile_id is required")
 	}
 
-	var sourceType, connectionMode string
-	var provider Provider
-
-	switch input.Source {
-	case SourceTypeEmby:
-		mode, err := resolveConnectionMode(input)
-		if err != nil {
-			return nil, err
-		}
-		if err := s.repo.DeleteExpiredConnectSessions(ctx); err != nil {
-			return nil, err
-		}
-		auth, err := s.resolveAuth(ctx, userID, mode, input)
-		if err != nil {
-			return nil, err
-		}
-		sourceType = SourceTypeEmby
-		connectionMode = mode
-		provider = NewEmbyProvider(s.emby, *auth)
-
-	case SourceTypeJellyfin:
-		if input.JellyfinBaseURL == "" || input.JellyfinUsername == "" || input.JellyfinPassword == "" {
-			return nil, fmt.Errorf("jellyfin_base_url, jellyfin_username, and jellyfin_password are required")
-		}
-		auth, err := s.jellyfin.AuthenticateServerUser(ctx, input.JellyfinBaseURL, input.JellyfinUsername, input.JellyfinPassword)
-		if err != nil {
-			return nil, err
-		}
-		sourceType = SourceTypeJellyfin
-		connectionMode = ConnectionModeCustom
-		provider = NewJellyfinProvider(s.jellyfin, *auth)
-
-	case SourceTypePlex:
-		auth, mode, err := s.resolvePlexAuth(ctx, userID, input)
-		if err != nil {
-			return nil, err
-		}
-		sourceType = SourceTypePlex
-		connectionMode = mode
-		provider = NewPlexServerProvider(s.plex, auth.BaseURL, auth.Token).WithAccountToken(auth.AccountToken)
-
-	default:
-		return nil, fmt.Errorf("unsupported source type")
-	}
-
 	exists, err := s.repo.ProfileExistsForUser(ctx, userID, input.ProfileID)
 	if err != nil {
 		return nil, err
@@ -268,140 +233,21 @@ func (s *Service) CreateRun(ctx context.Context, userID int, input CreateRunInpu
 		return nil, ErrProfileNotFound
 	}
 
-	run := Run{
-		ID:               uuid.NewString(),
-		UserID:           userID,
-		ProfileID:        input.ProfileID,
-		SourceType:       sourceType,
-		ConnectionMode:   connectionMode,
-		Status:           RunStatusQueued,
-		Warnings:         []string{},
-		UnmatchedSamples: []UnmatchedSample{},
+	// Reject an unavailable durable store before exchanging any credentials.
+	if s.repo.cipher == nil {
+		return nil, ErrPersonalCredentialsUnavailable
 	}
-	created, err := s.repo.CreateRun(ctx, run)
+	admission, err := s.preparePersonalRun(ctx, userID, input)
+	if err != nil {
+		return nil, err
+	}
+	created, err := s.repo.enqueuePersonalRun(ctx, admission)
 	if err != nil {
 		return nil, err
 	}
 	s.notifyRun(created)
-
-	go s.executeRun(created, provider)
+	s.wakeImportQueue()
 	return created, nil
-}
-
-func (s *Service) resolveAuth(ctx context.Context, userID int, connectionMode string, input CreateRunInput) (*embyLocalAuth, error) {
-	switch connectionMode {
-	case ConnectionModeConnect:
-		session, err := s.repo.GetConnectSession(ctx, userID, input.ConnectSessionID)
-		if err != nil {
-			return nil, err
-		}
-		var server *ConnectServer
-		for i := range session.Servers {
-			if session.Servers[i].ID == input.ServerID {
-				server = &session.Servers[i]
-				break
-			}
-		}
-		if server == nil {
-			return nil, fmt.Errorf("selected server not found in connect session")
-		}
-		baseURL := firstNonEmpty(server.URL, server.LocalAddress)
-		if baseURL == "" {
-			return nil, fmt.Errorf("selected server does not expose a usable address")
-		}
-		auth, err := s.emby.ConnectExchange(ctx, baseURL, session.ConnectUserID, server.AccessKey)
-		if err != nil {
-			return nil, err
-		}
-		if err := s.repo.ConsumeConnectSession(ctx, session.ID); err != nil {
-			return nil, err
-		}
-		return auth, nil
-	case ConnectionModePredefined:
-		if input.SourceID <= 0 {
-			return nil, fmt.Errorf("source_id is required")
-		}
-		if input.Username == "" || input.Password == "" {
-			return nil, fmt.Errorf("username and password are required")
-		}
-		source, err := s.repo.GetSourceByID(ctx, input.SourceID)
-		if err != nil {
-			return nil, err
-		}
-		if !source.Enabled {
-			return nil, fmt.Errorf("selected source is disabled")
-		}
-		return s.emby.AuthenticateServerUser(ctx, source.BaseURL, input.Username, input.Password)
-	default:
-		return nil, fmt.Errorf("invalid connection mode")
-	}
-}
-
-func (s *Service) resolvePlexAuth(ctx context.Context, userID int, input CreateRunInput) (*plexAuth, string, error) {
-	if err := s.repo.DeleteExpiredPlexSessions(ctx); err != nil {
-		return nil, "", err
-	}
-
-	if input.PlexSessionID != "" {
-		session, err := s.repo.GetPlexSession(ctx, userID, input.PlexSessionID)
-		if err != nil {
-			return nil, "", err
-		}
-		if session.AuthToken == "" {
-			return nil, "", fmt.Errorf("plex OAuth not completed yet")
-		}
-		var server *PlexServer
-		for i := range session.Servers {
-			if session.Servers[i].ClientIdentifier == input.PlexServerID {
-				server = &session.Servers[i]
-				break
-			}
-		}
-		if server == nil {
-			return nil, "", fmt.Errorf("selected Plex server not found in session")
-		}
-		baseURL := firstNonEmpty(server.RemoteURL, server.LocalURL)
-		if baseURL == "" {
-			return nil, "", fmt.Errorf("selected Plex server has no usable address")
-		}
-		if err := s.repo.ConsumePlexSession(ctx, session.ID); err != nil {
-			return nil, "", err
-		}
-		return &plexAuth{BaseURL: baseURL, Token: server.AccessToken, AccountToken: session.AuthToken}, ConnectionModePlexOAuth, nil
-	}
-
-	if input.PlexBaseURL != "" {
-		if input.PlexToken == "" {
-			return nil, "", fmt.Errorf("plex_token is required for browser Plex imports")
-		}
-		// Prefer the explicit account token: in the browser OAuth flow
-		// PlexToken is a PMS access token, which account-level APIs (the
-		// watchlist) reject. Falling back to PlexToken keeps manually pasted
-		// plex.tv account tokens working.
-		return &plexAuth{BaseURL: input.PlexBaseURL, Token: input.PlexToken, AccountToken: firstNonEmpty(input.PlexAccountToken, input.PlexToken)}, ConnectionModePlexOAuth, nil
-	}
-	if input.PlexToken != "" {
-		return nil, "", fmt.Errorf("plex_base_url is required for browser Plex imports")
-	}
-
-	if input.SourceID > 0 {
-		source, err := s.repo.GetSourceByID(ctx, input.SourceID)
-		if err != nil {
-			return nil, "", err
-		}
-		if !source.Enabled {
-			return nil, "", fmt.Errorf("selected source is disabled")
-		}
-		if source.SourceType != SourceTypePlex {
-			return nil, "", fmt.Errorf("source is not a Plex server")
-		}
-		if input.PlexToken == "" {
-			return nil, "", fmt.Errorf("plex_token is required for predefined Plex sources")
-		}
-		return &plexAuth{BaseURL: source.BaseURL, Token: input.PlexToken, AccountToken: firstNonEmpty(input.PlexAccountToken, input.PlexToken)}, ConnectionModePredefined, nil
-	}
-
-	return nil, "", fmt.Errorf("plex_session_id, plex_base_url, or source_id is required for Plex imports")
 }
 
 // addToWatchlist puts a matched watchlist import onto the importing
@@ -438,32 +284,51 @@ func (s *Service) addFavorite(ctx context.Context, userID int, profileID, mediaI
 }
 
 func (s *Service) executeRun(run *Run, provider Provider) {
-	ctx, cancel := newRunContext(s.bgContext)
-	s.registerRunCancel(run.ID, cancel)
+	s.executeRunWithClaim(run, provider, RunClaim{RunID: run.ID}, false)
+}
+
+func (s *Service) executeRunWithClaim(run *Run, provider Provider, claim RunClaim, capacityHeld bool) {
+	parent := s.bgContext
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancelCause(parent)
+	s.registerRunCancel(run.ID, func() { cancel(ErrRunCancellationRequested) })
 	defer s.deregisterRunCancel(run.ID)
-	defer cancel()
+	defer cancel(nil)
 
 	// Wait for a concurrency slot. The run stays in "queued" status until
 	// a slot opens. If the context is cancelled (server shutdown or admin
 	// cancel), the goroutine exits without executing.
-	select {
-	case s.runSemaphore <- struct{}{}:
-		defer func() { <-s.runSemaphore }()
-	case <-ctx.Done():
-		slog.Info("history import: run cancelled while queued", "run_id", run.ID)
-		return
-	}
+	if !capacityHeld {
+		select {
+		case s.runSemaphore <- struct{}{}:
+			defer func() { <-s.runSemaphore }()
+		case <-ctx.Done():
+			slog.Info("history import: run canceled while queued", "run_id", run.ID)
+			return
+		}
 
+	}
+	ctx, observation := workmetrics.Start(ctx, "history_import", run.CreatedAt)
+	defer workmetrics.Profile(ctx)()
+	defer observation.Finish("unknown")
 	summary := ExecutionSummary{
 		Warnings:         []string{},
 		UnmatchedSamples: []UnmatchedSample{},
 	}
-	if err := s.repo.MarkRunStarted(ctx, run.ID); err != nil {
-		slog.Error("history import: failed to mark run started", "run_id", run.ID, "error", err)
+	if claim.Generation == 0 {
+		if err := s.repo.MarkRunStarted(ctx, run.ID); err != nil {
+			slog.Error("history import: failed to mark run started", "run_id", run.ID, "error", err)
+			return
+		}
+	}
+	if err := s.repo.validateRunClaim(ctx, claim); err != nil {
+		s.failClaim(ctx, claim, summary, err)
 		return
 	}
 	s.notifyRunByID(ctx, run.ID)
-	stopHeartbeat := s.startRunHeartbeat(ctx, run.ID)
+	stopHeartbeat := s.startClaimHeartbeat(ctx, claim, cancel)
 	defer stopHeartbeat()
 	slog.Info(
 		"history import: started",
@@ -477,7 +342,10 @@ func (s *Service) executeRun(run *Run, provider Provider) {
 	records, warnings, err := provider.Fetch(ctx)
 	if err != nil {
 		summary.Warnings = append(summary.Warnings, warnings...)
-		s.failRun(ctx, run.ID, summary, err)
+		if cause := context.Cause(ctx); cause != nil {
+			err = cause
+		}
+		s.failClaim(ctx, claim, summary, err)
 		return
 	}
 	summary.Warnings = append(summary.Warnings, warnings...)
@@ -487,13 +355,17 @@ func (s *Service) executeRun(run *Run, provider Provider) {
 		"run_id", run.ID,
 		"count", len(records),
 	)
-	s.persistProgress(ctx, run.ID, summary)
+	s.persistClaimProgress(ctx, claim, summary)
 
 	for i, record := range records {
+		if err := s.repo.validateRunClaim(ctx, claim); err != nil {
+			s.failClaim(ctx, claim, summary, err)
+			return
+		}
 		match, reason, err := s.matcher.Match(ctx, record)
 		if err != nil {
 			summary.Warnings = append(summary.Warnings, err.Error())
-			s.persistProgressMaybe(ctx, run.ID, summary, i+1, len(records))
+			s.persistClaimProgressMaybe(ctx, claim, summary, i+1, len(records))
 			continue
 		}
 		if match == nil {
@@ -515,12 +387,16 @@ func (s *Service) executeRun(run *Run, provider Provider) {
 			if summary.Unmatched <= maxUnmatchedLogSamples {
 				s.logUnmatched(run.ID, i+1, len(records), record, reason)
 			}
-			s.persistProgressMaybe(ctx, run.ID, summary, i+1, len(records))
+			s.persistClaimProgressMaybe(ctx, claim, summary, i+1, len(records))
 			continue
 		}
 		summary.Matched++
 
 		if record.Favorite {
+			if err := s.repo.validateRunClaim(ctx, claim); err != nil {
+				s.failClaim(ctx, claim, summary, err)
+				return
+			}
 			inserted, err := s.addFavorite(ctx, run.UserID, run.ProfileID, match.MediaItemID)
 			if err != nil {
 				summary.Warnings = append(summary.Warnings, err.Error())
@@ -531,78 +407,55 @@ func (s *Service) executeRun(run *Run, provider Provider) {
 		// Watchlist entries carry no watch state: the matched item joins the
 		// importing profile's watchlist and the progress pipeline is skipped.
 		if record.Watchlisted {
+			if err := s.repo.validateRunClaim(ctx, claim); err != nil {
+				s.failClaim(ctx, claim, summary, err)
+				return
+			}
 			inserted, err := s.addToWatchlist(ctx, run.UserID, run.ProfileID, match.MediaItemID, record.UpdatedAt)
 			if err != nil {
 				summary.Warnings = append(summary.Warnings, err.Error())
 			} else if inserted {
 				summary.WatchlistAdded++
 			}
-			s.persistProgressMaybe(ctx, run.ID, summary, i+1, len(records))
+			s.persistClaimProgressMaybe(ctx, claim, summary, i+1, len(records))
 			continue
 		}
 		if record.FavoriteOnly {
-			s.persistProgressMaybe(ctx, run.ID, summary, i+1, len(records))
+			s.persistClaimProgressMaybe(ctx, claim, summary, i+1, len(records))
 			continue
 		}
 
-		shouldWriteProgress := true
-		localProgress, err := s.repo.GetProgress(ctx, run.UserID, run.ProfileID, match.MediaItemID)
+		if err := s.repo.validateRunClaim(ctx, claim); err != nil {
+			s.failClaim(ctx, claim, summary, err)
+			return
+		}
+		updated, created, err := s.applyImportedWatch(ctx, run.UserID, run.ProfileID, match.MediaItemID, record)
 		if err != nil {
 			summary.Warnings = append(summary.Warnings, err.Error())
-			s.persistProgressMaybe(ctx, run.ID, summary, i+1, len(records))
-			continue
-		}
-		if !shouldWriteImportedProgress(record, localProgress) {
-			shouldWriteProgress = false
-			summary.Skipped++
-		}
-		if shouldWriteProgress {
-			created, err := s.watchState.RecordImportedWatch(
-				ctx,
-				run.UserID,
-				run.ProfileID,
-				match.MediaItemID,
-				record.DurationSeconds,
-				importedPosition(record),
-				record.Played,
-				record.UpdatedAt,
-				record.LastPlayedAt,
-			)
-			if err != nil {
-				summary.Warnings = append(summary.Warnings, err.Error())
-				s.persistProgressMaybe(ctx, run.ID, summary, i+1, len(records))
-				continue
-			}
-			summary.ProgressUpdated++
-			if created {
-				summary.HistoryCreated++
-			}
-		} else if record.LastPlayedAt != nil {
-			created, err := s.watchState.RecordImportedHistory(
-				ctx,
-				run.UserID,
-				run.ProfileID,
-				match.MediaItemID,
-				record.DurationSeconds,
-				record.Played,
-				record.LastPlayedAt,
-			)
-			if err != nil {
-				summary.Warnings = append(summary.Warnings, err.Error())
-				s.persistProgressMaybe(ctx, run.ID, summary, i+1, len(records))
-				continue
+		} else {
+			if updated {
+				summary.ProgressUpdated++
+			} else {
+				summary.Skipped++
 			}
 			if created {
 				summary.HistoryCreated++
 			}
 		}
-		s.persistProgressMaybe(ctx, run.ID, summary, i+1, len(records))
+
+		s.persistClaimProgressMaybe(ctx, claim, summary, i+1, len(records))
 	}
 
-	if err := s.repo.CompleteRun(ctx, run.ID, summary); err != nil {
+	if err := s.repo.validateRunClaim(ctx, claim); err != nil {
+		s.failClaim(ctx, claim, summary, err)
+		return
+	}
+	if err := s.repo.completeRun(ctx, claim, summary); err != nil {
+		s.failClaim(ctx, claim, summary, err)
 		slog.Error("history import: failed to complete run", "run_id", run.ID, "error", err)
 		return
 	}
+	observation.Finish("success")
 	s.notifyRunByID(ctx, run.ID)
 	slog.Info(
 		"history import: completed",
@@ -617,33 +470,38 @@ func (s *Service) executeRun(run *Run, provider Provider) {
 		"warnings", len(summary.Warnings),
 	)
 
-	// Update the mapping's last_imported_at timestamp for admin-initiated runs.
-	if run.MappingID != nil {
+	// Only the completed claim may update the unchanged mapping snapshot.
+	if claim.Generation > 0 {
+		if err := s.repo.touchCompletedMapping(ctx, claim); err != nil {
+			slog.WarnContext(ctx, "history import: mapping timestamp update failed", "run_id", run.ID, "error", err)
+		}
+	}
+	// Update the mapping's last_imported_at timestamp for legacy executions.
+	if run.MappingID != nil && claim.Generation == 0 {
 		if err := s.repo.TouchMappingLastImported(s.bgContext, *run.MappingID); err != nil {
 			slog.Warn("history import: failed to touch mapping last_imported_at", "mapping_id", *run.MappingID, "error", err)
 		}
 	}
 }
 
-func (s *Service) failRun(ctx context.Context, runID string, summary ExecutionSummary, err error) {
-	message := userFacingRunError(summary, err)
-	if updateErr := s.repo.FailRun(ctx, runID, summary, message); updateErr != nil {
-		slog.ErrorContext(ctx, "history import: failed to mark run failed", "component", "historyimport", "run_id", runID, "error", updateErr, "root_error", err)
-		return
+// applyImportedWatch uses the selected user store's atomic freshness guard.
+// Unknown source timestamps sort before real activity, so replay never
+// replaces progress merely because an import happened later.
+func (s *Service) applyImportedWatch(ctx context.Context, userID int, profileID, itemID string, record Record) (bool, bool, error) {
+	store, err := s.stores.ForUser(ctx, userID)
+	if err != nil {
+		return false, false, err
 	}
-	s.notifyRunByID(ctx, runID)
-	slog.ErrorContext(ctx,
-		"history import: failed", "component", "historyimport",
-		"run_id", runID,
-		"error", message,
-		"root_error", err,
-		"fetched", summary.Fetched,
-		"matched", summary.Matched,
-		"unmatched", summary.Unmatched,
-		"progress_updated", summary.ProgressUpdated,
-		"history_created", summary.HistoryCreated,
-		"skipped", summary.Skipped,
-	)
+	updatedAt := record.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = time.Unix(0, 0).UTC()
+	}
+	updated, err := store.SetProgressIfNewer(ctx, profileID, itemID, importedPosition(record), record.DurationSeconds, record.Played, updatedAt)
+	if err != nil {
+		return false, false, err
+	}
+	created, err := s.watchState.RecordImportedHistory(ctx, userID, profileID, itemID, record.DurationSeconds, record.Played, record.LastPlayedAt)
+	return updated, created, err
 }
 
 func userFacingRunError(summary ExecutionSummary, err error) string {
@@ -666,6 +524,15 @@ func (s *Service) ListRuns(ctx context.Context, userID, limit int) ([]Run, error
 	return s.repo.ListRunsForUser(ctx, userID, limit)
 }
 
+// ListRunsPage is the keyset listing behind v2: up to limit runs strictly
+// older than after, newest first, and whether more follow.
+func (s *Service) ListRunsPage(ctx context.Context, userID int, after *RunKey, limit int) ([]Run, bool, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	return s.repo.ListRunsPageForUser(ctx, userID, after, limit)
+}
+
 func (s *Service) ListActiveRuns(ctx context.Context, userID int) ([]Run, error) {
 	return s.repo.ListActiveRunsForUser(ctx, userID)
 }
@@ -679,13 +546,8 @@ func (s *Service) ListAdminSources(ctx context.Context) ([]Source, error) {
 }
 
 func (s *Service) CreateSource(ctx context.Context, input CreateSourceInput) (*Source, error) {
-	if input.Name == "" || input.BaseURL == "" {
-		return nil, fmt.Errorf("name and base_url are required")
-	}
-	switch input.SourceType {
-	case SourceTypeEmby, SourceTypeJellyfin, SourceTypePlex:
-	default:
-		return nil, fmt.Errorf("source_type must be emby, jellyfin, or plex")
+	if err := validateSource(Source{Name: input.Name, BaseURL: input.BaseURL, SourceType: input.SourceType}); err != nil {
+		return nil, err
 	}
 	return s.repo.CreateSource(ctx, input)
 }
@@ -782,27 +644,15 @@ func toConnectServerResponses(servers []ConnectServer) []ConnectServerResponse {
 	return resp
 }
 
-func (s *Service) persistProgress(ctx context.Context, runID string, summary ExecutionSummary) {
-	if err := s.repo.UpdateRunProgress(ctx, runID, summary); err != nil && !errors.Is(err, ErrRunNotFound) {
-		slog.WarnContext(ctx, "history import: failed to persist progress", "component", "historyimport", "run_id", runID, "error", err)
+func (s *Service) persistClaimProgress(ctx context.Context, claim RunClaim, summary ExecutionSummary) {
+	if err := s.repo.updateRunProgress(ctx, claim, summary); err != nil {
 		return
 	}
-	s.notifyRunByID(ctx, runID)
+	s.notifyRunByID(ctx, claim.RunID)
 }
-
-func (s *Service) persistProgressMaybe(ctx context.Context, runID string, summary ExecutionSummary, processed, total int) {
+func (s *Service) persistClaimProgressMaybe(ctx context.Context, claim RunClaim, summary ExecutionSummary, processed, total int) {
+	workmetrics.Progress("history_import")
 	if processed == total || processed%25 == 0 {
-		s.persistProgress(ctx, runID, summary)
-		slog.InfoContext(ctx,
-			"history import: progress", "component", "historyimport",
-			"run_id", runID,
-			"processed", processed,
-			"total", total,
-			"matched", summary.Matched,
-			"unmatched", summary.Unmatched,
-			"progress_updated", summary.ProgressUpdated,
-			"history_created", summary.HistoryCreated,
-			"skipped", summary.Skipped,
-		)
+		s.persistClaimProgress(ctx, claim, summary)
 	}
 }

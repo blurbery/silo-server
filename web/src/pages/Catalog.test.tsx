@@ -284,6 +284,21 @@ describe("Catalog page", () => {
     );
   });
 
+  it("browses an explicit library without requiring search text", () => {
+    appInitialEntries = ["/catalog?library_id=17&sort=title&order=asc"];
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+    expect(mockUseCatalogWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "query", library_id: 17, q: undefined }),
+      expect.objectContaining({ includeTotal: true }),
+    );
+    expect(mockItemGrid).toHaveBeenCalled();
+    expect(markup).not.toContain("Find films, series, performances");
+  });
+
   it("renders the search-first landing for empty query catalog routes", () => {
     appInitialEntries = ["/catalog?source=query"];
 
@@ -669,7 +684,7 @@ describe("Catalog page", () => {
       </QueryClientProvider>,
     );
 
-    expect(markup).toContain("Search stopped before it could finish.");
+    expect(markup).toContain("Could not load search results.");
     expect(markup).toContain("Retry search");
     expect(markup).not.toContain('data-kind="item-grid"');
     expect(markup).not.toContain("Stale Result");
@@ -690,7 +705,7 @@ describe("Catalog page", () => {
       </QueryClientProvider>,
     );
 
-    expect(markup).toContain("Catalog stopped before it could finish.");
+    expect(markup).toContain("Could not load catalog results.");
     expect(markup).toContain("Retry catalog");
     expect(markup).not.toContain("Try a more specific title");
   });

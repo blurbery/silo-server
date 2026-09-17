@@ -3719,3 +3719,58 @@ func TestServiceIncrementalFavoriteAbsenceIsNotRemoval(t *testing.T) {
 		t.Fatalf("result=%#v favorites=%#v state=%#v", result, favorites, repo.listItemStates[0])
 	}
 }
+
+func (r *serviceFakeRepo) UpdateConnectionSettings(ctx context.Context, provider string, userID int, profileID string, expected *ConnectionVersion, update ConnectionUpdate, before func(Connection) error) (Connection, error) {
+	current, ok, err := r.GetConnection(ctx, provider, userID, profileID)
+	if err != nil {
+		return Connection{}, err
+	}
+	if !ok {
+		return Connection{}, ErrConnectionNotFound
+	}
+	if expected != nil && (current.ID != expected.ID || !current.UpdatedAt.Equal(expected.UpdatedAt)) {
+		return Connection{}, ErrStaleConnection
+	}
+	if before != nil {
+		if err := before(current); err != nil {
+			return Connection{}, err
+		}
+	}
+	if update.ImportWatchedEnabled != nil {
+		current.ImportWatchedEnabled = *update.ImportWatchedEnabled
+	}
+	if update.ImportProgressEnabled != nil {
+		current.ImportProgressEnabled = *update.ImportProgressEnabled
+	}
+	if update.ExportWatchedEnabled != nil {
+		current.ExportWatchedEnabled = *update.ExportWatchedEnabled
+	}
+	if update.ExportUnwatchedEnabled != nil {
+		current.ExportUnwatchedEnabled = *update.ExportUnwatchedEnabled
+	}
+	if update.ImportFavoritesEnabled != nil {
+		current.ImportFavoritesEnabled = *update.ImportFavoritesEnabled
+	}
+	if update.ExportFavoritesEnabled != nil {
+		current.ExportFavoritesEnabled = *update.ExportFavoritesEnabled
+	}
+	if update.SyncFavoriteRemovalsEnabled != nil {
+		current.SyncFavoriteRemovalsEnabled = *update.SyncFavoriteRemovalsEnabled
+	}
+	if update.ImportWatchlistEnabled != nil {
+		current.ImportWatchlistEnabled = *update.ImportWatchlistEnabled
+	}
+	if update.ExportWatchlistEnabled != nil {
+		current.ExportWatchlistEnabled = *update.ExportWatchlistEnabled
+	}
+	if update.SyncWatchlistRemovalsEnabled != nil {
+		current.SyncWatchlistRemovalsEnabled = *update.SyncWatchlistRemovalsEnabled
+	}
+	if update.SyncWatchlistOrderEnabled != nil {
+		current.SyncWatchlistOrderEnabled = *update.SyncWatchlistOrderEnabled
+	}
+	if update.ScrobbleEnabled != nil {
+		current.ScrobbleEnabled = *update.ScrobbleEnabled
+	}
+	return r.UpsertConnection(ctx, current)
+}

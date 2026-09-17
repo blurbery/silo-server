@@ -103,6 +103,11 @@ type CollageGenerator interface {
 
 var ErrLibraryCollectionSyncUnsupported = errors.New("smart collections cannot be synchronized")
 
+// ErrLibraryCollectionSyncModeUnsupported reports a collection whose source
+// mode has no importer. Manual collections carry no mode at all, so a sync
+// request for one lands here; it is a caller mistake, not a server fault.
+var ErrLibraryCollectionSyncModeUnsupported = errors.New("unsupported collection sync mode")
+
 type LibraryCollectionService struct {
 	collections  *LibraryCollectionRepository
 	items        *ItemRepository
@@ -240,7 +245,7 @@ func (s *LibraryCollectionService) SyncCollectionWithOptions(ctx context.Context
 	case "trakt_list":
 		return s.syncTraktListCollection(ctx, collection, source, opts)
 	default:
-		return nil, fmt.Errorf("unsupported collection sync mode: %s", source.Mode)
+		return nil, fmt.Errorf("%w: %s", ErrLibraryCollectionSyncModeUnsupported, source.Mode)
 	}
 }
 

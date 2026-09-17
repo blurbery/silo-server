@@ -8,6 +8,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/catalog"
 	"github.com/Silo-Server/silo-server/internal/idgen"
 	"github.com/Silo-Server/silo-server/internal/models"
+	"github.com/jackc/pgx/v5"
 )
 
 // SubscriptionResult is the outcome of creating/updating a subscription: the
@@ -24,63 +25,9 @@ type SubscriptionResult struct {
 // SyncSubscriptions). Series monitoring is original-only, like the rest of the
 // series flow.
 func (s *Service) CreateSubscription(ctx context.Context, userID int, req SubscriptionRequest, filter catalog.AccessFilter) (*SubscriptionResult, error) {
-	if s.subRepo == nil {
-		return nil, ErrSubscriptionsUnavailable
-	}
-	if _, _, err := s.downloadConfigForUser(ctx, userID, req.DeviceID); err != nil {
-		return nil, err
-	}
-	if req.ProfileID == "" || req.DeviceID == "" {
-		return nil, ErrProfileRequired
-	}
-	if !ValidSubMode(req.Mode) {
-		return nil, ErrInvalidSubscriptionMode
-	}
-	if req.Mode == SubModeSpecificSeasons && len(req.SeasonNumbers) == 0 {
-		return nil, ErrSeasonsRequired
-	}
-	if !validSeasonNumbers(req.SeasonNumbers) {
-		return nil, ErrInvalidSeasonNumbers
-	}
-
-	item, err := s.itemRepo.GetByID(ctx, req.SeriesID)
+	sub, err := s.prepareSubscription(ctx, userID, req, filter)
 	if err != nil {
-		return nil, fmt.Errorf("loading series: %w", err)
-	}
-	if item.Type != "series" {
-		return nil, ErrNotSeries
-	}
-	if err := s.itemAccess.EnsureAccessible(ctx, req.SeriesID, filter); err != nil {
 		return nil, err
-	}
-
-	// The device row must exist for the subscription's composite FK.
-	if err := s.repo.EnsureDevice(ctx, userID, req.ProfileID, req.DeviceID, req.DeviceName, req.DevicePlatform); err != nil {
-		return nil, err
-	}
-
-	id, err := idgen.NextID()
-	if err != nil {
-		return nil, fmt.Errorf("generating subscription ID: %w", err)
-	}
-	sub := &Subscription{
-		ID:              id,
-		UserID:          userID,
-		ProfileID:       req.ProfileID,
-		DeviceID:        req.DeviceID,
-		SeriesID:        req.SeriesID,
-		Mode:            req.Mode,
-		SeasonNumbers:   normalizeSeasons(req.Mode, req.SeasonNumbers),
-		DeleteWatched:   req.DeleteWatched,
-		MaxStorageBytes: req.MaxStorageBytes,
-		Active:          true,
-	}
-	if req.Mode == SubModeLatestSeason {
-		target, err := s.latestSeason(ctx, req.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		sub.TargetSeason = target
 	}
 
 	stored, err := s.subRepo.Upsert(ctx, sub)
@@ -144,58 +91,20 @@ func (s *Service) UpdateSubscription(ctx context.Context, userID int, profileID,
 	if err := s.itemAccess.EnsureAccessible(ctx, sub.SeriesID, filter); err != nil {
 		return nil, err
 	}
-	scopeChanged := patch.Mode != nil || patch.SeasonNumbers != nil
-	wasActive := sub.Active
-	oldMaxStorageBytes := sub.MaxStorageBytes
-	modeChanged := false
-	if patch.Mode != nil {
-		if !ValidSubMode(*patch.Mode) {
-			return nil, ErrInvalidSubscriptionMode
-		}
-		modeChanged = *patch.Mode != sub.Mode
-		sub.Mode = *patch.Mode
+	shouldSync, err := s.applySubscriptionPatch(ctx, sub, patch)
+	if err != nil {
+		return nil, err
 	}
-	if patch.SeasonNumbers != nil {
-		sub.SeasonNumbers = *patch.SeasonNumbers
-	}
-	if patch.DeleteWatched != nil {
-		sub.DeleteWatched = *patch.DeleteWatched
-	}
-	if patch.MaxStorageBytes != nil {
-		sub.MaxStorageBytes = *patch.MaxStorageBytes
-	}
-	if patch.Active != nil {
-		sub.Active = *patch.Active
-	}
-	if sub.Mode == SubModeSpecificSeasons && len(sub.SeasonNumbers) == 0 {
-		return nil, ErrSeasonsRequired
-	}
-	if !validSeasonNumbers(sub.SeasonNumbers) {
-		return nil, ErrInvalidSeasonNumbers
-	}
-	sub.SeasonNumbers = normalizeSeasons(sub.Mode, sub.SeasonNumbers)
-	switch {
-	case sub.Mode == SubModeLatestSeason && (modeChanged || sub.TargetSeason == nil):
-		target, err := s.latestSeason(ctx, sub.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		sub.TargetSeason = target
-	case sub.Mode != SubModeLatestSeason:
-		sub.TargetSeason = nil
-	}
+
 	if err := s.subRepo.Update(ctx, sub); err != nil {
 		return nil, err
 	}
-	reactivated := patch.Active != nil && !wasActive && sub.Active
-	storageIncreased := patch.MaxStorageBytes != nil &&
-		oldMaxStorageBytes > 0 &&
-		(sub.MaxStorageBytes <= 0 || sub.MaxStorageBytes > oldMaxStorageBytes)
+
 	// A paused subscription never syncs — including when this very patch
 	// paused it while also changing scope. SyncSubscriptions applies the same
 	// guard; registering episodes the user just stopped monitoring would make
 	// the device pull them anyway.
-	if !sub.Active || (!scopeChanged && !reactivated && !storageIncreased) {
+	if !shouldSync {
 		return &SubscriptionResult{Subscription: sub}, nil
 	}
 	registered, err := s.syncSubscription(ctx, sub)
@@ -266,33 +175,76 @@ func (s *Service) SyncSubscriptions(ctx context.Context, userID int, profileID, 
 // following new seasons (>= TargetSeason) and future-only excluding the back
 // catalog (aired on/after the subscribe day).
 func (s *Service) syncSubscription(ctx context.Context, sub *Subscription) (int, error) {
-	episodes, err := s.episodeRepo.ListBySeries(ctx, sub.SeriesID)
+	current, err := s.subRepo.GetByID(ctx, sub.ID, sub.UserID, sub.ProfileID, sub.DeviceID)
+	if err != nil {
+		return 0, err
+	}
+	if !current.Active {
+		return 0, nil
+	}
+	episodes, err := s.episodeRepo.ListBySeries(ctx, current.SeriesID)
 	if err != nil {
 		return 0, fmt.Errorf("listing episodes: %w", err)
 	}
+	items, err := s.subscriptionEpisodeItems(ctx, current, episodes)
+	if err != nil {
+		return 0, err
+	}
+	var registered int
+	err = s.subRepo.WithLocked(ctx, current.UserID, current.ProfileID, current.DeviceID, current.ID, func(locked *Subscription, tx pgx.Tx) error {
+		if !locked.Active || !locked.UpdatedAt.Equal(current.UpdatedAt) {
+			return nil
+		}
+		registered, err = s.registerSubscriptionItems(ctx, locked, items, managedRegistryStore{tx})
+		return err
+	})
+	return registered, err
+}
+
+// subscriptionEpisodeItems preserves scope and shared file selection before a
+// monitor lock is acquired, avoiding pool waits while holding that lock.
+func (s *Service) subscriptionEpisodeItems(ctx context.Context, sub *Subscription, episodes []*models.Episode) ([]managedItem, error) {
 	inScope := make([]*models.Episode, 0, len(episodes))
 	for _, ep := range episodes {
 		if sub.coversEpisode(ep) {
 			inScope = append(inScope, ep)
 		}
 	}
-	items, err := s.episodeItems(ctx, sub.SeriesID, inScope)
-	if err != nil {
-		return 0, err
+	return s.episodeItems(ctx, sub.SeriesID, inScope)
+}
+func (s *Service) registerSubscriptionItems(ctx context.Context, sub *Subscription, items []managedItem, repo managedRegistrationRepository) (int, error) {
+	// Already-registered files consume the recorded device usage, so exclude
+	// them before charging prospective bytes against this monitor's budget.
+	if sub.MaxStorageBytes > 0 && len(items) > 0 {
+		keys := make([]ManagedEntryKey, len(items))
+		for i, it := range items {
+			keys[i] = ManagedEntryKey{ContentID: it.contentID, EpisodeID: it.episodeID}
+		}
+		existing, err := repo.GetManagedEntriesByKeys(ctx, sub.UserID, sub.ProfileID, sub.DeviceID, keys)
+		if err != nil {
+			return 0, err
+		}
+		fresh := make([]managedItem, 0, len(items))
+		for i, it := range items {
+			if _, ok := existing[keys[i]]; !ok {
+				fresh = append(fresh, it)
+			}
+		}
+		items = fresh
 	}
-	items = s.capItemsToStorage(ctx, sub, items)
-	rows, err := registerManagedItems(ctx, s.repo, sub.UserID, sub.ProfileID, sub.DeviceID, items, sub.ID)
+	items = s.capItemsToStorage(ctx, sub, items, repo)
+	rows, err := registerManagedItems(ctx, repo, sub.UserID, sub.ProfileID, sub.DeviceID, items, sub.ID)
 	return len(rows), err
 }
 
 // capItemsToStorage trims items so registering them keeps the device under the
 // subscription's max_storage_bytes (0 = unlimited). The server sum is a
 // best-effort view; the client enforces the hard cap and owns deletion.
-func (s *Service) capItemsToStorage(ctx context.Context, sub *Subscription, items []managedItem) []managedItem {
+func (s *Service) capItemsToStorage(ctx context.Context, sub *Subscription, items []managedItem, repo managedRegistrationRepository) []managedItem {
 	if sub.MaxStorageBytes <= 0 || len(items) == 0 {
 		return items
 	}
-	used, err := s.repo.SumManagedFileSize(ctx, sub.UserID, sub.ProfileID, sub.DeviceID)
+	used, err := repo.SumManagedFileSize(ctx, sub.UserID, sub.ProfileID, sub.DeviceID)
 	if err != nil {
 		slog.WarnContext(ctx, "download subscription storage gate: sum failed; skipping cap", "component", "downloads", "subscription_id", sub.ID, "error", err)
 		return items
@@ -351,4 +303,119 @@ func normalizeSeasons(mode string, seasons []int) []int {
 		return nil
 	}
 	return seasons
+}
+
+// prepareSubscription is the shared validation, authorization and monitor-scope
+// construction used by bridge creation and the native persist-then-sync flow.
+func (s *Service) prepareSubscription(ctx context.Context, userID int, req SubscriptionRequest, filter catalog.AccessFilter) (*Subscription, error) {
+	if s.subRepo == nil {
+		return nil, ErrSubscriptionsUnavailable
+	}
+	if _, _, err := s.downloadConfigForUser(ctx, userID, req.DeviceID); err != nil {
+		return nil, err
+	}
+	if req.ProfileID == "" || req.DeviceID == "" {
+		return nil, ErrProfileRequired
+	}
+	if !ValidSubMode(req.Mode) {
+		return nil, ErrInvalidSubscriptionMode
+	}
+	if req.Mode == SubModeSpecificSeasons && len(req.SeasonNumbers) == 0 {
+		return nil, ErrSeasonsRequired
+	}
+	if !validSeasonNumbers(req.SeasonNumbers) {
+		return nil, ErrInvalidSeasonNumbers
+	}
+
+	item, err := s.itemRepo.GetByID(ctx, req.SeriesID)
+	if err != nil {
+		return nil, fmt.Errorf("loading series: %w", err)
+	}
+	if item.Type != "series" {
+		return nil, ErrNotSeries
+	}
+	if err := s.itemAccess.EnsureAccessible(ctx, req.SeriesID, filter); err != nil {
+		return nil, err
+	}
+
+	// The device row must exist for the subscription's composite FK.
+	if err := s.repo.EnsureDevice(ctx, userID, req.ProfileID, req.DeviceID, req.DeviceName, req.DevicePlatform); err != nil {
+		return nil, err
+	}
+
+	id, err := idgen.NextID()
+	if err != nil {
+		return nil, fmt.Errorf("generating subscription ID: %w", err)
+	}
+	sub := &Subscription{
+		ID:              id,
+		UserID:          userID,
+		ProfileID:       req.ProfileID,
+		DeviceID:        req.DeviceID,
+		SeriesID:        req.SeriesID,
+		Mode:            req.Mode,
+		SeasonNumbers:   normalizeSeasons(req.Mode, req.SeasonNumbers),
+		DeleteWatched:   req.DeleteWatched,
+		MaxStorageBytes: req.MaxStorageBytes,
+		Active:          true,
+	}
+	if req.Mode == SubModeLatestSeason {
+		target, err := s.latestSeason(ctx, req.SeriesID)
+		if err != nil {
+			return nil, err
+		}
+		sub.TargetSeason = target
+	}
+
+	return sub, nil
+}
+
+// applySubscriptionPatch owns merge validation and latest-season anchoring for
+// both transports. The caller persists the result before starting any sync.
+func (s *Service) applySubscriptionPatch(ctx context.Context, sub *Subscription, patch SubscriptionPatch) (bool, error) {
+	scopeChanged := patch.Mode != nil || patch.SeasonNumbers != nil
+	wasActive := sub.Active
+	oldMaxStorageBytes := sub.MaxStorageBytes
+	modeChanged := false
+	if patch.Mode != nil {
+		if !ValidSubMode(*patch.Mode) {
+			return false, ErrInvalidSubscriptionMode
+		}
+		modeChanged = *patch.Mode != sub.Mode
+		sub.Mode = *patch.Mode
+	}
+	if patch.SeasonNumbers != nil {
+		sub.SeasonNumbers = *patch.SeasonNumbers
+	}
+	if patch.DeleteWatched != nil {
+		sub.DeleteWatched = *patch.DeleteWatched
+	}
+	if patch.MaxStorageBytes != nil {
+		sub.MaxStorageBytes = *patch.MaxStorageBytes
+	}
+	if patch.Active != nil {
+		sub.Active = *patch.Active
+	}
+	if sub.Mode == SubModeSpecificSeasons && len(sub.SeasonNumbers) == 0 {
+		return false, ErrSeasonsRequired
+	}
+	if !validSeasonNumbers(sub.SeasonNumbers) {
+		return false, ErrInvalidSeasonNumbers
+	}
+	sub.SeasonNumbers = normalizeSeasons(sub.Mode, sub.SeasonNumbers)
+	switch {
+	case sub.Mode == SubModeLatestSeason && (modeChanged || sub.TargetSeason == nil):
+		target, err := s.latestSeason(ctx, sub.SeriesID)
+		if err != nil {
+			return false, err
+		}
+		sub.TargetSeason = target
+	case sub.Mode != SubModeLatestSeason:
+		sub.TargetSeason = nil
+	}
+	reactivated := patch.Active != nil && !wasActive && sub.Active
+	storageIncreased := patch.MaxStorageBytes != nil &&
+		oldMaxStorageBytes > 0 &&
+		(sub.MaxStorageBytes <= 0 || sub.MaxStorageBytes > oldMaxStorageBytes)
+	return sub.Active && (scopeChanged || reactivated || storageIncreased), nil
 }

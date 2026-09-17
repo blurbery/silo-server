@@ -129,7 +129,8 @@ export default function Layout({ children }: LayoutProps) {
       );
       void queryClient.prefetchQuery({
         queryKey,
-        queryFn: () => fetchCatalogItemDetail(itemTarget.contentId, itemTarget.libraryId),
+        queryFn: ({ signal }) =>
+          fetchCatalogItemDetail(itemTarget.contentId, itemTarget.libraryId, { signal }),
       });
       navigate(request.href, {
         replace: request.replace,

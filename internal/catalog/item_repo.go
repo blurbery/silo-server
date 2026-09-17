@@ -646,6 +646,12 @@ func (r *ItemRepository) GetByID(ctx context.Context, contentID string) (*models
 	return scanItem(r.pool.QueryRow(ctx, query, contentID))
 }
 
+// GetByIDTx retrieves a media item within the caller's transaction.
+func (r *ItemRepository) GetByIDTx(ctx context.Context, tx pgx.Tx, contentID string) (*models.MediaItem, error) {
+	query := `SELECT ` + itemColumns + ` FROM media_items WHERE content_id = $1`
+	return scanItem(tx.QueryRow(ctx, query, contentID))
+}
+
 // GetByIDs retrieves multiple media items by their content IDs.
 // Items not found are silently omitted from the result.
 func (r *ItemRepository) GetByIDs(ctx context.Context, contentIDs []string) ([]*models.MediaItem, error) {
@@ -1628,6 +1634,9 @@ func (r *ItemRepository) buildFuzzySearchSQL(query string, itemTypes []string, l
 // buildFuzzySearchFromParsed is the fuzzy query builder proper; the string-taking
 // wrapper above parses first. SearchPage parses once and calls this directly.
 func (r *ItemRepository) buildFuzzySearchFromParsed(parsed parsedSearchQuery, itemTypes []string, limit, offset int, filter AccessFilter, includeTotal bool, excludeContentIDs []string, minSimilarity float64) (dataSQL, countSQL string, args []any) {
+	return r.buildFuzzySearchCursorSQL(parsed, itemTypes, limit, offset, filter, includeTotal, excludeContentIDs, minSimilarity, nil)
+}
+func (r *ItemRepository) buildFuzzySearchCursorSQL(parsed parsedSearchQuery, itemTypes []string, limit, offset int, filter AccessFilter, includeTotal bool, excludeContentIDs []string, minSimilarity float64, cursor *searchCursorSQL) (dataSQL, countSQL string, args []any) {
 	searchText := searchTextFromParsed(parsed)
 	if searchText == "" {
 		return "", "", nil
@@ -1660,6 +1669,10 @@ func (r *ItemRepository) buildFuzzySearchFromParsed(parsed parsedSearchQuery, it
 	}
 
 	fromClause := appendSearchScopeFilters(itemTypes, filter, &conditions, &args, &argIdx)
+	r.appendSearchCursorDefinition(cursor, false, filter, &conditions, &args, &argIdx)
+	if cursor != nil && cursor.err != nil {
+		return "", "", nil
+	}
 
 	if len(excludeContentIDs) > 0 {
 		conditions = append(conditions, fmt.Sprintf("NOT (mi.content_id = ANY($%d))", argIdx))
@@ -1726,6 +1739,9 @@ func (r *ItemRepository) buildFuzzySearchFromParsed(parsed parsedSearchQuery, it
 	totalColumn := ""
 	if includeTotal {
 		totalColumn = ", COUNT(*) OVER () AS total_count"
+	}
+	if cursor != nil {
+		totalColumn += ", fuzzy_rank::text, fuzzy_full_rank::text, LOWER(title)::text, content_id::text"
 	}
 	dataSQL = scoredCTE + fmt.Sprintf(`
 		SELECT %s%s

@@ -65,6 +65,7 @@ describe("GeneralSettings", () => {
     renderPage();
 
     expect(useSettingsFormMock.mock.calls[0]?.[0]?.keys).toEqual([
+      "server.public_url",
       "branding.server_name",
       "branding.login_subtitle",
       "signup.enabled",

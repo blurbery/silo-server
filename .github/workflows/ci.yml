@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - main
+      # Integration branch for the API v2 program (#135). Stacked PRs merge
+      # here first; the merge commits need the same gate as main.
+      - apiv2
   workflow_dispatch:
 
 concurrency:
@@ -56,8 +59,14 @@ jobs:
       # installs the same package in its build stage.
       - name: Install libvips
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libvips-dev
+          # libvips and its dependencies use the runner's official Ubuntu sources.
+          test -f /etc/apt/sources.list.d/ubuntu.sources
+          apt_options=(
+            -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources
+            -o Dir::Etc::sourceparts=-
+          )
+          sudo apt-get "${apt_options[@]}" update
+          sudo apt-get "${apt_options[@]}" install -y --no-install-recommends libvips-dev
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -119,6 +128,71 @@ jobs:
       - name: Verify playback protocol fixtures are current
         run: make verify-playback-fixtures
 
+      # The API v2 migration needs every legacy native route accounted for
+      # before anything is ported. The generator reads registration source, so
+      # a route hidden behind optional dependency wiring still has to appear,
+      # and a registration it cannot follow fails here rather than shrinking
+      # the inventory in silence.
+      - name: Verify the legacy native route inventory is current
+        run: make verify-route-inventory
+
+      # Every inventoried route needs a migration decision before v2 work
+      # ports it. The ledger is schema-checked and reconciled against the
+      # inventory one-to-one, so a new route without a ledger entry, or a
+      # stale entry for a removed route, fails here.
+      - name: Verify the v2 migration ledger covers the route inventory
+        run: make verify-migration-ledger
+      # The inventory's lint rule (recovering a router from a handler) has to
+      # hold over the whole tree, not only the lines a branch touched: an old
+      # line folded in by a rebase is as much of a hole as a new one.
+      - name: Lint router recovery full-tree
+        run: make lint-router-recovery
+
+      # Every tier-1 row in a migration wave needs an executable scenario
+      # catalog before that wave's first section PR. The catalogs are
+      # schema-checked and reconciled against the ledger here; the executor
+      # runs their public subset under make test-go and the rest locally
+      # against an empty database named by SILO_SCENARIO_DATABASE_URL (a
+      # dedicated variable: the executor truncates, so it never shares
+      # SILO_TEST_DATABASE_URL with the other DB-gated packages).
+      - name: Verify the tier-1 scenario catalogs cover their waves
+        run: make verify-scenario-catalogs
+
+      # The executor's offline run-vs-skip decision reads a committed list of
+      # the routes the no-database API router registers, because the sealed
+      # router cannot be walked from outside internal/api. This regenerates
+      # that list from the real router and fails if the committed file drifted.
+      - name: Verify the offline route set matches the API router
+        run: make verify-offline-routes
+
+      # The v2 OpenAPI artifact is rendered from the Go registries and the
+      # binary serves the committed bytes, so a registration change that does
+      # not regenerate leaves clients reading a contract the server no longer
+      # matches. This byte-compares a fresh generation.
+      - name: Verify the v2 OpenAPI artifact is current
+        run: make verify-apiv2-openapi
+
+      # Spec lint and the semantic diff against the PR's base. A breaking
+      # change fails unless contracts/api/v2/breaking-approvals.json names
+      # that exact operation, rule and fingerprint; after the LOCKED marker
+      # nothing is approvable. On a push to main the base is main itself, so
+      # both documents are identical and the diff tool compares nothing (an
+      # approval a just-merged PR carried is not stale there); the lint still
+      # runs. The base is read through the environment, as the lint step
+      # does, never interpolated into the script.
+      - name: Verify the v2 contract diff and spec lint
+        env:
+          BASE_REF: ${{ github.base_ref || github.event.repository.default_branch }}
+        run: |
+          git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          make verify-apiv2-contract BASE_REF="origin/${BASE_REF}"
+
+      # The v2 fixtures are generated through the real router and every body
+      # is validated against the committed OpenAPI schema its index names, so
+      # a client testing against them tests against what the server sends.
+      - name: Verify the v2 contract fixtures are current and valid
+        run: make verify-apiv2-fixtures
+
       # Runs the settings-contract gate among everything else: the embedded
       # manifest must parse, satisfy its own schema, hold every structural
       # invariant, and agree with the live settings registry on keys and
@@ -174,6 +248,14 @@ jobs:
       - name: Typecheck and build
         run: pnpm run build
 
+      - name: Upload frontend bundle for image builds
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist-${{ github.sha }}
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 1
+
       # Includes the appearance-cache ownership tests, which are the regression
       # guard for cross-account leaks in the localStorage warm start.
       - name: Test
@@ -192,6 +274,14 @@ jobs:
       - name: Verify the generated web settings binding is current
         working-directory: .
         run: make verify-settings-bindings-web
+
+      # The web v2 contract types are generated from the committed OpenAPI
+      # artifact with the pinned openapi-typescript; this byte-compares a
+      # fresh generation so the typed request boundary never drifts from the
+      # spec the server serves.
+      - name: Verify the generated web v2 contract types are current
+        working-directory: .
+        run: make verify-apiv2-web-types
 
   compose:
     name: Compose credentials
@@ -215,4 +305,5 @@ jobs:
           persist-credentials: false
 
       - name: Verify no local paths leaked into committed docs
+        working-directory: .
         run: make verify-local-paths

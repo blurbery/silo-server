@@ -26,12 +26,18 @@ const controls = vi.hoisted(() => ({
     onSurfaceTap?: (event: React.MouseEvent<HTMLElement>) => void;
     isFullscreen?: boolean;
     onFullscreenToggle?: () => void;
+    onSubtitleJobAccepted?: (jobId: string) => void;
   },
 }));
+const playerV2Mock = vi.hoisted(() => vi.fn());
+vi.mock("../player-v2", () => ({ playerV2: playerV2Mock }));
 const playerSeek = vi.hoisted(() => vi.fn());
 const subtitleTimeline = vi.hoisted(() => ({
   textOffsetSeconds: null as number | null,
   assOffsetSeconds: null as number | null,
+  liveCues: [] as Array<{ text: string }>,
+  liveKey: null as string | null,
+  streamGeneration: 0,
 }));
 const toastError = vi.hoisted(() => vi.fn());
 const hlsJS = vi.hoisted(() => ({ supported: false, constructed: vi.fn() }));
@@ -54,6 +60,9 @@ vi.mock("../hooks/useRemuxSeeking", () => ({
 vi.mock("../hooks/useSubtitleTracks", () => ({
   useSubtitleTracks: (...args: unknown[]) => {
     subtitleTimeline.textOffsetSeconds = args[3] as number;
+    subtitleTimeline.liveCues = args[7] as Array<{ text: string }>;
+    subtitleTimeline.liveKey = args[8] as string | null;
+    subtitleTimeline.streamGeneration = args[9] as number;
     return [];
   },
 }));
@@ -140,6 +149,7 @@ function playerProps(overrides: Partial<Parameters<typeof VideoPlayer>[0]> = {})
     plan: directPlan,
     planRevision: 1,
     sessionId: "session-1",
+    activeFileId: 7,
     subtitleUrls: [] as PlayerSubtitleInfo[],
     initialPosition: 0,
     intro: null,
@@ -1007,6 +1017,8 @@ describe("VideoPlayer server-invalidated transport swap", () => {
 
 describe("VideoPlayer translation handoff", () => {
   beforeEach(() => {
+    toastError.mockClear();
+    playerV2Mock.mockReset().mockResolvedValue({ job: { status: "running" } });
     realtimeOptions.current = null;
     controls.current = null;
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
@@ -1017,6 +1029,202 @@ describe("VideoPlayer translation handoff", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+  });
+
+  it("rebuilds subtitle tracks after initial metadata and each replacement stream loads", () => {
+    const { container, rerenderPlayer } = renderPlayer();
+    const video = container.querySelector("video")!;
+    expect(subtitleTimeline.streamGeneration).toBe(0);
+    fireEvent.loadedMetadata(video);
+    expect(subtitleTimeline.streamGeneration).toBe(1);
+    rerenderPlayer({ planRevision: 2 });
+    // A plan revision alone precedes HLS clearing the old tracks.
+    expect(subtitleTimeline.streamGeneration).toBe(1);
+    fireEvent.loadedMetadata(video);
+    expect(subtitleTimeline.streamGeneration).toBe(2);
+  });
+
+  it("reports an accepted job failure before Started without changing subtitles", async () => {
+    renderPlayer();
+    act(() => controls.current?.onSubtitleJobAccepted?.("8"));
+    await act(async () => {});
+    act(() =>
+      realtimeOptions.current?.onEvent?.({
+        type: "event",
+        session_id: "session-1",
+        name: "subtitle_translation_failed",
+        payload: {
+          session_id: "session-1",
+          file_id: 7,
+          job_id: 8,
+          track_key: "ai-8",
+          message: "Source subtitle unavailable",
+        },
+      }),
+    );
+    expect(toastError).toHaveBeenCalledExactlyOnceWith(
+      "Subtitle processing failed: Source subtitle unavailable",
+    );
+    expect(controls.current?.activeSubtitleIndex).toBeNull();
+    expect(subtitleTimeline.liveKey).toBeNull();
+  });
+
+  it("reconciles a failure before the acceptance response and ignores stale job and session failures", async () => {
+    playerV2Mock.mockResolvedValue({
+      job: { status: "failed", error_message: "Source subtitle unavailable" },
+    });
+    const { rerenderPlayer } = renderPlayer();
+    const failed = (job: number): PlaybackRealtimeEventEnvelope => ({
+      type: "event",
+      session_id: "session-1",
+      name: "subtitle_translation_failed",
+      payload: {
+        session_id: "session-1",
+        file_id: 7,
+        job_id: job,
+        track_key: `ai-${job}`,
+        message: "Source subtitle unavailable",
+      },
+    });
+    act(() => realtimeOptions.current?.onEvent?.(failed(8)));
+    expect(toastError).not.toHaveBeenCalled();
+    await act(async () => {
+      controls.current?.onSubtitleJobAccepted?.("8");
+    });
+    expect(toastError).toHaveBeenCalledOnce();
+    act(() => realtimeOptions.current?.onEvent?.(failed(8)));
+    expect(toastError).toHaveBeenCalledOnce();
+    playerV2Mock.mockResolvedValue({ job: { status: "running" } });
+    await act(async () => {
+      controls.current?.onSubtitleJobAccepted?.("9");
+    });
+    act(() => realtimeOptions.current?.onEvent?.(failed(8)));
+    expect(toastError).toHaveBeenCalledOnce();
+    act(() => realtimeOptions.current?.onEvent?.(failed(9)));
+    expect(toastError).toHaveBeenCalledTimes(2);
+    rerenderPlayer({ sessionId: "session-2" });
+    act(() => realtimeOptions.current?.onEvent?.(failed(9)));
+    expect(toastError).toHaveBeenCalledTimes(2);
+  });
+
+  it("isolates cue batches, completion and failures when a newer AI job starts", () => {
+    const onRefreshSubtitles = vi.fn();
+    const onApplySubtitleTrack = vi.fn();
+    const { container } = renderPlayer({ onRefreshSubtitles, onApplySubtitleTrack });
+    const video = container.querySelector("video")!;
+    Object.defineProperty(video, "paused", { configurable: true, value: false });
+    const base = { session_id: "session-1", file_id: 7 };
+    const started = (job: number) => ({
+      type: "event" as const,
+      session_id: "session-1",
+      name: "subtitle_translation_started" as const,
+      payload: {
+        ...base,
+        job_id: job,
+        track_key: `ai-${job}`,
+        language: job === 1 ? "hr" : "en",
+        total_cues: 2,
+      },
+    });
+    act(() => {
+      const wrongFile = started(9);
+      wrongFile.payload.file_id = 8;
+      realtimeOptions.current?.onEvent?.(wrongFile);
+      const wrongSession = started(9);
+      wrongSession.payload.session_id = "other-session";
+      realtimeOptions.current?.onEvent?.(wrongSession);
+    });
+    expect(subtitleTimeline.liveKey).toBeNull();
+    act(() => {
+      realtimeOptions.current?.onEvent?.(started(1));
+    });
+    Object.defineProperty(video, "paused", { configurable: true, value: true });
+    vi.mocked(video.play).mockClear();
+    act(() => {
+      realtimeOptions.current?.onEvent?.(started(2));
+    });
+    const lateEvents: PlaybackRealtimeEventEnvelope[] = [
+      {
+        type: "event",
+        session_id: "session-1",
+        name: "subtitle_translation_cues",
+        payload: {
+          ...base,
+          job_id: 1,
+          track_key: "ai-1",
+          done: 1,
+          total: 2,
+          cues: [{ start: 0, end: 3, text: "older job" }],
+        },
+      },
+      {
+        type: "event",
+        session_id: "session-1",
+        name: "subtitle_translation_completed",
+        payload: {
+          ...base,
+          job_id: 1,
+          track_key: "ai-1",
+          subtitle_id: 44,
+          language: "hr",
+        },
+      },
+      {
+        type: "event",
+        session_id: "session-1",
+        name: "subtitle_translation_failed",
+        payload: {
+          ...base,
+          job_id: 1,
+          track_key: "ai-1",
+          message: "older failure",
+        },
+      },
+    ];
+    act(() => {
+      lateEvents.forEach((event) => realtimeOptions.current?.onEvent?.(event));
+    });
+    expect(subtitleTimeline.liveKey).toBe("ai-2");
+    expect(subtitleTimeline.liveCues).toEqual([]);
+    expect(controls.current?.activeSubtitleIndex).toBe(1_000_000);
+    expect(onRefreshSubtitles).not.toHaveBeenCalled();
+    expect(onApplySubtitleTrack).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+    act(() => {
+      realtimeOptions.current?.onEvent?.({
+        type: "event",
+        session_id: "session-1",
+        name: "subtitle_translation_cues",
+        payload: {
+          ...base,
+          job_id: 2,
+          track_key: "ai-2",
+          done: 1,
+          total: 2,
+          cues: [{ start: 0, end: 3, text: "current job" }],
+        },
+      });
+    });
+    expect(subtitleTimeline.liveCues.map((cue) => cue.text)).toEqual(["current job"]);
+    expect(video.play).toHaveBeenCalledOnce();
+    act(() => {
+      realtimeOptions.current?.onEvent?.(started(2));
+    });
+    expect(subtitleTimeline.liveCues.map((cue) => cue.text)).toEqual(["current job"]);
+    act(() => {
+      realtimeOptions.current?.onEvent?.({
+        type: "event",
+        session_id: "session-1",
+        name: "subtitle_translation_failed",
+        payload: { ...base, job_id: 2, track_key: "ai-2", message: "Transcription unavailable" },
+      });
+    });
+    expect(subtitleTimeline.liveKey).toBeNull();
+    expect(subtitleTimeline.liveCues).toEqual([]);
+    expect(controls.current?.activeSubtitleIndex).toBeNull();
+    expect(toastError).toHaveBeenCalledWith(
+      "Subtitle processing failed: Transcription unavailable",
+    );
   });
 
   it("selects the refreshed downloaded track and clears the live overlay", async () => {

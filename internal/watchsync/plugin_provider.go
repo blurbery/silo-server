@@ -1342,6 +1342,9 @@ type watchSyncProviderFaultError struct {
 func (e watchSyncProviderFaultError) Error() string { return e.message }
 
 func isWatchSyncInvalidCredentialError(err error) bool {
+	if errors.Is(err, ErrInvalidCredential) {
+		return true
+	}
 	var fault watchSyncProviderFaultError
 	return errors.As(err, &fault) && fault.code == pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_CREDENTIAL
 }

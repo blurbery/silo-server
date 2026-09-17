@@ -220,7 +220,13 @@ export default function SecurityAccessSettings() {
 
   // Keyed on the hydrated snapshot so a refetch that actually changes the saved
   // config wins over a stale draft instead of silently resurrecting it.
-  const hydratedKey = JSON.stringify(hydratedConfig);
+  const hydratedKey = JSON.stringify([
+    hydratedConfig,
+    serverConfig?.etag,
+    serverConfig?.profileContext?.serverOrigin,
+    serverConfig?.profileContext?.authContextVersion,
+    serverConfig?.profileContext?.profileId,
+  ]);
   const [configState, setConfigState] = useState<{ key: string; config: RateLimitConfig }>({
     key: hydratedKey,
     config: hydratedConfig,
@@ -264,7 +270,7 @@ export default function SecurityAccessSettings() {
     });
   }
 
-  const rateLimitsDirty = JSON.stringify(config) !== hydratedKey;
+  const rateLimitsDirty = JSON.stringify(config) !== JSON.stringify(hydratedConfig);
   // The rate-limit draft lives outside useSettingsForm, so it has to announce
   // itself to the unsaved-changes registry on its own — otherwise the
   // navigation guard and the reload prompt only know about the batched keys.
@@ -285,14 +291,22 @@ export default function SecurityAccessSettings() {
    *
    * A failed writer keeps its own staged edits (neither mutation clears them on
    * error) and toasts the server's message, so the admin can fix the cause and
-   * hit Save again. The batch failing skips the rate-limit PUT for the same
+   * hit Save again. The batch failing skips the rate-limit PATCH for the same
    * reason it goes first: the settings it would be validated against are not
    * the ones on screen.
    */
   async function handleSave() {
+    const intent =
+      rateLimitsDirty && serverConfig
+        ? {
+            config: structuredClone(config),
+            etag: serverConfig.etag,
+            profileContext: serverConfig.profileContext,
+          }
+        : null;
     try {
       if (form.dirtyCount > 0) await form.save();
-      if (rateLimitsDirty) await updateConfig.mutateAsync(config);
+      if (intent) await updateConfig.mutateAsync(intent);
     } catch {
       // Both mutations already surface the failure as a toast; swallowing here
       // only stops it becoming an unhandled rejection out of the save bar.

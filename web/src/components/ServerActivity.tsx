@@ -357,9 +357,6 @@ function TaskRow({ task }: { task: TaskInfo }) {
           />
         </div>
       )}
-      {task.progress_message && (
-        <div className="text-muted-foreground truncate text-[10px]">{task.progress_message}</div>
-      )}
     </div>
   );
 }

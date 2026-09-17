@@ -16,6 +16,7 @@ import (
 )
 
 type Repository interface {
+	UpdateConnectionSettings(context.Context, string, int, string, *ConnectionVersion, ConnectionUpdate, func(Connection) error) (Connection, error)
 	GetServerSetting(ctx context.Context, key string) (string, error)
 	UpsertAuthSession(ctx context.Context, session DeviceAuthSession) (DeviceAuthSession, error)
 	GetAuthSession(ctx context.Context, id string) (DeviceAuthSession, error)
@@ -243,18 +244,6 @@ func (r *PostgresRepository) UpsertConnection(ctx context.Context, conn Connecti
 			refresh_token = EXCLUDED.refresh_token,
 			token_expires_at = EXCLUDED.token_expires_at,
 			plugin_credentials = EXCLUDED.plugin_credentials,
-			import_watched_enabled = EXCLUDED.import_watched_enabled,
-			import_progress_enabled = EXCLUDED.import_progress_enabled,
-			export_watched_enabled = EXCLUDED.export_watched_enabled,
-			export_unwatched_enabled = EXCLUDED.export_unwatched_enabled,
-			import_favorites_enabled = EXCLUDED.import_favorites_enabled,
-			export_favorites_enabled = EXCLUDED.export_favorites_enabled,
-			sync_favorite_removals_enabled = EXCLUDED.sync_favorite_removals_enabled,
-			import_watchlist_enabled = EXCLUDED.import_watchlist_enabled,
-			export_watchlist_enabled = EXCLUDED.export_watchlist_enabled,
-			sync_watchlist_removals_enabled = EXCLUDED.sync_watchlist_removals_enabled,
-			sync_watchlist_order_enabled = EXCLUDED.sync_watchlist_order_enabled,
-			scrobble_enabled = EXCLUDED.scrobble_enabled,
 			last_inbound_sync_at = EXCLUDED.last_inbound_sync_at,
 			last_progress_sync_at = EXCLUDED.last_progress_sync_at,
 			last_outbound_sync_at = EXCLUDED.last_outbound_sync_at,
@@ -264,7 +253,7 @@ func (r *PostgresRepository) UpsertConnection(ctx context.Context, conn Connecti
 			last_error = EXCLUDED.last_error,
 			rate_limited_until = EXCLUDED.rate_limited_until,
 			sync_cursors = EXCLUDED.sync_cursors,
-			updated_at = now()
+			updated_at = GREATEST(clock_timestamp(), watch_provider_connections.updated_at + interval '1 microsecond')
 		RETURNING `+connectionColumns+`
 	`,
 		conn.ID,
@@ -418,7 +407,7 @@ func (r *PostgresRepository) DeferConnectionsForAccount(
 	}
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE watch_provider_connections
-		SET rate_limited_until = $1, last_error = $2, updated_at = now()
+		SET rate_limited_until = $1, last_error = $2, updated_at = GREATEST(clock_timestamp(), updated_at + interval '1 microsecond')
 		WHERE provider = $3 AND provider_account_id = $4
 	`, until, lastError, provider, providerAccountID)
 	if err != nil {

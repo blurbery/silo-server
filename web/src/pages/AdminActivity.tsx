@@ -92,7 +92,8 @@ export default function AdminActivity() {
   const [ipSearch, setIPSearch] = useState("");
   const [activeIP, setActiveIP] = useState("");
   const [ipLookupOpen, setIPLookupOpen] = useState(false);
-  const { data: ipUsers = [], isLoading: ipLoading } = useIPUsers(activeIP);
+  const ipHistory = useIPUsers(activeIP);
+  const { data: ipUsers = [], isLoading: ipLoading } = ipHistory;
 
   const refreshActivity = useCallback(
     async ({ manual }: { manual: boolean }) => {
@@ -313,6 +314,11 @@ export default function AdminActivity() {
             <div className="mt-3">
               {ipLoading ? (
                 <p className="text-muted-foreground text-sm">Searching...</p>
+              ) : ipHistory.isError && ipUsers.length === 0 ? (
+                <p role="alert">
+                  Could not load IP history.{" "}
+                  <Button onClick={() => void ipHistory.restart()}>Reload history</Button>
+                </p>
               ) : ipUsers.length === 0 ? (
                 <p className="text-muted-foreground text-sm">
                   No users found for {activeIP} in the last 30 days.
@@ -349,6 +355,20 @@ export default function AdminActivity() {
                     ))}
                   </TableBody>
                 </Table>
+              )}
+              {ipHistory.isError && ipUsers.length > 0 && (
+                <p role="alert">
+                  Could not load more history.{" "}
+                  <Button onClick={() => void ipHistory.restart()}>Reload history</Button>
+                </p>
+              )}
+              {ipHistory.hasNextPage && (
+                <Button
+                  disabled={ipHistory.isFetchingNextPage}
+                  onClick={() => void ipHistory.fetchNextPage()}
+                >
+                  Load more
+                </Button>
               )}
             </div>
           )}

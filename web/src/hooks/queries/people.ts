@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-import { adminRefreshPerson, adminUpdatePerson, refreshPerson, searchPeople } from "@/api/client";
-import type { Person, PersonRefreshQueuedResponse, UpdatePersonRequest } from "@/api/types";
+import { adminRefreshPerson, adminUpdatePerson } from "@/api/v2/people";
+import type { Person, UpdatePersonRequest } from "@/api/types";
+import { refreshPerson, searchPeople, type PersonRefreshResult } from "@/api/v2/people";
 
 import { personKeys } from "./keys";
 
@@ -11,7 +12,7 @@ export function usePersonSearch(query: string, limit = 20, enabled = true) {
 
   return useQuery({
     queryKey: personKeys.search(normalizedQuery, limit),
-    queryFn: () => searchPeople(normalizedQuery, limit),
+    queryFn: ({ signal }) => searchPeople(normalizedQuery, limit, { signal }),
     enabled: enabled && normalizedQuery.length > 0,
     staleTime: 5 * 60 * 1000,
   });
@@ -24,13 +25,14 @@ type RefreshPersonResult =
     }
   | {
       mode: "queued";
-      response: PersonRefreshQueuedResponse;
+      response: PersonRefreshResult;
     };
 
 export function useRefreshPerson(id: string | undefined, isAdmin: boolean) {
   const queryClient = useQueryClient();
 
   return useMutation({
+    retry: false,
     mutationFn: async (): Promise<RefreshPersonResult> => {
       if (!id) {
         throw new Error("Person ID is required");
@@ -68,6 +70,7 @@ export function useUpdatePersonMetadata(id: string | undefined) {
   const queryClient = useQueryClient();
 
   return useMutation({
+    retry: false,
     mutationFn: (data: UpdatePersonRequest) => {
       if (!id) {
         throw new Error("Person ID is required");

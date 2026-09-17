@@ -21,6 +21,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/Silo-Server/silo-server/internal/buildinfo"
 	"github.com/Silo-Server/silo-server/internal/chapterthumbs"
 	"github.com/Silo-Server/silo-server/internal/config"
 	"github.com/Silo-Server/silo-server/internal/downloadprepare"
@@ -32,6 +33,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/playback"
 	"github.com/Silo-Server/silo-server/internal/streamtelemetry"
 	"github.com/Silo-Server/silo-server/internal/streamtoken"
+	"github.com/Silo-Server/silo-server/internal/telemetry"
 	"github.com/Silo-Server/silo-server/internal/tonemap"
 	"github.com/Silo-Server/silo-server/internal/transcodeproxy"
 )
@@ -185,8 +187,14 @@ type HealthResponse struct {
 	// This route takes no credential, so the sample is path-free: disk entries
 	// carry their role and their fill, never where they are mounted. See
 	// nodemetrics.Snapshot.RedactPaths.
-	System *nodemetrics.SystemStats `json:"system,omitempty"`
-	GPU    []nodemetrics.GPUStats   `json:"gpu,omitempty"`
+	System      *nodemetrics.SystemStats         `json:"system,omitempty"`
+	GPU         []nodemetrics.GPUStats           `json:"gpu,omitempty"`
+	Attribution *nodemetrics.ResourceAttribution `json:"attribution,omitempty"`
+	SampledAt   time.Time                        `json:"sampled_at,omitzero"`
+	// Build identifies the binary this node runs, so the API can show whether
+	// the fleet is on the same revision as the server. Diagnostic only, like
+	// `server_version` on the API's own system route; nothing routes on it.
+	Build buildinfo.Info `json:"build"`
 }
 
 // sessionIdleTTL is how long a job may go without a manifest or segment
@@ -206,7 +214,7 @@ const sessionReapInterval = time.Minute
 const sessionTrackingOperationTimeout = 2 * time.Second
 
 // TranscodeStartReadinessTimeout is the node-side RequireReady manifest budget.
-const TranscodeStartReadinessTimeout = 8 * time.Second
+const TranscodeStartReadinessTimeout = playback.ManifestStartupTimeout
 
 // progressiveRemuxShutdownTimeout bounds a destructive reload when a canceled
 // FFmpeg process does not exit. A timed-out reload must fail rather than report
@@ -231,6 +239,7 @@ type progressiveRemuxRequest struct {
 // Server is the HTTP handler for transcode mode.
 type Server struct {
 	watcher                   *nodeconfig.Watcher
+	streamDeny                *playback.StreamDeny
 	nodeRowID                 func() (int, bool)
 	registeredNodeURL         func() (string, bool)
 	tracker                   sessionTracker
@@ -760,8 +769,75 @@ func (s *Server) SetStreamTelemetry(registry *streamtelemetry.Registry) {
 	s.telemetry = registry
 }
 
-// Handler returns the chi.Router with all transcode routes.
+// SetStreamDeny installs the session-deny marker store this node consults
+// before serving or reconstructing a session. A nil store disables the check,
+// which is the pre-marker behavior for a node without Redis.
+func (s *Server) SetStreamDeny(deny *playback.StreamDeny) {
+	s.streamDeny = deny
+}
+
+// sessionDenied reports whether the deny marker revokes the session a request
+// serves. The URL names the transcode transport; a forwarded stream token names
+// the playback session, which is what stop, expiry, and admin terminate deny.
+// Both are checked so a compat transport whose id differs from its playback
+// session is still cut. A missing or invalid token only removes the second
+// lookup; the token was never this route's authorization.
+func (s *Server) sessionDenied(r *http.Request, transportID string) bool {
+	if s.streamDeny == nil {
+		return false
+	}
+	if s.streamDeny.Denied(r.Context(), transportID) {
+		return true
+	}
+	if _, claims := s.canonicalSessionID(r, transportID); claims != nil && claims.SessionID != transportID {
+		return s.streamDeny.Denied(r.Context(), claims.SessionID)
+	}
+	return false
+}
+
+// claimsDenied is sessionDenied for a path that has already verified its token.
+func (s *Server) claimsDenied(ctx context.Context, claims *streamtoken.Claims, transportID string) bool {
+	if s.streamDeny == nil {
+		return false
+	}
+	if s.streamDeny.Denied(ctx, transportID) {
+		return true
+	}
+	return claims != nil && claims.SessionID != "" && claims.SessionID != transportID && s.streamDeny.Denied(ctx, claims.SessionID)
+}
+
+// writeStreamDenied answers a denied session: 410 with no media bytes. The
+// session is over; a client that retries keeps hitting this wall until its
+// tokens expire.
+func writeStreamDenied(w http.ResponseWriter) {
+	http.Error(w, "playback session ended", http.StatusGone)
+}
+
+// sealedHandler is what Handler hands out: the finished router behind an
+// unexported field and a ServeHTTP method, nothing else, so no assertion or
+// type switch recovers a registration surface from it, and the route
+// inventory refuses the reflect calls that could (MethodByName, Method,
+// NumMethod, NewAt, UnsafePointer, UnsafeAddr, Pointer) and any import of
+// unsafe in this package: short of unsafe, nothing gets the router back (see
+// docs/architecture/api-contract.md). Do not embed http.Handler here:
+// embedding exports the field and promotes its methods.
+type sealedHandler struct {
+	h http.Handler
+}
+
+func (h sealedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.h.ServeHTTP(w, r) }
+
+// Handler returns the transcode node listener as a sealed http.Handler. The
+// route inventory generator requires exactly this shape: seal the unexported
+// constructor and nothing else. A test that needs to walk the tree calls
+// router directly.
 func (s *Server) Handler() http.Handler {
+	return sealedHandler{h: s.router()}
+}
+
+// router is the transcode node's registration surface. The route inventory
+// generator walks this method; every registration must be reachable from it.
+func (s *Server) router() chi.Router {
 	declareTranscodeNodeMediaRoutes()
 	s.startIdleReaper()
 	r := chi.NewRouter()
@@ -1127,6 +1203,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		CapabilitiesHash: s.storedCapabilityHash(),
 		System:           snapshot.System,
 		GPU:              snapshot.GPU,
+		Attribution:      snapshot.Attribution,
+		SampledAt:        snapshot.SampledAt,
+		Build:            buildinfo.Current(),
 	})
 }
 
@@ -1366,6 +1445,7 @@ func writeChapterThumbnailError(w http.ResponseWriter, status int, reason string
 
 // requireBearer is middleware that checks for Authorization: Bearer {secret}.
 func (s *Server) requireBearer(next http.Handler) http.Handler {
+	next = telemetry.TrustedHTTPHandler("worker", next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg := s.watcher.Config()
 		if cfg == nil {
@@ -1502,28 +1582,28 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	// session's output dir while we replace it.
 	unlock := s.lockSessionLifecycle(req.SessionID)
 
-	// Defensively close any existing session for this ID so that a quality
-	// switch doesn't orphan the old ffmpeg process or leave stale segments.
+	// Start the replacement before touching an existing session. A transient
 	s.mu.Lock()
-	if old, ok := s.sessions[req.SessionID]; ok {
-		delete(s.sessions, req.SessionID)
-		delete(s.lastAccess, req.SessionID)
-		s.mu.Unlock()
-		_ = s.closeSessionOffGPU(old)
-		// Move the old segment directory aside and delete it in the
-		// background: removing a long session's segments can take seconds
-		// on slow disks, and the playback start that triggered this switch
-		// is blocked waiting for our 202.
-		staleDir := outputDir + ".stale-" + strconv.FormatInt(time.Now().UnixNano(), 10)
-		if err := os.Rename(outputDir, staleDir); err == nil {
-			go func() { _ = os.RemoveAll(staleDir) }()
-		} else {
-			os.RemoveAll(outputDir)
+	_, hasExisting := s.sessions[req.SessionID]
+	s.mu.Unlock()
+	replacementDir := ""
+	published := false
+	defer func() {
+		if replacementDir != "" && !published {
+			_ = os.RemoveAll(replacementDir)
 		}
-	} else {
-		s.mu.Unlock()
+	}()
+	if hasExisting {
+		if tempDir, tempErr := os.MkdirTemp(s.transcodeDir, req.SessionID+"-replacement-"); tempErr == nil {
+			opts.OutputDir = tempDir
+			replacementDir = tempDir
+		} else {
+			unlock()
+			http.Error(w, "failed to prepare transcode replacement", http.StatusInternalServerError)
+			return
+		}
 	}
-
+	// spawn or validation failure must leave a healthy live session intact.
 	session, err := playback.StartTranscode(r.Context(), opts)
 	if err != nil {
 		unlock()
@@ -1535,6 +1615,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+
 	if req.RequireReady {
 		if _, err := session.WaitForManifest(TranscodeStartReadinessTimeout); err != nil {
 			wasRunning := session.IsRunning()
@@ -1572,8 +1653,27 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The replacement has successfully spawned, so retire the old session and
+	// publish the new one under the same ID.
+	s.mu.Lock()
+	if old, ok := s.sessions[req.SessionID]; ok {
+		delete(s.sessions, req.SessionID)
+		delete(s.lastAccess, req.SessionID)
+		s.mu.Unlock()
+		_ = s.closeSessionOffGPU(old)
+		staleDir := outputDir + ".stale-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+		if err := os.Rename(outputDir, staleDir); err == nil {
+			go func() { _ = os.RemoveAll(staleDir) }()
+		} else {
+			_ = os.RemoveAll(outputDir)
+		}
+	} else {
+		s.mu.Unlock()
+	}
+
 	s.mu.Lock()
 	s.sessions[req.SessionID] = session
+	published = true
 	s.noteSessionAccessLocked(req.SessionID)
 	s.mu.Unlock()
 	unlock()
@@ -2006,6 +2106,10 @@ func (s *Server) handleRemux(w http.ResponseWriter, r *http.Request) {
 	if transportID == "" {
 		transportID = claims.SessionID
 	}
+	if s.claimsDenied(r.Context(), claims, transportID) {
+		writeStreamDenied(w)
+		return
+	}
 	if transportID == "" || transportID != chi.URLParam(r, "session_id") ||
 		claims.TranscodeNode == "" ||
 		claims.RoutingWorkload != string(noderouting.WorkloadRemux) ||
@@ -2297,6 +2401,11 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "session_id")
+	// A denied session is neither served from memory nor reconstructed.
+	if s.sessionDenied(r, sessionID) {
+		writeStreamDenied(w)
+		return
+	}
 
 	// Lookup and liveness refresh happen atomically so the idle reaper can
 	// never unregister the job between them and tear down a session this
@@ -2344,6 +2453,11 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSegment(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "session_id")
 	name := chi.URLParam(r, "name")
+	// A denied session is neither served from memory nor reconstructed.
+	if s.sessionDenied(r, sessionID) {
+		writeStreamDenied(w)
+		return
+	}
 
 	// Lookup and liveness refresh happen atomically so the idle reaper can
 	// never unregister the job between them and tear down a session this
@@ -2743,18 +2857,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	snapshot := s.metrics.Snapshot()
 	w.Header().Set("Content-Type", "application/json")
-	type statusResponse struct {
-		Status     string                   `json:"status"`
-		ActiveJobs int32                    `json:"active_jobs"`
-		Sessions   []string                 `json:"sessions"`
-		System     *nodemetrics.SystemStats `json:"system,omitempty"`
-		GPU        []nodemetrics.GPUStats   `json:"gpu,omitempty"`
-	}
 	json.NewEncoder(w).Encode(statusResponse{
-		Status:     "ok",
-		ActiveJobs: s.activeJobs.Load(),
-		Sessions:   sessionIDs,
-		System:     snapshot.System,
-		GPU:        snapshot.GPU,
+		Status:      "ok",
+		ActiveJobs:  s.activeJobs.Load(),
+		Sessions:    sessionIDs,
+		System:      snapshot.System,
+		GPU:         snapshot.GPU,
+		Attribution: snapshot.Attribution,
+		SampledAt:   snapshot.SampledAt,
 	})
 }

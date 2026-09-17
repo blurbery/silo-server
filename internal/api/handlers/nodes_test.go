@@ -793,3 +793,15 @@ func TestHandleListNodesDistinguishesUncheckedFromUnreportedHashes(t *testing.T)
 		t.Errorf("unchecked node carried an advertised hash: %v", items[1])
 	}
 }
+
+func TestReadAdminNodesDoesNotMutateRepositoryRows(t *testing.T) {
+	stored := &nodepool.Node{ID: 1, URL: "http://worker.example.test", Type: nodepool.NodeTypeProxy, Enabled: true}
+	repo := &stubNodeRepository{nodes: []*nodepool.Node{stored}}
+	pool := nodepool.NewProxyPool()
+	pool.SetNodes([]*nodepool.Node{stored})
+	pool.ApplyHealth(1, stored.URL, true, 0, 0, "advertised", nil, time.Now())
+	rows, err := NewNodeHandler(repo, pool, nil, nil, nil, nil, "").ReadAdminNodes(t.Context())
+	if err != nil || len(rows) != 1 || rows[0] == stored || stored.AdvertisedCapabilitiesHash != nil || rows[0].AdvertisedCapabilitiesHash == nil || *rows[0].AdvertisedCapabilitiesHash != "advertised" {
+		t.Fatal(rows, stored, err)
+	}
+}

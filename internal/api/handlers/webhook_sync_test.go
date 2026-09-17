@@ -13,7 +13,7 @@ func TestRequestWebhookURLWithPrefix(t *testing.T) {
 	if got := requestWebhookURLWithPrefix("https://example.com/", legacyPlexSyncPathPrefix, "secret"); got != "https://example.com/api/v1/plex-sync/webhooks/secret" {
 		t.Fatalf("unexpected legacy webhook URL: %q", got)
 	}
-	if got := requestWebhookURLWithPrefix("https://example.com/", webhookSyncPathPrefix, "secret"); got != "https://example.com/api/v1/webhook-sync/webhooks/secret" {
+	if got := requestWebhookURLWithPrefix("https://example.com/", webhookSyncPathPrefix, "secret"); got != "https://example.com/api/v2/webhook-sync/webhooks/secret" {
 		t.Fatalf("unexpected generic webhook URL: %q", got)
 	}
 }

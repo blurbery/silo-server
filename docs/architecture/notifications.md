@@ -56,6 +56,20 @@ Deliveries are deduplicated per `(profile, release event)` and, for
 dual-quality library setups notify at most once. Reprocessing an event is
 idempotent.
 
+## Release-event retention
+
+Release events and inbox deliveries have independent lifetimes. Pruning an old
+release event clears `notification_deliveries.release_event_id` through its
+`ON DELETE SET NULL` foreign key and retains the delivery. An `episode.available`
+delivery still requires its `library_id`, `series_id` and `episode_id` snapshot;
+its event reference is optional. Event pruning must not delete inbox rows or
+relax those snapshot requirements.
+
+The constraint repair preserves existing deliveries. Its rollback restores the
+previous constraint only if every episode delivery still has an event reference;
+otherwise PostgreSQL rejects the rollback atomically. It never deletes detached
+inbox rows to make rollback possible.
+
 ## Request notifications
 
 Request lifecycle deliveries (`request.fulfilled`, `request.approved`,
@@ -66,6 +80,16 @@ the title since no catalog item exists yet) rather than the four reason
 booleans. Partial unique indexes per `(profile_id, request_id, type)` make
 the inserts idempotent, and the per-webhook `notify_requests` flag gates the
 webhook channel for them.
+
+Approval is the one transition whose two destinations disagree. Server
+channels see `request.approved` for every approval; the requester only gets a
+`request.approved` delivery when an administrator approved a pending request.
+Auto-approval is the policy answering the requester's own submission, so a
+notice about it is noise. The approval paths that notify say who approved with
+a `requests.ApprovalOrigin`, and the requester notice requires
+`ApprovalOriginAdmin` explicitly: any other origin is skipped, and an
+unrecognized one is logged, so a new policy-driven path cannot reintroduce the
+notice by omission.
 
 ## Outbound webhooks
 

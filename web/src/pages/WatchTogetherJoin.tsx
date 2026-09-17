@@ -1,6 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { captureRoomCreationDraft, type RoomCreationDraft } from "@/api/v2/watchTogetherCreate";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
-import { ApiClientError } from "@/api/client";
+import {
+  ApiClientError,
+  captureProfileRequestContext,
+  isCapturedProfileAuthorityActive,
+  StaleApiRequestContextError,
+} from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
@@ -16,7 +22,7 @@ function describeJoinError(error: unknown) {
     if (error.status === 404) {
       return "Room not found.";
     }
-    if (error.status === 410) {
+    if (error.status === 410 || error.status === 409) {
       return "That room is no longer active.";
     }
     return error.message;
@@ -49,8 +55,37 @@ export default function WatchTogetherJoin() {
   const token = searchParams.get("token")?.trim() ?? "";
   const [code, setCode] = useState("");
   const [selectionMode, setSelectionMode] = useState<WatchTogetherSelectionMode>("host_pick");
-  const [creating, setCreating] = useState(false);
-  const [joining, setJoining] = useState(false);
+  const creationDraft = useRef<RoomCreationDraft | null>(null);
+  const creationRun = useRef(0);
+  const [pendingCreation, setPendingCreation] = useState<{
+    run: number;
+    draft: RoomCreationDraft;
+    token: string;
+  } | null>(null);
+  const creating =
+    pendingCreation !== null &&
+    pendingCreation.run === creationRun.current &&
+    pendingCreation.token === token &&
+    pendingCreation.draft.body.selection_mode === selectionMode &&
+    !!pendingCreation.draft.authority &&
+    isCapturedProfileAuthorityActive(pendingCreation.draft.authority);
+  const invalidateCreation = useCallback(() => {
+    creationRun.current++;
+  }, []);
+  useLayoutEffect(() => {
+    creationDraft.current = null;
+    invalidateCreation();
+    return invalidateCreation;
+  }, [selectionMode, token, invalidateCreation]);
+  const [pendingJoin, setPendingJoin] = useState<{
+    run: number;
+    token: string;
+    authority: NonNullable<ReturnType<typeof captureProfileRequestContext>>;
+  } | null>(null);
+  const joining =
+    pendingJoin !== null &&
+    pendingJoin.token === token &&
+    isCapturedProfileAuthorityActive(pendingJoin.authority);
   const [error, setError] = useState<string | null>(null);
   const modeButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const hasInviteToken = token !== "";
@@ -81,44 +116,78 @@ export default function WatchTogetherJoin() {
     [],
   );
 
+  const joinRun = useRef(0);
+  const invalidateJoin = useCallback(() => {
+    joinRun.current++;
+  }, []);
+  useLayoutEffect(() => {
+    invalidateJoin();
+    return invalidateJoin;
+  }, [token, invalidateJoin]);
   const joinRoom = useCallback(
     async (input: { code?: string; join_token?: string }) => {
-      setJoining(true);
+      const joinAuthority = captureProfileRequestContext();
+      const run = ++joinRun.current;
+      const active = () =>
+        run === joinRun.current &&
+        !!joinAuthority &&
+        isCapturedProfileAuthorityActive(joinAuthority);
+      if (!joinAuthority || !active()) return;
+      setPendingJoin({ run, token, authority: joinAuthority });
       setError(null);
       try {
-        const response = await joinWatchTogetherRoom(input);
-        if (!response.room_access_token) {
+        const response = await joinWatchTogetherRoom({ ...input }, joinAuthority);
+        if (!active()) return;
+        if (!response.room_access_token)
           throw new Error("Room access token was missing from the join response.");
-        }
-        navigate(`/rooms/${response.room.room_id}?room_token=${response.room_access_token}`, {
-          replace: true,
-        });
+        navigate(
+          `/rooms/${encodeURIComponent(response.room.room_id)}?room_token=${encodeURIComponent(response.room_access_token)}`,
+          { replace: true },
+        );
       } catch (joinError) {
+        if (!active() || joinError instanceof StaleApiRequestContextError) return;
         setError(describeJoinError(joinError));
       } finally {
-        setJoining(false);
+        setPendingJoin((current) => (current?.run === run ? null : current));
       }
     },
-    [navigate],
+    [navigate, token],
   );
 
   const createRoom = useCallback(async () => {
-    setCreating(true);
+    let draft = creationDraft.current;
+    if (!draft?.authority || !isCapturedProfileAuthorityActive(draft.authority)) {
+      draft = captureRoomCreationDraft(selectionMode);
+      creationDraft.current = draft;
+    }
+    if (!draft.authority || !isCapturedProfileAuthorityActive(draft.authority)) return;
+    const run = ++creationRun.current;
+    const active = () =>
+      run === creationRun.current &&
+      creationDraft.current === draft &&
+      !!draft.authority &&
+      isCapturedProfileAuthorityActive(draft.authority);
+    setPendingCreation({ run, draft, token });
     setError(null);
     try {
-      const response = await createWatchTogetherRoom({ selection_mode: selectionMode });
+      const response = await createWatchTogetherRoom(draft);
+      if (!active()) return;
       if (!response.room_access_token) {
         throw new Error("Room access token was missing from the create response.");
       }
-      navigate(`/rooms/${response.room.room_id}?room_token=${response.room_access_token}`, {
-        replace: true,
-      });
+      navigate(
+        `/rooms/${encodeURIComponent(response.room.room_id)}?room_token=${encodeURIComponent(response.room_access_token)}`,
+        {
+          replace: true,
+        },
+      );
     } catch (createError) {
+      if (!active() || createError instanceof StaleApiRequestContextError) return;
       setError(createError instanceof Error ? createError.message : "Failed to create room.");
     } finally {
-      setCreating(false);
+      setPendingCreation((current) => (current?.run === run ? null : current));
     }
-  }, [navigate, selectionMode]);
+  }, [navigate, selectionMode, token]);
 
   useEffect(() => {
     if (!hasInviteToken) {
@@ -135,7 +204,7 @@ export default function WatchTogetherJoin() {
 
   // While an invite token is being auto-joined (and hasn't failed yet), show a
   // pending state instead of the full create/join form.
-  const autoJoinPending = hasInviteToken && !error;
+  const autoJoinPending = hasInviteToken && joining && !error;
 
   if (autoJoinPending) {
     return (
@@ -191,7 +260,7 @@ export default function WatchTogetherJoin() {
           </div>
           <p className="text-foreground/65 text-sm leading-relaxed">
             Share the room code or invite link to let others join. If the host disconnects the room
-            stays open for 15 seconds — if they don't reconnect, the party ends automatically.
+            stays open for 2 minutes — if they don't reconnect, the party ends automatically.
           </p>
         </div>
       </div>

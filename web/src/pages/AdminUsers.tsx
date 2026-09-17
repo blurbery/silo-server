@@ -1,4 +1,4 @@
-import { useState, useId, useMemo } from "react";
+import { useState, useId, useMemo, useRef } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 import type { AdminUser, CreateUserRequest, UpdateUserRequest } from "@/api/types";
@@ -6,7 +6,7 @@ import {
   useAdminUsers,
   useCreateUser,
   useUpdateUser,
-  useDeleteUser,
+  useAdminUserCapabilities,
 } from "@/hooks/queries/admin/users";
 import { useAdminServerSettings } from "@/hooks/queries/admin/settings";
 import { useAdminLibraries } from "@/hooks/queries/admin/libraries";
@@ -60,7 +60,15 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { AdminUserDeleteDialog } from "@/components/AdminUserDeleteDialog";
+import { useAuth } from "@/hooks/useAuth";
+import {
+  adminUserScope,
+  captureAdminUserAuthority,
+  getAdminUser,
+  type AdminUserEditor,
+} from "@/api/v2/adminUsers";
+import { V2ProblemError } from "@/api/v2/request";
 import { Skeleton } from "@/components/ui/skeleton";
 import InvitationsTab from "./admin-settings/InvitationsTab";
 import InviteCodesTab from "./admin-settings/InviteCodesTab";
@@ -71,6 +79,7 @@ import {
   setAssignedPermission,
 } from "@/lib/permissions";
 import { formatDateTime as formatDateTimePreferred } from "@/lib/datetime";
+import { INVALID_EMAIL_MESSAGE, isValidEmail } from "@/lib/email";
 
 const PAGE_SIZE_OPTIONS = ["25", "50", "100"] as const;
 type UserSortField = "username" | "email" | "role" | "enabled" | "created_at" | "last_active_at";
@@ -86,15 +95,25 @@ function normalizeAdminUsersTab(value: string | null): AdminUsersTab {
 }
 
 export default function AdminUsers() {
-  const { data: users = [], isLoading } = useAdminUsers();
+  useAuth();
+  return <AdminUsersPage key={adminUserScope()} />;
+}
+function AdminUsersPage() {
+  const usersQuery = useAdminUsers();
+  const { data: users = [], isLoading } = usersQuery;
+  const capabilities = useAdminUserCapabilities();
+  const available = capabilities.data?.available === true;
+  const [authority] = useState(captureAdminUserAuthority);
+  const [actionError, setActionError] = useState("");
+  const busy = useRef(false);
+  const formBusy = useRef(false);
   const { data: serverSettings } = useAdminServerSettings();
   const signupsEnabled = serverSettings?.["signup.enabled"] === "true";
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = normalizeAdminUsersTab(searchParams.get("tab"));
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
-  const [confirmDeleteUser, setConfirmDeleteUser] = useState<AdminUser | null>(null);
-  const deleteMutation = useDeleteUser();
+  const [editingUser, setEditingUser] = useState<AdminUserEditor | null>(null);
+  const [confirmDeleteUser, setConfirmDeleteUser] = useState<AdminUserEditor | null>(null);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
@@ -127,8 +146,25 @@ export default function AdminUsers() {
     setSortDir(field === "created_at" || field === "last_active_at" ? "desc" : "asc");
   }
 
+  async function loadEditor(u: AdminUser, deleting = false) {
+    if (busy.current || !available) return;
+    busy.current = true;
+    setActionError("");
+    try {
+      const editor = await getAdminUser(u.id, authority);
+      if (deleting) setConfirmDeleteUser(editor);
+      else {
+        setEditingUser(editor);
+        setDialogOpen(true);
+      }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not load user.");
+    } finally {
+      busy.current = false;
+    }
+  }
   function handleDelete(u: AdminUser) {
-    setConfirmDeleteUser(u);
+    void loadEditor(u, true);
   }
 
   function setActiveTab(value: string) {
@@ -157,20 +193,21 @@ export default function AdminUsers() {
 
   return (
     <div className="space-y-6">
-      <ConfirmDialog
-        open={confirmDeleteUser !== null}
-        onOpenChange={(open) => {
-          if (!open) setConfirmDeleteUser(null);
-        }}
-        title="Delete user"
-        description={`Delete user "${confirmDeleteUser?.username}"? This action cannot be undone.`}
-        confirmLabel="Delete"
-        variant="destructive"
-        onConfirm={() => {
-          if (confirmDeleteUser) deleteMutation.mutate(confirmDeleteUser.id);
-          setConfirmDeleteUser(null);
-        }}
-      />
+      {confirmDeleteUser && (
+        <AdminUserDeleteDialog
+          initialEditor={confirmDeleteUser}
+          onClose={() => setConfirmDeleteUser(null)}
+          onDeleted={() => setConfirmDeleteUser(null)}
+        />
+      )}
+      {actionError && <p role="alert">{actionError}</p>}
+      {usersQuery.isError && (
+        <div role="alert">
+          Could not load users.{" "}
+          <Button onClick={() => void usersQuery.refetch()}>Reload users</Button>
+        </div>
+      )}
+      {!available && <p role="status">User administration is unavailable.</p>}
       <div className="page-header">
         <div className="space-y-3">
           <h1 className="page-title text-[clamp(2rem,4vw,3rem)]">Users</h1>
@@ -205,6 +242,7 @@ export default function AdminUsers() {
           <Dialog
             open={dialogOpen}
             onOpenChange={(open) => {
+              if (formBusy.current || (open && !available)) return;
               setDialogOpen(open);
               if (!open) setEditingUser(null);
             }}
@@ -219,7 +257,10 @@ export default function AdminUsers() {
                 <DialogTitle>{editingUser ? "Edit User" : "Create User"}</DialogTitle>
               </DialogHeader>
               <UserForm
-                user={editingUser}
+                initialEditor={editingUser}
+                onBusy={(value) => {
+                  formBusy.current = value;
+                }}
                 onClose={() => {
                   setDialogOpen(false);
                   setEditingUser(null);
@@ -356,8 +397,7 @@ export default function AdminUsers() {
                           className="h-7 w-7"
                           aria-label={`Edit ${u.username}`}
                           onClick={() => {
-                            setEditingUser(u);
-                            setDialogOpen(true);
+                            void loadEditor(u);
                           }}
                         >
                           <Pencil className="h-3 w-3" aria-hidden="true" />
@@ -562,7 +602,44 @@ function formatRelativeTime(value?: string | null, fallback = "-") {
   return fallback;
 }
 
-function UserForm({ user, onClose }: { user: AdminUser | null; onClose: () => void }) {
+function UserForm({
+  initialEditor,
+  onClose,
+  onBusy,
+}: {
+  initialEditor: AdminUserEditor | null;
+  onClose: () => void;
+  onBusy: (busy: boolean) => void;
+}) {
+  const [editor, setEditor] = useState(initialEditor);
+  const user = editor?.user;
+  const [authority] = useState(captureAdminUserAuthority);
+  const busy = useRef(false);
+  const [error, setError] = useState("");
+  const [conflict, setConflict] = useState(false);
+  const [reloading, setReloading] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const capabilities = useAdminUserCapabilities();
+  const [createDefaultProfile, setCreateDefaultProfile] = useState(true);
+  async function reload() {
+    if (!editor || busy.current) return;
+    busy.current = true;
+    setReloading(true);
+    onBusy(true);
+    try {
+      setEditor(await getAdminUser(editor.user.id, editor.profileContext));
+      setConflict(false);
+      setError("");
+      if (saved) onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not reload user.");
+    } finally {
+      busy.current = false;
+      setReloading(false);
+      onBusy(false);
+    }
+  }
+
   const { data: libraries = [] } = useAdminLibraries();
   const { data: accessGroups = [] } = useAccessGroups();
   const [username, setUsername] = useState(user?.username ?? "");
@@ -574,7 +651,7 @@ function UserForm({ user, onClose }: { user: AdminUser | null; onClose: () => vo
     user?.permissions ?? [PERMISSION_MARKER_EDIT],
   );
   // Policy fields inherit from the access group unless explicitly overridden.
-  const [policy, setPolicy] = useState(() => policyStateFromUser(user));
+  const [policy, setPolicy] = useState(() => policyStateFromUser(user ?? null));
   const [maxProfiles, setMaxProfiles] = useState<number>(user?.max_profiles ?? 5);
   const usernameId = useId();
   const emailId = useId();
@@ -596,40 +673,92 @@ function UserForm({ user, onClose }: { user: AdminUser | null; onClose: () => vo
     policyInheritHints(inheritGroupID, accessGroups) ??
     (role === "admin" ? undefined : user?.effective_policy);
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (user) {
-      const body: UpdateUserRequest = {
-        username,
-        email,
-        role,
-        permissions,
-        enabled,
-        max_profiles: maxProfiles,
-        ...policyUpdateFields(policy),
-      };
-      if (role === "admin") {
-        body.access_group_id = effectiveAccessGroupID(role, user.access_group_id);
+    if (
+      busy.current ||
+      conflict ||
+      saved ||
+      !capabilities.data?.available ||
+      (!user && createDefaultProfile && !capabilities.data.default_profile)
+    )
+      return;
+    if (!isValidEmail(email)) {
+      setError(INVALID_EMAIL_MESSAGE);
+      return;
+    }
+    busy.current = true;
+    onBusy(true);
+    setError("");
+    try {
+      if (user && editor) {
+        const body: UpdateUserRequest = {
+          username,
+          email,
+          role,
+          permissions,
+          enabled,
+          max_profiles: maxProfiles,
+          ...policyUpdateFields(policy),
+        };
+        if (role === "admin") {
+          body.access_group_id = effectiveAccessGroupID(role, user.access_group_id);
+        }
+        if (password) body.password = password;
+        await updateMutation.mutateAsync({ editor, body });
+        setSaved(true);
+        await getAdminUser(user.id, editor.profileContext);
+        onClose();
+      } else {
+        const body: CreateUserRequest = {
+          username,
+          email,
+          password,
+          role,
+          permissions,
+          create_default_profile: createDefaultProfile,
+          max_profiles: maxProfiles,
+          ...policyCreateFields(policy),
+        };
+        await createMutation.mutateAsync({ body, profileContext: authority });
+        createMutation.reset();
+        onClose();
       }
-      if (password) body.password = password;
-      updateMutation.mutate({ id: user.id, body }, { onSuccess: onClose });
-    } else {
-      const body: CreateUserRequest = {
-        username,
-        email,
-        password,
-        role,
-        permissions,
-        create_default_profile: true,
-        max_profiles: maxProfiles,
-        ...policyCreateFields(policy),
-      };
-      createMutation.mutate(body, { onSuccess: onClose });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save user.");
+      if (err instanceof V2ProblemError && err.status === 412) setConflict(true);
+    } finally {
+      busy.current = false;
+      onBusy(false);
     }
   }
 
   return (
     <form onSubmit={handleSubmit} className="flex max-h-[70vh] flex-col">
+      {error && <p role="alert">{error}</p>}
+      {(conflict || saved) && (
+        <div>
+          {saved
+            ? "Saved. Reload the user to confirm the current state."
+            : "Your draft is preserved. Reload before submitting again."}
+          <Button type="button" disabled={reloading} onClick={() => void reload()}>
+            Reload current user
+          </Button>
+        </div>
+      )}
+      {!user && (
+        <label className="mb-3 flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={createDefaultProfile}
+            onChange={(event) => setCreateDefaultProfile(event.target.checked)}
+          />
+          Create a default profile
+          {!capabilities.data?.default_profile &&
+            " (unavailable; uncheck to create only the account)"}
+        </label>
+      )}
+
       <Tabs defaultValue="account" className="min-h-0 flex-1">
         <TabsList variant="line" className="border-border mb-4 w-full justify-start border-b pb-1">
           <TabsTrigger value="account" className="flex-none px-1">
@@ -768,7 +897,18 @@ function UserForm({ user, onClose }: { user: AdminUser | null; onClose: () => vo
       </Tabs>
 
       <div className="border-border mt-4 border-t pt-4">
-        <Button type="submit" className="w-full" disabled={isPending}>
+        <Button
+          type="submit"
+          className="w-full"
+          disabled={
+            isPending ||
+            conflict ||
+            saved ||
+            reloading ||
+            !capabilities.data?.available ||
+            (!user && createDefaultProfile && !capabilities.data.default_profile)
+          }
+        >
           {isPending ? "Saving..." : "Save"}
         </Button>
       </div>

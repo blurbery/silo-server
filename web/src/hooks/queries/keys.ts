@@ -291,7 +291,6 @@ export const mediaSurfaceKeys = {
 export const ratingKeys = {
   all: ["ratings"] as const,
   item: (itemId: string) => ["ratings", itemId] as const,
-  community: (itemId: string) => ["ratings", itemId, "community"] as const,
   list: () => ["ratings", "list"] as const,
 };
 
@@ -354,8 +353,8 @@ export const adminKeys = {
   deviceDetail: (userId: number, deviceId: string) =>
     ["admin", "devices", userId, deviceId] as const,
   libraries: () => ["admin", "libraries"] as const,
-  libraryRoots: (libraryId?: number, state?: string) =>
-    ["admin", "libraries", "roots", libraryId ?? "all", state ?? "all"] as const,
+  libraryRoots: (libraryId?: number, state?: string, search?: string) =>
+    ["admin", "libraries", "roots", libraryId ?? "all", state ?? "all", search ?? ""] as const,
   libraryMatchQueueStatuses: () => ["admin", "libraries", "metadataMatchQueue"] as const,
   libraryMatchQueueDetail: (libraryId: number) =>
     ["admin", "libraries", "metadataMatchQueue", libraryId] as const,
@@ -421,14 +420,14 @@ export const adminKeys = {
   policyCapability: () => ["policy", "capability"] as const,
   policyVendor: () => ["admin", "policy", "vendor"] as const,
   policyDocuments: () => ["admin", "policy", "documents"] as const,
-  policyDocument: (id?: number) => ["admin", "policy", "documents", id ?? "none"] as const,
-  policyVersions: (id?: number) =>
+  policyDocument: (id?: string) => ["admin", "policy", "documents", id ?? "none"] as const,
+  policyVersions: (id?: string) =>
     ["admin", "policy", "documents", id ?? "none", "versions"] as const,
-  policyVersion: (id?: number, version?: number) =>
+  policyVersion: (id?: string, version?: string) =>
     ["admin", "policy", "documents", id ?? "none", "versions", version ?? "none"] as const,
   policyDecisions: (params: Record<string, unknown>) =>
     ["admin", "policy", "decisions", params] as const,
-  policyDecision: (id?: number) => ["admin", "policy", "decisions", id ?? "none"] as const,
+  policyDecision: (id?: string) => ["admin", "policy", "decisions", id ?? "none"] as const,
   subtitleProviders: () => ["admin", "subtitleProviders"] as const,
   downloadedSubtitles: (params: {
     provider?: string;
@@ -465,9 +464,9 @@ export const adminKeys = {
   pluginCatalog: () => ["admin", "plugins", "catalog"] as const,
   pluginCatalogSettings: () => ["admin", "plugins", "catalogSettings"] as const,
   pluginInstallations: () => ["admin", "plugins", "installations"] as const,
-  unmatchedItems: (page?: number, search?: string) =>
-    page != null
-      ? (["admin", "libraries", "unmatchedItems", page, search ?? ""] as const)
+  unmatchedItems: (search?: string) =>
+    search !== undefined
+      ? (["admin", "libraries", "unmatchedItems", search] as const)
       : (["admin", "libraries", "unmatchedItems"] as const),
   itemImages: (id: string) => ["admin", "items", id, "images"] as const,
   buildInfo: () => ["admin", "system", "buildInfo"] as const,

@@ -78,6 +78,10 @@ func (s *Service) BuildBatchManifests(ctx context.Context, userID int, profileID
 	if len(rows) == 0 {
 		return nil, nil, ErrNotFound
 	}
+	return s.buildBatchManifestRows(ctx, rows, filter)
+}
+
+func (s *Service) buildBatchManifestRows(ctx context.Context, rows []*Download, filter catalog.AccessFilter) ([]*OfflineManifest, []SkippedManifest, error) {
 	out := make([]*OfflineManifest, 0, len(rows))
 	skipped := make([]SkippedManifest, 0)
 	seriesCache := make(map[string]*catalog.ItemDetail, 1)
@@ -92,7 +96,7 @@ func (s *Service) BuildBatchManifests(ctx context.Context, userID int, profileID
 			if errors.Is(err, catalog.ErrItemNotFound) {
 				reason = "not_found"
 			} else {
-				slog.WarnContext(ctx, "batch manifest build failed", "component", "downloads", "download_id", dl.ID, "batch_id", batchID, "error", err)
+				slog.WarnContext(ctx, "batch manifest build failed", "component", "downloads", "download_id", dl.ID, "batch_id", dl.BatchID, "error", err)
 			}
 			skipped = append(skipped, SkippedManifest{DownloadID: dl.ID, Reason: reason})
 			continue

@@ -2,6 +2,7 @@ package taskmanager
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 	"sync"
@@ -68,7 +69,7 @@ func (m *TaskManager) Start(ctx context.Context) {
 		if err != nil {
 			m.logger.ErrorContext(ctx, "failed to load triggers", "task", key, "error", err)
 		}
-		if len(configs) == 0 {
+		if configs == nil {
 			configs = w.task.DefaultTriggers()
 			if len(configs) > 0 {
 				if err := m.triggerRepo.SetTriggers(ctx, key, configs); err != nil {
@@ -256,6 +257,28 @@ func (m *TaskManager) RunTask(ctx context.Context, key string) error {
 	return nil
 }
 
+// StartTask starts work on this process after synchronously reserving its worker.
+// It does not persist work intent or guarantee execution after a process failure.
+func (m *TaskManager) StartTask(key string) (TaskInfo, error) {
+	w, err := m.getWorker(key)
+	if err != nil {
+		return TaskInfo{}, err
+	}
+	ctx, cancel, err := w.reserve(context.Background())
+	if err != nil {
+		return TaskInfo{}, err
+	}
+	info := w.info()
+	go func() {
+		result := w.executeReserved(ctx, cancel)
+		if err := m.historyRepo.Insert(context.Background(), *result); err != nil {
+			m.logger.Error("failed to persist execution result", "task", key, "error", err)
+		}
+		m.rearmTriggers(w)
+	}()
+	return info, nil
+}
+
 // CancelTask requests cancellation of a running task.
 func (m *TaskManager) CancelTask(key string) error {
 	w, err := m.getWorker(key)
@@ -296,6 +319,8 @@ func (m *TaskManager) UpdateTriggers(key string, triggerConfigs []TriggerConfig)
 	if err != nil {
 		return err
 	}
+	w.scheduleMu.Lock()
+	defer w.scheduleMu.Unlock()
 	if task, ok := w.task.(ManualOnlyTask); ok && task.ManualOnly() && len(triggerConfigs) > 0 {
 		return ErrTaskManualOnly
 	}
@@ -307,6 +332,42 @@ func (m *TaskManager) UpdateTriggers(key string, triggerConfigs []TriggerConfig)
 	w.setTriggers(triggerConfigs, m.triggerFactory, nil, true)
 	m.notifyTaskUpdated(w.info())
 	return nil
+}
+
+// GetSchedule reads the durable editor state rather than a live trigger snapshot.
+func (m *TaskManager) GetSchedule(ctx context.Context, key string) (Schedule, error) {
+	if _, err := m.getWorker(key); err != nil {
+		return Schedule{}, err
+	}
+	repo, ok := m.triggerRepo.(GuardedTriggerRepository)
+	if !ok {
+		return Schedule{}, fmt.Errorf("guarded task schedules unavailable")
+	}
+	return repo.GetSchedule(ctx, key)
+}
+
+// UpdateSchedule persists under the original revision and installs that schedule
+// on this process. Other running processes do not automatically reload it.
+func (m *TaskManager) UpdateSchedule(ctx context.Context, key string, expected int64, configs []TriggerConfig) (Schedule, error) {
+	w, err := m.getWorker(key)
+	if err != nil {
+		return Schedule{}, err
+	}
+	if task, ok := w.task.(ManualOnlyTask); ok && task.ManualOnly() && len(configs) > 0 {
+		return Schedule{}, ErrTaskManualOnly
+	}
+	repo, ok := m.triggerRepo.(GuardedTriggerRepository)
+	if !ok {
+		return Schedule{}, fmt.Errorf("guarded task schedules unavailable")
+	}
+	w.scheduleMu.Lock()
+	defer w.scheduleMu.Unlock()
+	saved, err := repo.ReplaceSchedule(ctx, key, expected, configs)
+	if err != nil {
+		return Schedule{}, err
+	}
+	w.setTriggers(saved.Triggers, m.triggerFactory, nil, true)
+	return saved, nil
 }
 
 func (m *TaskManager) notifyTaskUpdated(info TaskInfo) {

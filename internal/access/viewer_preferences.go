@@ -44,6 +44,29 @@ func ResolveViewerPreferences(
 	return resolved.preferences
 }
 
+// ViewerPreferenceReader is the bounded settings read needed by viewer policy.
+type ViewerPreferenceReader interface {
+	settingsresolve.Store
+	GetSetting(context.Context, string) (string, error)
+}
+
+// ResolveViewerPreferencesStrict retains canonical precedence but propagates
+// dependency failures instead of weakening authority through a fallback.
+func ResolveViewerPreferencesStrict(ctx context.Context, store ViewerPreferenceReader, profileID string) (ViewerPreferences, error) {
+	resolved, err := canonicalViewerPreferencesStrict(ctx, store, profileID)
+	if err != nil {
+		return ViewerPreferences{}, err
+	}
+	if !resolved.disabledLibraryIDsSet {
+		raw, err := store.GetSetting(ctx, settingKeyDisabledLibraryIDs)
+		if err != nil {
+			return ViewerPreferences{}, err
+		}
+		resolved.preferences.DisabledLibraryIDs = parseLibraryIDList(json.RawMessage(raw))
+	}
+	return resolved.preferences, nil
+}
+
 type canonicalViewerPreferences struct {
 	preferences           ViewerPreferences
 	disabledLibraryIDsSet bool
@@ -52,11 +75,17 @@ type canonicalViewerPreferences struct {
 func resolveCanonicalViewerPreferences(
 	ctx context.Context, store userstore.UserStore, profileID string,
 ) (canonicalViewerPreferences, bool) {
+	out, err := canonicalViewerPreferencesStrict(ctx, store, profileID)
+	if err != nil {
+		slog.WarnContext(ctx, "viewer preference resolution degraded", "component", "access", "profile_id", profileID, "error", err)
+		return canonicalViewerPreferences{}, false
+	}
+	return out, true
+}
+func canonicalViewerPreferencesStrict(ctx context.Context, store ViewerPreferenceReader, profileID string) (canonicalViewerPreferences, error) {
 	contract, err := settingscontract.Load()
 	if err != nil {
-		slog.WarnContext(ctx, "viewer preference resolution degraded: loading settings contract failed",
-			"component", "access", "profile_id", profileID, "error", err)
-		return canonicalViewerPreferences{}, false
+		return canonicalViewerPreferences{}, err
 	}
 	values, err := settingsresolve.New(contract).Resolve(ctx, store,
 		settingsresolve.Context{ProfileID: profileID},
@@ -66,9 +95,7 @@ func resolveCanonicalViewerPreferences(
 			settingskeys.CatalogMetadataLanguageOverrides,
 		}, nil)
 	if err != nil {
-		slog.WarnContext(ctx, "viewer preference resolution degraded: reading setting values failed",
-			"component", "access", "profile_id", profileID, "error", err)
-		return canonicalViewerPreferences{}, false
+		return canonicalViewerPreferences{}, err
 	}
 
 	var out canonicalViewerPreferences
@@ -88,7 +115,7 @@ func resolveCanonicalViewerPreferences(
 			out.preferences.MetadataLanguageOverrides = parseMetadataLanguageOverrides(value.Value)
 		}
 	}
-	return out, true
+	return out, nil
 }
 
 // OriginalMetadataLanguage is a private-use BCP 47 tag stored in

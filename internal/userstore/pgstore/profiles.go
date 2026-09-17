@@ -96,12 +96,20 @@ func createProfile(
 }
 
 func (s *PostgresUserStore) GetProfile(ctx context.Context, id string) (*userstore.Profile, error) {
-	row := s.pool.QueryRow(ctx, `
+	return getProfile(ctx, s.pool, s.userID, id)
+}
+
+// ProfileInTransaction reuses the owning profile and library membership read.
+func ProfileInTransaction(ctx context.Context, tx pgx.Tx, userID int, id string) (*userstore.Profile, error) {
+	return getProfile(ctx, tx, userID, id)
+}
+func getProfile(ctx context.Context, db preferenceSettingsExecutor, userID int, id string) (*userstore.Profile, error) {
+	row := db.QueryRow(ctx, `
 		SELECT id, name, avatar, pin_hash, is_child, is_primary, max_content_rating,
 		       quality_preference, language, preferred_metadata_language, subtitle_language, subtitle_mode,
 		       auto_skip_intro, auto_skip_credits, auto_skip_recap, auto_play_next_preview, library_restrictions_enabled,
 		       show_forced_subtitles, max_playback_quality, created_at, updated_at
-		FROM user_profiles WHERE user_id = $1 AND id = $2`, s.userID, id)
+		FROM user_profiles WHERE user_id = $1 AND id = $2`, userID, id)
 
 	p, err := scanProfile(row)
 	if err == pgx.ErrNoRows {
@@ -110,7 +118,7 @@ func (s *PostgresUserStore) GetProfile(ctx context.Context, id string) (*usersto
 	if err != nil {
 		return nil, fmt.Errorf("querying profile %s: %w", id, err)
 	}
-	p.AllowedLibraryIDs, err = listProfileAllowedLibraries(ctx, s.pool, s.userID, p.ID)
+	p.AllowedLibraryIDs, err = listProfileAllowedLibraries(ctx, db, userID, p.ID)
 	if err != nil {
 		return nil, err
 	}

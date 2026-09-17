@@ -410,14 +410,19 @@ func (m *handlerMockSubtitleRepo) UpdateDownloadedSubtitle(_ context.Context, id
 	if !ok {
 		return nil, nil
 	}
-	sub.Language = update.Language
-	sub.ReleaseName = update.ReleaseName
-	sub.HearingImpaired = update.HearingImpaired
-	if sub.S3Key != update.S3Key {
-		delete(m.byKey, sub.S3Key)
-		sub.S3Key = update.S3Key
-		m.byKey[sub.S3Key] = sub
+	if update.Language != nil {
+		sub.Language = *update.Language
 	}
+	if update.ReleaseName != nil {
+		sub.ReleaseName = *update.ReleaseName
+	}
+	if update.HearingImpaired != nil {
+		sub.HearingImpaired = *update.HearingImpaired
+	}
+	if update.ContentSHA256 != "" {
+		sub.ContentSHA256 = update.ContentSHA256
+	}
+	sub.Revision++
 	copy := *sub
 	return &copy, nil
 }
@@ -450,4 +455,14 @@ func (handlerMockS3Client) GetObject(context.Context, string, string) ([]byte, e
 
 func (handlerMockS3Client) DeleteObject(context.Context, string, string) error {
 	return nil
+}
+
+func (m *handlerMockSubtitleRepo) GetDownloadedSubtitleByContent(_ context.Context, content *subtitles.DownloadedSubtitle) (*subtitles.DownloadedSubtitle, error) {
+	for _, sub := range m.subtitles {
+		if content.ContentSHA256 != "" && sub.MediaFileID == content.MediaFileID && sub.Provider == content.Provider && sub.Language == content.Language && sub.Format == content.Format && sub.ContentSHA256 == content.ContentSHA256 {
+			copy := *sub
+			return &copy, nil
+		}
+	}
+	return nil, nil
 }

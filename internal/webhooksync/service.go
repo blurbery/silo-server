@@ -1,10 +1,13 @@
 package webhooksync
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -214,7 +217,17 @@ func (s *Service) CreateEventLog(ctx context.Context, entry WebhookEventLog) (*W
 	return s.repo.CreateEventLog(ctx, entry)
 }
 
+var ErrWebhookTooLarge = errors.New("webhook body exceeds limit")
+var ErrWebhookBody = errors.New("invalid webhook body")
+
 func (s *Service) ProcessWebhook(ctx context.Context, secret string, r *http.Request) (*ProcessWebhookResult, error) {
+	return s.ProcessWebhookBounded(ctx, secret, r, 0)
+}
+
+// ProcessWebhookBounded authenticates the receiver secret before reading the body.
+// A positive limit bounds the entire delivery before provider parsing or side effects.
+// Zero preserves the frozen bridge's provider-specific parsing behavior.
+func (s *Service) ProcessWebhookBounded(ctx context.Context, secret string, r *http.Request, limit int64) (*ProcessWebhookResult, error) {
 	conn, err := s.repo.GetConnectionBySecret(ctx, secret)
 	if err != nil {
 		return nil, err
@@ -222,6 +235,27 @@ func (s *Service) ProcessWebhook(ctx context.Context, secret string, r *http.Req
 	result := &ProcessWebhookResult{
 		ConnectionID: conn.ID,
 		Provider:     conn.Provider,
+	}
+	if limit > 0 {
+		body, readErr := io.ReadAll(io.LimitReader(r.Body, limit+1))
+		if int64(len(body)) > limit {
+			readErr = ErrWebhookTooLarge
+		} else if readErr != nil {
+			readErr = ErrWebhookBody
+		}
+		if readErr != nil {
+			result.Outcome = OutcomeRejected
+			result.Summary = "Rejected invalid webhook body"
+			result.ErrorMessage = readErr.Error()
+			_ = s.repo.MarkWebhookError(ctx, conn.ID, readErr.Error())
+			return result, readErr
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		defer func() {
+			if r.MultipartForm != nil {
+				_ = r.MultipartForm.RemoveAll()
+			}
+		}()
 	}
 	provider, err := s.provider(conn.Provider)
 	if err != nil {

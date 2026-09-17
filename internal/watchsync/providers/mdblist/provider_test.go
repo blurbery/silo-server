@@ -3,6 +3,7 @@ package mdblist
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -72,6 +73,23 @@ func TestConnectWithAPIKeyRejectsEmpty(t *testing.T) {
 	p := NewProvider(http.DefaultClient, "http://127.0.0.1")
 	if _, _, err := p.ConnectWithAPIKey(context.Background(), "   "); err == nil {
 		t.Fatal("expected empty key to be rejected")
+	}
+}
+
+func TestConnectWithAPIKeyReportsRejectedKeyAsInvalidCredential(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+		}))
+		p := NewProvider(server.Client(), server.URL)
+		_, _, err := p.ConnectWithAPIKey(context.Background(), "wrong-key")
+		if !errors.Is(err, watchsync.ErrInvalidCredential) {
+			t.Fatalf("status %d: err = %v, want watchsync.ErrInvalidCredential", status, err)
+		}
+		if !watchsync.IsInvalidCredentialError(err) {
+			t.Fatalf("status %d: provider rejection not classified as invalid credential", status)
+		}
+		server.Close()
 	}
 }
 

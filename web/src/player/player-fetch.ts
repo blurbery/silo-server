@@ -23,24 +23,22 @@ export class PlayerFetchError extends Error {
 }
 
 /**
- * Performs an authenticated fetch against the configured API.
- * Returns the parsed JSON body for 2xx responses, undefined when the response
- * carries no body.
- * Throws PlayerFetchError for non-2xx responses.
+ * The auth, profile and device headers every player request carries, built
+ * from PlayerConfig so a host that embeds the player elsewhere keeps control
+ * of them. `hasJsonBody` adds the JSON content type for a non-FormData body.
  */
-export async function playerFetch<T>(
+export function playerRequestHeaders(
   config: PlayerConfig,
-  path: string,
-  options: RequestInit = {},
-): Promise<T> {
+  base: HeadersInit | undefined,
+  hasJsonBody: boolean,
+): Record<string, string> {
   const headers: Record<string, string> = {
-    ...(options.headers as Record<string, string>),
+    ...(base as Record<string, string>),
   };
-  if (!(options.body instanceof FormData)) {
+  if (hasJsonBody) {
     headers["Content-Type"] = "application/json";
   }
 
-  const authContext = config.getAuthContext?.();
   const token = config.getAccessToken();
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
@@ -57,8 +55,30 @@ export async function playerFetch<T>(
   }
 
   headers["X-Silo-Device-Id"] = config.getDeviceId();
+  return headers;
+}
 
-  let res = await fetch(`${config.apiBaseUrl}${path}`, {
+/**
+ * Performs one authenticated request and retries a late 401 after rotating the
+ * access token for the same account. Callers that need to decode a typed
+ * response can share this boundary without reimplementing auth recovery.
+ */
+export async function playerFetchResponse(
+  config: PlayerConfig,
+  url: string,
+  options: RequestInit = {},
+): Promise<Response> {
+  // Capture the auth context and token the headers are built from so a late
+  // 401 can tell same-account token rotation apart from a changed viewer.
+  const authContext = config.getAuthContext?.();
+  const token = config.getAccessToken();
+  const headers = playerRequestHeaders(
+    config,
+    options.headers,
+    options.body != null && !(options.body instanceof FormData),
+  );
+
+  let res = await fetch(url, {
     ...options,
     headers,
   });
@@ -81,12 +101,28 @@ export async function playerFetch<T>(
     ) {
       // Keep the original profile/PIN, device, body, and abort signal. Only
       // same-account token rotation may change authority during this retry.
-      res = await fetch(`${config.apiBaseUrl}${path}`, {
+      res = await fetch(url, {
         ...options,
         headers: { ...headers, Authorization: `Bearer ${refreshedToken}` },
       });
     }
   }
+
+  return res;
+}
+
+/**
+ * Performs an authenticated fetch against the configured API.
+ * Returns the parsed JSON body for 2xx responses, undefined when the response
+ * carries no body.
+ * Throws PlayerFetchError for non-2xx responses.
+ */
+export async function playerFetch<T>(
+  config: PlayerConfig,
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const res = await playerFetchResponse(config, `${config.apiBaseUrl}${path}`, options);
 
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);

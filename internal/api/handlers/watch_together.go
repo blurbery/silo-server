@@ -402,7 +402,7 @@ func (h *WatchTogetherHandler) HandleListSuggestions(w http.ResponseWriter, r *h
 		return
 	}
 
-	suggestions, err := h.Service.ListSuggestions(r.Context(), roomID, profileID)
+	suggestions, err := h.Service.ListSuggestions(r.Context(), roomID, userID, profileID)
 	if err != nil {
 		switch {
 		case errors.Is(err, watchtogether.ErrRoomNotFound):
@@ -696,11 +696,16 @@ func (h *WatchTogetherHandler) HandleRoomWebSocket(w http.ResponseWriter, r *htt
 	}
 	defer conn.Close()
 
+	h.serveRoomConnection(r.Context(), conn, roomID, claims.UserID, profileID)
+}
+
+// serveRoomConnection preserves the existing room message and disconnect loop.
+func (h *WatchTogetherHandler) serveRoomConnection(parent context.Context, conn *websocket.Conn, roomID string, userID int, profileID string) {
 	realtimeConn := &watchTogetherRoomConn{conn: conn}
-	ctx, cancel := context.WithCancel(r.Context())
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
-	reg, snapshot, err := h.Service.Connect(ctx, roomID, claims.UserID, profileID, realtimeConn)
+	reg, snapshot, err := h.Service.Connect(ctx, roomID, userID, profileID, realtimeConn)
 	if err != nil {
 		// Terminal failures use room_closed so clients stop reconnecting
 		// instead of retrying a room that will never come back.
@@ -722,7 +727,7 @@ func (h *WatchTogetherHandler) HandleRoomWebSocket(w http.ResponseWriter, r *htt
 	conn.SetPongHandler(func(string) error {
 		_ = conn.SetReadDeadline(time.Now().Add(wsPingInterval + wsPongTimeout))
 		if sentAt := realtimeConn.TakePingSentAt(); !sentAt.IsZero() {
-			_ = h.Service.HandlePingForConnection(ctx, reg, claims.UserID, profileID, time.Since(sentAt).Milliseconds())
+			_ = h.Service.HandlePingForConnection(ctx, reg, userID, profileID, time.Since(sentAt).Milliseconds())
 		}
 		return nil
 	})
@@ -743,7 +748,7 @@ func (h *WatchTogetherHandler) HandleRoomWebSocket(w http.ResponseWriter, r *htt
 			return
 		}
 
-		if err := h.handleRoomClientMessage(ctx, realtimeConn, reg, claims.UserID, profileID, data); err != nil {
+		if err := h.handleRoomClientMessage(ctx, realtimeConn, reg, userID, profileID, data); err != nil {
 			realtimeConn.WriteError("bad_request", err.Error())
 		}
 	}

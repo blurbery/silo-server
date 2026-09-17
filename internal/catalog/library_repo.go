@@ -239,6 +239,17 @@ func (r *LibraryItemRepository) GetItemsInFolders(ctx context.Context, contentID
 // (placeholder numbering, the parent-series join for episodes, the optional
 // rating predicate) is unit-testable without a database.
 func (r *LibraryItemRepository) FilterAccessibleContentIDs(ctx context.Context, contentIDs []string, allowedFolderIDs, disabledFolderIDs []int, maxContentRating string) (map[string]bool, error) {
+	return filterAccessibleContentIDs(ctx, r.pool, contentIDs, allowedFolderIDs, disabledFolderIDs, maxContentRating)
+}
+
+// FilterAccessibleContentIDsInTransaction uses the same catalog visibility query
+// as ordinary reads, in the caller's consistent snapshot.
+func FilterAccessibleContentIDsInTransaction(ctx context.Context, tx pgx.Tx, contentIDs []string, allowedFolderIDs, disabledFolderIDs []int, maxContentRating string) (map[string]bool, error) {
+	return filterAccessibleContentIDs(ctx, tx, contentIDs, allowedFolderIDs, disabledFolderIDs, maxContentRating)
+}
+func filterAccessibleContentIDs(ctx context.Context, db interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}, contentIDs []string, allowedFolderIDs, disabledFolderIDs []int, maxContentRating string) (map[string]bool, error) {
 	result := make(map[string]bool, len(contentIDs))
 	if len(contentIDs) == 0 {
 		return result, nil
@@ -259,7 +270,7 @@ func (r *LibraryItemRepository) FilterAccessibleContentIDs(ctx context.Context, 
 
 	query, args := buildFilterAccessibleContentIDsSQL(contentIDs, allowedFolderIDs, disabledFolderIDs, allowedRatings)
 
-	rows, err := r.pool.Query(ctx, query, args...)
+	rows, err := db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("filtering accessible content ids: %w", err)
 	}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/Silo-Server/silo-server/internal/catalog"
 	"github.com/Silo-Server/silo-server/internal/models"
+	"github.com/Silo-Server/silo-server/internal/settingscontract"
 	"github.com/Silo-Server/silo-server/internal/userstore"
 )
 
@@ -339,6 +340,9 @@ func (s *progressCountingStore) GetProgress(context.Context, string, string) (*u
 func (s *progressCountingStore) ListProgress(context.Context, string, string, int, int) ([]userstore.WatchProgress, error) {
 	panic("unused")
 }
+func (s *progressCountingStore) ListProgressPage(context.Context, string, string, *userstore.ProgressKey, int) ([]userstore.WatchProgress, error) {
+	panic("unused")
+}
 func (s *progressCountingStore) ListProgressFiltered(context.Context, string, string, []string, *int, int, int) ([]userstore.WatchProgress, error) {
 	panic("unused")
 }
@@ -352,6 +356,9 @@ func (s *progressCountingStore) AddHistoryIfMissing(context.Context, userstore.W
 	panic("unused")
 }
 func (s *progressCountingStore) ListHistory(context.Context, string, int, int) ([]userstore.WatchHistoryEntry, error) {
+	panic("unused")
+}
+func (s *progressCountingStore) ListHistoryPage(context.Context, string, *userstore.HistoryKey, int) ([]userstore.WatchHistoryEntry, error) {
 	panic("unused")
 }
 func (s *progressCountingStore) ListCompletedHistory(context.Context, userstore.CompletedHistoryQuery) ([]userstore.WatchHistoryEntry, error) {
@@ -385,10 +392,19 @@ func (s *progressCountingStore) RemoveFavorite(context.Context, string, string) 
 func (s *progressCountingStore) ListFavorites(context.Context, string, int, int) ([]userstore.Favorite, error) {
 	panic("unused")
 }
+func (s *progressCountingStore) ListFavoritesPage(context.Context, string, *userstore.ListKey, int) ([]userstore.Favorite, error) {
+	panic("unused")
+}
 func (s *progressCountingStore) ListFavoritesByMediaItems(context.Context, string, []string) (map[string]bool, error) {
 	panic("unused")
 }
 func (s *progressCountingStore) IsFavorite(context.Context, string, string) (bool, error) {
+	panic("unused")
+}
+func (s *progressCountingStore) GetFavorite(context.Context, string, string) (*userstore.Favorite, error) {
+	panic("unused")
+}
+func (s *progressCountingStore) GetWatchlistEntry(context.Context, string, string) (*userstore.WatchlistEntry, error) {
 	panic("unused")
 }
 func (s *progressCountingStore) AddToWatchlist(context.Context, string, string) error {
@@ -407,6 +423,9 @@ func (s *progressCountingStore) ReplaceWatchlistOrder(context.Context, string, [
 	panic("unused")
 }
 func (s *progressCountingStore) ListWatchlist(context.Context, string, int, int) ([]userstore.WatchlistEntry, error) {
+	panic("unused")
+}
+func (s *progressCountingStore) ListWatchlistPage(context.Context, string, *userstore.ListKey, int) ([]userstore.WatchlistEntry, error) {
 	panic("unused")
 }
 func (s *progressCountingStore) ListWatchlistByMediaItems(context.Context, string, []string) (map[string]bool, error) {
@@ -570,6 +589,9 @@ func (s *progressCountingStore) ListSettingValuesForResolution(context.Context, 
 	panic("unused")
 }
 func (s *progressCountingStore) ListAllSettingValues(context.Context) ([]userstore.SettingValue, error) {
+	panic("unused")
+}
+func (s *progressCountingStore) ListSettingValuesByScope(context.Context, string, settingscontract.Scope, []string) ([]userstore.SettingValue, error) {
 	panic("unused")
 }
 func (s *progressCountingStore) UpsertSettingValue(context.Context, userstore.SettingIdentity, json.RawMessage) (*userstore.SettingValue, error) {
@@ -1136,4 +1158,8 @@ func TestSeasonUserDataFromCountsMatchesEpisodeRollup(t *testing.T) {
 	if empty := catalog.SeasonUserDataFromCounts(userstore.SeriesWatchCounts{}); *empty != (catalog.SeasonUserData{}) {
 		t.Fatalf("zero counts must produce the empty rollup, got %+v", empty)
 	}
+}
+
+func (s *progressCountingStore) LatestHistoryIDs(context.Context, string, map[string][]string) (map[string]string, error) {
+	return nil, nil
 }

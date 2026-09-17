@@ -277,7 +277,7 @@ function TaskRow({
             </div>
             <div className="text-muted-foreground flex items-center justify-between gap-3 text-xs">
               <p className="min-w-0 truncate">
-                {task.state === "cancelling" ? "Cancelling..." : task.progress_message || "Running"}
+                {task.state === "cancelling" ? "Cancelling..." : "Running"}
               </p>
               {task.state !== "cancelling" && task.progress > 0 && (
                 <span className="shrink-0 font-medium tabular-nums">

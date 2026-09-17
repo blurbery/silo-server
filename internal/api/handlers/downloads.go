@@ -446,28 +446,7 @@ func (h *DownloadHandler) handleDownloadFile(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	profileID, deviceID, _, _ := managedIdentity(r)
-	filter := requestAccessFilter(r)
-	serveCtx := downloads.WithServeAuthorized(r.Context(), func(target downloads.FileTarget) {
-		attachTransfer(r.Context(), userID, profileID, target.MediaFileID)
-	})
-	if delegate && deviceID != "" {
-		handled, err := h.redirectManagedDownload(r.Context(), w, r, userID, profileID, deviceID, id, filter)
-		if err != nil {
-			h.writeDownloadFileError(w, r, id, err)
-			return
-		}
-		if handled {
-			return
-		}
-	}
-	// Full media downloads outlive the server's absolute WriteTimeout; roll
-	// the write deadline with progress instead.
-	sw := httpstream.NewRollingDeadlineWriter(w)
-	if err := h.svc.ServeFile(serveCtx, sw, r, userID, profileID, deviceID, id, filter); err != nil {
-		if errors.Is(err, downloads.ErrResponseCommitted) {
-			return
-		}
+	if err := h.ServeDownloadFile(w, r, id, delegate); err != nil {
 		h.writeDownloadFileError(w, r, id, err)
 	}
 }

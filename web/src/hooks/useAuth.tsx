@@ -1,28 +1,20 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
-  api,
   ApiClientError,
   bootstrapAccessToken,
   getAccessToken,
   onProfileUnverified,
-  restoreUserSession,
   setAccessToken,
   setProfileId,
   setProfileToken,
   setRefreshToken,
 } from "@/api/client";
 import { storage } from "@/utils/storage";
-import type {
-  AuthProviderOption,
-  LoginResponse,
-  Profile,
-  SetupRequest,
-  SetupStatusResponse,
-  SignupRequest,
-  User,
-  VerifyPinResponse,
-} from "@/api/types";
+import type { LoginResponse, Profile, User } from "@/api/types";
+import { v2, V2ProblemError, type V2Result } from "@/api/v2/request";
+import { listProfiles, verifyProfilePIN, type ProfileVerification } from "@/hooks/queries/profiles";
+import { restoreUserSession, sessionFromTokenPair, userFromAccount } from "@/api/v2/account";
 import { queryClient } from "@/lib/query-client";
 import {
   clearStoredImpersonationAdminSession,
@@ -31,12 +23,19 @@ import {
   type StoredImpersonationAdminSession,
 } from "@/lib/impersonationSession";
 
+/** One sign-in option the server offers, as the v2 listAuthProviders operation describes it. */
+export type AuthProviderOption = V2Result<"GET /api/v2/auth/providers">["items"][number];
+
 interface AuthState {
   user: User | null;
   profile: Profile | null;
   loading: boolean;
   setupLoading: boolean;
   setupRequired: boolean;
+  /** The first-run wizard was finished on this server; /setup must not reopen. */
+  setupCompleted: boolean;
+  /** Re-reads the public setup status, e.g. after the wizard records completion. */
+  refreshSetupStatus: () => Promise<void>;
   providers: AuthProviderOption[];
   isImpersonating: boolean;
   login: (username: string, password: string, provider?: string) => Promise<void>;
@@ -47,7 +46,7 @@ interface AuthState {
   endImpersonation: () => Promise<void>;
   logout: () => void;
   selectProfile: (profile: Profile, profileToken?: string) => void;
-  verifyProfilePin: (profileId: string, pin: string) => Promise<VerifyPinResponse>;
+  verifyProfilePin: (profileId: string, pin: string) => Promise<ProfileVerification>;
   clearProfile: () => void;
 }
 
@@ -65,6 +64,14 @@ export function getBootstrapProfile(profiles: Profile[]): Profile | null {
 }
 
 function isRecoverableImpersonationAuthError(error: unknown): boolean {
+  // The current-user fetch and endImpersonation run over v2 and fail with a
+  // Problem: a stale session is 401, and a session the server no longer
+  // considers impersonating is 409 `conflict`. The ApiClientError branch keeps
+  // the v1 admin impersonate flow's answers recoverable.
+  if (error instanceof V2ProblemError) {
+    return error.status === 401 || (error.status === 409 && error.problemType === "conflict");
+  }
+
   if (!(error instanceof ApiClientError)) {
     return false;
   }
@@ -198,6 +205,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [setupLoading, setSetupLoading] = useState(true);
   const [setupRequired, setSetupRequired] = useState(false);
+  const [setupCompleted, setSetupCompleted] = useState(false);
   const [providers, setProviders] = useState<AuthProviderOption[]>([]);
   const isImpersonating = Boolean(user?.impersonation?.active);
   const soleProfileBootstrapRef = useRef<string | null>(null);
@@ -260,7 +268,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const restoreAdminUser = useCallback(
     async (storedSession: { accessToken: string; refreshToken: string }) => {
-      const restoredSession = await restoreUserSession<User>(storedSession);
+      const restoredSession = await restoreUserSession(storedSession);
       clearProfile();
       queryClient.clear();
       setAccessToken(restoredSession.accessToken);
@@ -307,7 +315,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const endImpersonation = useCallback(async () => {
     await endImpersonationWithRecovery({
-      endImpersonationRequest: () => api("/auth/impersonation/end", { method: "POST" }),
+      endImpersonationRequest: () => v2("POST /api/v2/auth/impersonation/end"),
       loadStoredImpersonationAdminSession,
       restoreAdminUser,
       clearAuthState,
@@ -315,20 +323,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, [clearActiveAuthState, clearAuthState, restoreAdminUser]);
 
+  const refreshSetupStatus = useCallback(async () => {
+    try {
+      const status = await v2("GET /api/v2/system/setup");
+      setSetupRequired(status.needs_setup);
+      setSetupCompleted(status.wizard_completed === true);
+    } catch {
+      // Keep the last known status; the next app load re-reads it.
+    }
+  }, []);
+
   const logout = useCallback(() => {
     // Fire and forget the server logout
     if (getAccessToken()) {
-      api("/auth/logout", { method: "POST" }).catch(() => {});
+      v2("POST /api/v2/auth/logout").catch(() => {});
     }
     clearAuthState();
   }, [clearAuthState]);
 
   const verifyProfilePin = useCallback(
-    async (profileId: string, pin: string): Promise<VerifyPinResponse> => {
-      return api<VerifyPinResponse>(`/profiles/${profileId}/verify-pin`, {
-        method: "POST",
-        body: JSON.stringify({ pin }),
-      });
+    async (profileId: string, pin: string): Promise<ProfileVerification> => {
+      return verifyProfilePIN(profileId, pin);
     },
     [],
   );
@@ -358,20 +373,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     async function initialize() {
       try {
-        const [status, availableProviders] = await Promise.all([
-          api<SetupStatusResponse>("/auth/setup"),
-          api<AuthProviderOption[]>("/auth/providers"),
+        // Independent reads: a failed provider list must not blank the setup
+        // status, or an admin visiting /setup during that outage would see
+        // the finished wizard again.
+        const [status, availableProviders] = await Promise.allSettled([
+          v2("GET /api/v2/system/setup"),
+          v2("GET /api/v2/auth/providers"),
         ]);
         if (cancelled) {
           return;
         }
-        setSetupRequired(status.needs_setup);
-        setProviders(availableProviders ?? []);
-      } catch {
-        if (!cancelled) {
+        if (status.status === "fulfilled") {
+          setSetupRequired(status.value.needs_setup);
+          setSetupCompleted(status.value.wizard_completed === true);
+        } else {
           setSetupRequired(false);
-          setProviders([]);
+          setSetupCompleted(false);
         }
+        setProviders(
+          availableProviders.status === "fulfilled" ? (availableProviders.value.items ?? []) : [],
+        );
       } finally {
         if (!cancelled) {
           setSetupLoading(false);
@@ -383,7 +404,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           refreshToken: storage.get(storage.KEYS.REFRESH_TOKEN),
           hasStoredImpersonationAdminSession: Boolean(loadStoredImpersonationAdminSession()),
           bootstrapAccessToken: () => bootstrapAccessToken(),
-          fetchCurrentUser: () => api<User>("/auth/me"),
+          fetchCurrentUser: () => v2("GET /api/v2/account/me").then(userFromAccount),
           applyCurrentUser: (currentUser) => {
             if (cancelled) {
               return;
@@ -447,7 +468,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     soleProfileBootstrapRef.current = bootstrapKey;
 
     let cancelled = false;
-    api<{ profiles: Profile[] }>("/profiles")
+    listProfiles()
       .then((data) => {
         if (cancelled) {
           return;
@@ -466,46 +487,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (username: string, password: string, provider?: string) => {
-      const data = await api<LoginResponse>("/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ username, password, provider }),
+      const tokens = await v2("POST /api/v2/auth/login", {
+        body: { username, password, provider },
       });
-      applyAuthenticatedUser(data);
+      applyAuthenticatedUser(sessionFromTokenPair(tokens));
     },
     [applyAuthenticatedUser],
   );
 
   const setupInitialUser = useCallback(
     async (username: string, email: string, password: string) => {
-      const body: SetupRequest = {
-        username,
-        email,
-        password,
-        create_default_profile: true,
-      };
-      const data = await api<LoginResponse>("/auth/setup", {
-        method: "POST",
-        body: JSON.stringify(body),
+      const tokens = await v2("POST /api/v2/auth/setup", {
+        body: { username, email, password, create_default_profile: true },
       });
-      applyAuthenticatedUser(data);
+      const session = sessionFromTokenPair(tokens);
+      // The default profile is created with the account. Select it in the
+      // same batch as the user so profile-scoped work (the wizard's settings
+      // reads) can start on the first render, instead of waiting for the
+      // sole-profile bootstrap effect to run a render later.
+      setAccessToken(session.access_token);
+      setRefreshToken(session.refresh_token);
+      const created = getBootstrapProfile((await listProfiles().catch(() => null))?.profiles ?? []);
+      applyAuthenticatedUser(session);
+      if (created) selectProfile(created);
     },
-    [applyAuthenticatedUser],
+    [applyAuthenticatedUser, selectProfile],
   );
 
   const signup = useCallback(
     async (username: string, email: string, password: string, inviteCode: string) => {
-      const body: SignupRequest = {
-        username,
-        email,
-        password,
-        invite_code: inviteCode,
-        create_default_profile: true,
-      };
-      const data = await api<LoginResponse>("/auth/signup", {
-        method: "POST",
-        body: JSON.stringify(body),
+      const tokens = await v2("POST /api/v2/auth/signup", {
+        body: { username, email, password, invite_code: inviteCode, create_default_profile: true },
       });
-      applyAuthenticatedUser(data);
+      applyAuthenticatedUser(sessionFromTokenPair(tokens));
     },
     [applyAuthenticatedUser],
   );
@@ -518,6 +532,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loading,
         setupLoading,
         setupRequired,
+        setupCompleted,
+        refreshSetupStatus,
         providers,
         isImpersonating,
         login,

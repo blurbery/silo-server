@@ -612,7 +612,7 @@ func (p *Provider) doOnce(ctx context.Context, method, path, target string, payl
 			fmt.Errorf("mdblist request %s %s rate limited: status 429", method, path)
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return -1, fmt.Errorf("mdblist request %s %s rejected: status %d (check api key)", method, path, resp.StatusCode)
+		return -1, fmt.Errorf("mdblist request %s %s rejected: status %d (check api key): %w", method, path, resp.StatusCode, watchsync.ErrInvalidCredential)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		detail := responseErrorDetail(resp.Body)

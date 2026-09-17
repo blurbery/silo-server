@@ -80,7 +80,8 @@ type ListJobsOptions struct {
 }
 
 type Repository struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	claim *int64
 }
 
 func NewRepository(pool *pgxpool.Pool) *Repository {
@@ -91,7 +92,7 @@ const adminJobColumns = `id, job_type, status, created_by_user_id, request_paylo
 	result_payload, message, error_message, progress_current, progress_total,
 	artifact_bucket, artifact_key, artifact_size_bytes,
 	public_url, requested_at, started_at, completed_at, heartbeat_at, expires_at,
-	published_at, updated_at`
+	published_at, updated_at, cancel_requested, claim_generation`
 
 func scanAdminJob(row pgx.Row) (*models.AdminJob, error) {
 	var job models.AdminJob
@@ -117,6 +118,8 @@ func scanAdminJob(row pgx.Row) (*models.AdminJob, error) {
 		&job.ExpiresAt,
 		&job.PublishedAt,
 		&job.UpdatedAt,
+		&job.CancelRequested,
+		&job.ClaimGeneration,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -281,6 +284,31 @@ func (r *Repository) List(ctx context.Context, opts ListJobsOptions) ([]*models.
 	return scanAdminJobs(rows)
 }
 
+// ListPage reads one bounded page in descending creation order. The ID breaks
+// timestamp ties; callers bind the cursor to the administrator and kind filter.
+func (r *Repository) ListPage(ctx context.Context, kind string, before time.Time, beforeID string, limit int) ([]*models.AdminJob, error) {
+	if limit < 1 || limit > 201 {
+		return nil, fmt.Errorf("invalid job page limit")
+	}
+	args := []any{limit}
+	query := `SELECT ` + adminJobColumns + ` FROM admin_jobs WHERE true`
+	if kind != "" {
+		args = append(args, kind)
+		query += fmt.Sprintf(" AND job_type=$%d", len(args))
+	}
+	if beforeID != "" {
+		args = append(args, before, beforeID)
+		query += fmt.Sprintf(" AND (requested_at,id)<($%d,$%d)", len(args)-1, len(args))
+	}
+	query += ` ORDER BY requested_at DESC,id DESC LIMIT $1`
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanAdminJobs(rows)
+}
+
 func (r *Repository) ClaimNextQueued(ctx context.Context, jobType string) (*models.AdminJob, error) {
 	return r.claimNextQueued(ctx, jobType)
 }
@@ -318,6 +346,7 @@ func (r *Repository) claimNextQueued(ctx context.Context, jobTypeFilter any) (*m
 	job, err := scanAdminJob(tx.QueryRow(ctx, `
 		UPDATE admin_jobs
 		SET status = $2,
+			claim_generation = claim_generation + 1,
 			started_at = NOW(),
 			heartbeat_at = NOW(),
 			updated_at = NOW()
@@ -354,8 +383,8 @@ func (r *Repository) UpdateProgress(ctx context.Context, id string, current, tot
 			message = $4,
 			heartbeat_at = NOW(),
 			updated_at = NOW()
-		WHERE id = $1`,
-		id, current, total, message,
+		WHERE id = $1 AND status = 'running' AND ($5::bigint IS NULL OR claim_generation = $5)`,
+		id, current, total, message, r.claim,
 	)
 	if err != nil {
 		return fmt.Errorf("updating admin job progress: %w", err)
@@ -371,8 +400,8 @@ func (r *Repository) TouchHeartbeat(ctx context.Context, id string) error {
 		UPDATE admin_jobs
 		SET heartbeat_at = NOW(),
 			updated_at = NOW()
-		WHERE id = $1`,
-		id,
+		WHERE id = $1 AND status = 'running' AND ($2::bigint IS NULL OR claim_generation = $2)`,
+		id, r.claim,
 	)
 	if err != nil {
 		return fmt.Errorf("touching admin job heartbeat: %w", err)
@@ -391,8 +420,8 @@ func (r *Repository) Complete(ctx context.Context, id string, input CompleteJobI
 
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE admin_jobs
-		SET status = $2,
-			result_payload = $3,
+		SET status = CASE WHEN cancel_requested THEN 'cancelled' ELSE $2 END,
+			result_payload = CASE WHEN cancel_requested THEN '{}'::jsonb ELSE $3 END,
 			message = $4,
 			error_message = '',
 			progress_current = $5,
@@ -402,9 +431,9 @@ func (r *Repository) Complete(ctx context.Context, id string, input CompleteJobI
 			artifact_size_bytes = $9,
 			completed_at = NOW(),
 			heartbeat_at = NOW(),
-			expires_at = $10,
+			expires_at = GREATEST($10, NOW() + INTERVAL '24 hours'),
 			updated_at = NOW()
-		WHERE id = $1`,
+		WHERE id = $1 AND status = 'running' AND ($11::bigint IS NULL OR claim_generation = $11)`,
 		id,
 		StatusCompleted,
 		resultPayload,
@@ -415,6 +444,7 @@ func (r *Repository) Complete(ctx context.Context, id string, input CompleteJobI
 		input.ArtifactKey,
 		input.ArtifactSizeBytes,
 		input.ExpiresAt,
+		r.claim,
 	)
 	if err != nil {
 		return fmt.Errorf("completing admin job: %w", err)
@@ -446,16 +476,16 @@ func (r *Repository) MarkPublic(ctx context.Context, id, publicURL string, publi
 func (r *Repository) Fail(ctx context.Context, id string, input FailJobInput) error {
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE admin_jobs
-		SET status = $2,
+		SET status = CASE WHEN cancel_requested THEN 'cancelled' ELSE $2 END,
 			message = $3,
 			error_message = $4,
 			progress_current = $5,
 			progress_total = $6,
 			completed_at = NOW(),
 			heartbeat_at = NOW(),
-			expires_at = $7,
+			expires_at = GREATEST($7, NOW() + INTERVAL '24 hours'),
 			updated_at = NOW()
-		WHERE id = $1`,
+		WHERE id = $1 AND status = 'running' AND ($8::bigint IS NULL OR claim_generation = $8)`,
 		id,
 		StatusFailed,
 		input.Message,
@@ -463,6 +493,7 @@ func (r *Repository) Fail(ctx context.Context, id string, input FailJobInput) er
 		input.ProgressCurrent,
 		input.ProgressTotal,
 		input.ExpiresAt,
+		r.claim,
 	)
 	if err != nil {
 		return fmt.Errorf("failing admin job: %w", err)
@@ -484,17 +515,18 @@ func (r *Repository) Cancel(ctx context.Context, id, message string, expiresAt t
 			error_message = '',
 			completed_at = NOW(),
 			heartbeat_at = NOW(),
-			expires_at = $4,
+			expires_at = GREATEST($4, NOW() + INTERVAL '24 hours'),
 			updated_at = NOW()
 		WHERE id = $1
 		  AND status IN ($5, $6)
+ AND ($7::bigint IS NULL OR claim_generation = $7)
 		RETURNING `+adminJobColumns,
 		id,
 		StatusCancelled,
 		message,
 		expiresAt,
 		StatusQueued,
-		StatusRunning,
+		StatusRunning, r.claim,
 	))
 	if err == nil {
 		return job, nil
@@ -523,7 +555,7 @@ func (r *Repository) CancelQueued(ctx context.Context, id, message string, expir
 			error_message = '',
 			completed_at = NOW(),
 			heartbeat_at = NOW(),
-			expires_at = $4,
+			expires_at = GREATEST($4, NOW() + INTERVAL '24 hours'),
 			updated_at = NOW()
 		WHERE id = $1
 		  AND status = $5
@@ -612,4 +644,80 @@ func marshalPayload(v any) ([]byte, error) {
 		return []byte(`{}`), nil
 	}
 	return data, nil
+}
+
+// withClaim fences worker writes against a later recovery claim. API readers and
+// cancellation commands use the unscoped repository.
+func (r *Repository) withClaim(job *models.AdminJob) *Repository {
+	return &Repository{pool: r.pool, claim: new(job.ClaimGeneration)}
+}
+
+// RequestCancellation durably coalesces intent. A queued job is still claimed by
+// the ordinary runner, which acknowledges cancellation without executing it.
+func (r *Repository) RequestCancellation(ctx context.Context, id string) (*models.AdminJob, error) {
+	job, err := scanAdminJob(r.pool.QueryRow(ctx, `UPDATE admin_jobs
+ SET cancel_requested = true, updated_at = CASE WHEN cancel_requested THEN updated_at ELSE NOW() END
+ WHERE id = $1 AND job_type = $2 AND status IN ('queued', 'running')
+ RETURNING `+adminJobColumns, id, JobTypeLibraryRefresh))
+	if err == nil {
+		return job, nil
+	}
+	if !errors.Is(err, ErrJobNotFound) {
+		return nil, err
+	}
+	job, err = r.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if job.JobType == JobTypeLibraryRefresh && job.Status == StatusCancelled {
+		return job, nil
+	}
+	return nil, ErrJobNotCancellable
+}
+
+// CreateLibraryDeletion commits disabling the target with its durable work
+// intent. Failure rolls both changes back, including an active-job conflict.
+func (r *Repository) CreateLibraryDeletion(ctx context.Context, userID int, req DeleteLibraryRequest) (*models.AdminJob, error) {
+	payload, err := marshalPayload(req)
+	if err != nil {
+		return nil, err
+	}
+	id, err := idgen.NextID()
+	if err != nil {
+		return nil, err
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `UPDATE media_folders SET enabled = false WHERE id = $1`, req.LibraryID)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() != 1 {
+		return nil, ErrJobNotFound
+	}
+	// The target row lock serializes duplicate deletion acceptance without
+	// preventing independent libraries from being deleted concurrently.
+	active, lookupErr := scanAdminJob(tx.QueryRow(ctx, `SELECT `+adminJobColumns+` FROM admin_jobs
+ WHERE job_type = $1 AND status IN ('queued','running') AND request_payload->>'library_id' = $2 LIMIT 1`, JobTypeDeleteLibrary, strconv.Itoa(req.LibraryID)))
+	if lookupErr == nil {
+		return nil, &ActiveJobConflictError{Job: active}
+	}
+	if !errors.Is(lookupErr, ErrJobNotFound) {
+		return nil, lookupErr
+	}
+	job, err := scanAdminJob(tx.QueryRow(ctx, `INSERT INTO admin_jobs
+ (id,job_type,status,created_by_user_id,request_payload,message)
+ VALUES ($1,$2,$3,$4,$5,'Queued library deletion') RETURNING `+adminJobColumns,
+		id, JobTypeDeleteLibrary, StatusQueued, userID, payload))
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return job, nil
 }

@@ -45,7 +45,6 @@ const mocks = vi.hoisted(() => {
     useRating: vi.fn(),
     useSetRating: vi.fn(),
     useDeleteRating: vi.fn(),
-    useCommunityRatings: vi.fn(),
     useSimilarItems: vi.fn(),
     useAuth: vi.fn(),
     useCurrentProfile: vi.fn(),
@@ -76,7 +75,6 @@ vi.mock("@/hooks/queries/ratings", () => ({
   useRating: mocks.useRating,
   useSetRating: mocks.useSetRating,
   useDeleteRating: mocks.useDeleteRating,
-  useCommunityRatings: mocks.useCommunityRatings,
 }));
 
 vi.mock("@/hooks/queries/recommendations", () => ({
@@ -175,10 +173,6 @@ vi.mock("./components/ActionBar", () => ({
   },
 }));
 
-vi.mock("./components/RatingsSection", () => ({
-  default: () => <div />,
-}));
-
 function makeFileVersion(overrides: Partial<FileVersion> = {}): FileVersion {
   return {
     file_id: overrides.file_id ?? 1,
@@ -256,7 +250,6 @@ describe("MovieContent", () => {
     mocks.useRating.mockReturnValue({ data: { rating: 4, rated_at: "2026-03-22T00:00:00Z" } });
     mocks.useSetRating.mockReturnValue({ mutate: vi.fn() });
     mocks.useDeleteRating.mockReturnValue({ mutate: vi.fn() });
-    mocks.useCommunityRatings.mockReturnValue({ data: undefined });
     mocks.useSimilarItems.mockReturnValue({ data: { items: [] }, isLoading: false });
     mocks.useAuth.mockReturnValue({ user: null });
     mocks.useCurrentProfile.mockReturnValue({ profile: null });

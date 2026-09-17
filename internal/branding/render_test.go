@@ -38,7 +38,7 @@ func TestRenderIndexHTMLRewritesFaviconWhenSet(t *testing.T) {
 	in := []byte(indexFaviconLink + "</head>")
 	snap := Snapshot{ServerName: "X", assets: map[AssetKind]string{KindFavicon: "abc123.png"}}
 	out := string(RenderIndexHTML(in, snap))
-	if !strings.Contains(out, `href="/api/v1/branding/assets/favicon?v=abc123.png"`) {
+	if !strings.Contains(out, `href="/api/v2/branding/assets/favicon?v=abc123.png"`) {
 		t.Fatalf("favicon not rewritten: %q", out)
 	}
 }
@@ -101,7 +101,7 @@ func TestRenderIndexHTMLAgainstRealShell(t *testing.T) {
 	if !strings.Contains(out, "<title>Acme</title>") {
 		t.Fatalf("title not replaced in real shell")
 	}
-	if !strings.Contains(out, "/api/v1/branding/assets/favicon?v=f00.png") {
+	if !strings.Contains(out, "/api/v2/branding/assets/favicon?v=f00.png") {
 		t.Fatalf("favicon not rewritten in real shell")
 	}
 }
@@ -138,7 +138,7 @@ func TestRenderManifestUsesCustomMark(t *testing.T) {
 	}
 	icons, _ := m["icons"].([]any)
 	first, _ := icons[0].(map[string]any)
-	if !strings.Contains(first["src"].(string), "/api/v1/branding/assets/mark?v=m1.webp") {
+	if !strings.Contains(first["src"].(string), "/api/v2/branding/assets/mark?v=m1.webp") {
 		t.Fatalf("expected custom mark icon URL, got %v", first["src"])
 	}
 }

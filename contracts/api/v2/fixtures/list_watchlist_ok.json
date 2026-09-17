@@ -1,0 +1,16 @@
+{
+  "items": [
+    {
+      "content_id": "series:c",
+      "type": "series",
+      "title": "Title series:c",
+      "genres": [],
+      "keywords": [],
+      "status": "matched"
+    }
+  ],
+  "page": {
+    "next_cursor": "eyJ2IjoxLCJwIjp7ImEiOiIyMDI2LTAxLTAyVDAzOjA0OjA1WiIsIm0iOiJzZXJpZXM6YyJ9fQ.bwg6G38bVfFeYdMdMKPldAxvN7eFQnln1YQMlInOGYQ",
+    "has_more": true
+  }
+}

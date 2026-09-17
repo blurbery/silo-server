@@ -19,7 +19,7 @@ const ACCESS_KEYS = ["signup.enabled"];
 const LOGGING_ADVANCED_KEYS = ["server.log_quiet"];
 const LOGGING_KEYS = ["server.log_level", ...LOGGING_ADVANCED_KEYS];
 
-const KEYS = [...IDENTITY_KEYS, ...ACCESS_KEYS, ...LOGGING_KEYS];
+const KEYS = ["server.public_url", ...IDENTITY_KEYS, ...ACCESS_KEYS, ...LOGGING_KEYS];
 
 export default function GeneralSettings() {
   const form = useSettingsForm({ keys: useMemo(() => KEYS, []) });
@@ -72,6 +72,19 @@ export default function GeneralSettings() {
             value={form.getValue("branding.login_subtitle")}
             onChange={(v) => form.setValue("branding.login_subtitle", v)}
             restartRequired={restartKeys.has("branding.login_subtitle")}
+          />
+        </FieldGroup>
+
+        <FieldGroup label="Network">
+          <SettingField
+            label="Silo public URL"
+            settingKey="server.public_url"
+            dirty={form.isDirty("server.public_url")}
+            description="The HTTPS address users open. Used for websocket origins and links in email notifications."
+            hint="https://silo.example.com"
+            value={form.getValue("server.public_url")}
+            onChange={(v) => form.setValue("server.public_url", v)}
+            restartRequired={restartKeys.has("server.public_url")}
           />
         </FieldGroup>
 
