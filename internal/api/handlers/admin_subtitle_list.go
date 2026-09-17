@@ -102,6 +102,9 @@ func (h *AdminSubtitleHandler) ListAdminSubtitlesPage(ctx context.Context, filte
 			rows.Close()
 			return out, err
 		}
+		if canonical := subtitles.NormalizeProviderLanguage(row.Provider, row.Language); canonical != "" {
+			row.Language = canonical
+		}
 		out.Items = append(out.Items, row)
 	}
 	err = rows.Err()

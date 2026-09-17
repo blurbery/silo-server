@@ -581,35 +581,9 @@ func libraryCollectionLifecycleLockIDs(oldLibraryID, newLibraryID int) []int {
 // the database poster lock. Callers must not hold either non-reentrant lock when
 // invoking Update with LibraryIDs set.
 func (r *LibraryCollectionRepository) Update(ctx context.Context, input UpdateLibraryCollectionInput) error {
-	var (
-		updatedLibraryIDs []int
-		lifecycleLockIDs  []int
-	)
 	if input.LibraryIDs != nil {
 		unlockLocal := LockLibraryCollectionPosterMutation(input.ID)
-		unlockDatabase, err := r.AcquirePosterMutationLock(ctx, input.ID)
-		if err != nil {
-			unlockLocal()
-			return fmt.Errorf("locking collection poster before library scope update: %w", err)
-		}
-		defer func() {
-			unlockDatabase()
-			unlockLocal()
-		}()
-
-		var oldLibraryID int
-		if err := r.pool.QueryRow(ctx, `SELECT library_id FROM library_collections WHERE id = $1`, input.ID).Scan(&oldLibraryID); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrLibraryCollectionNotFound
-			}
-			return fmt.Errorf("loading legacy collection library before update: %w", err)
-		}
-		updatedLibraryIDs = normalizeCollectionLibraryIDs(0, *input.LibraryIDs)
-		newLibraryID := 0
-		if len(updatedLibraryIDs) > 0 {
-			newLibraryID = updatedLibraryIDs[0]
-		}
-		lifecycleLockIDs = libraryCollectionLifecycleLockIDs(oldLibraryID, newLibraryID)
+		defer unlockLocal()
 	}
 
 	var (
@@ -755,9 +729,31 @@ func (r *LibraryCollectionRepository) Update(ctx context.Context, input UpdateLi
 	}
 
 	return (libraryCollectionMutation{pool: r.pool, collectionID: input.ID}).run(ctx, input.ExpectedRevision, func(tx pgx.Tx) error {
-		for _, libraryID := range lifecycleLockIDs {
-			if _, err := tx.Exec(ctx, libraryCollectionLifecycleLockSQL, libraryID); err != nil {
+		if input.LibraryIDs != nil {
+			// Keep poster coordination on the mutation transaction so even a
+			// single-connection pool can perform the guarded update.
+			if _, err := tx.Exec(ctx, `SELECT set_config('lock_timeout', $1, true)`, libraryCollectionPosterLockTimeout.String()); err != nil {
 				return err
+			}
+			if _, err := tx.Exec(ctx, libraryCollectionPosterAdvisoryLockSQL, input.ID); err != nil {
+				return fmt.Errorf("locking collection poster before library scope update: %w", err)
+			}
+			var oldLibraryID int
+			if err := tx.QueryRow(ctx, `SELECT library_id FROM library_collections WHERE id = $1`, input.ID).Scan(&oldLibraryID); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrLibraryCollectionNotFound
+				}
+				return fmt.Errorf("loading legacy collection library before update: %w", err)
+			}
+			requested := normalizeCollectionLibraryIDs(0, *input.LibraryIDs)
+			newLibraryID := 0
+			if len(requested) > 0 {
+				newLibraryID = requested[0]
+			}
+			for _, libraryID := range libraryCollectionLifecycleLockIDs(oldLibraryID, newLibraryID) {
+				if _, err := tx.Exec(ctx, libraryCollectionLifecycleLockSQL, libraryID); err != nil {
+					return err
+				}
 			}
 		}
 		if err := lockLibraryCollectionParent(ctx, tx, input.ID); err != nil {

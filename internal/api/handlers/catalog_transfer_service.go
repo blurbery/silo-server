@@ -145,6 +145,6 @@ func (h *CatalogSeedHandler) PublishCatalogExportJob(ctx context.Context, id str
 	if err := h.jobRepo.MarkPublic(ctx, id, url, published); err != nil {
 		return nil, err
 	}
-	job.PublicURL, job.PublishedAt = url, &published
-	return job, nil
+	// Return the stored timestamps with PostgreSQL timestamp precision.
+	return h.jobRepo.GetByID(ctx, id)
 }

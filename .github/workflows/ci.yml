@@ -96,16 +96,26 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Verify PostgreSQL merge regressions
+        id: postgres_regressions
+        env:
+          DATABASE_URL: postgres://silo_test:silo_test@localhost:5432/silo_test?sslmode=disable
+          SILO_TEST_DATABASE_URL: postgres://silo_test:silo_test@localhost:5432/silo_test?sslmode=disable
+          SECRET_KEY: ci-only-disposable-database-encryption-key-00000000
+        run: |
+          go run ./cmd/silo --migrate-only
+          go test -p 1 -count=1 -run 'TestLibraryCollectionAggregateTransactionLockOrderDB|TestOrphanCleanupAfterPlexTableDropPostgres|TestAdminSubtitleListPageDB|TestCatalogTransferPersistsJobsAndSignedLink|TestSyncMergeStepsAfterPlexTableDropPostgres' ./internal/catalog ./internal/api/handlers ./internal/metadata
+
       # Runs the settings-contract gate among everything else: the embedded
       # manifest must parse, satisfy its own schema, hold every structural
       # invariant, and agree with the live settings registry on keys and
       # defaults. Without this job those tests exist but never run.
       - name: Test
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.postgres_regressions.outcome == 'success' }}
         run: make test-go
 
       - name: Test PostgreSQL integration for upstream synchronization
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.postgres_regressions.outcome == 'success' }}
         env:
           DATABASE_URL: postgres://silo_test:silo_test@localhost:5432/silo_test?sslmode=disable
           SILO_TEST_DATABASE_URL: postgres://silo_test:silo_test@localhost:5432/silo_test?sslmode=disable
