@@ -2785,37 +2785,6 @@ func newChiRouter(deps Dependencies) chi.Router {
 			})
 		}
 
-		// Playback byte delivery uses a route-scoped signed stream capability,
-		// falling back to ordinary account auth for older clients. Keep these hot
-		// paths outside viewer-scope resolution: the playback plan was already
-		// authorized, and each handler fences the capability to the live session.
-		// Re-running profile DB reads and OPA for every 4 MiB range or HLS segment
-		// adds no authorization check used by the handler and can interrupt media
-		// when the host is under scan load.
-		if authMiddleware != nil && (playbackHandler != nil || streamHandler != nil) {
-			streamSecret := ""
-			if deps.Config != nil {
-				streamSecret = deps.Config.Auth.JWTSecret
-			}
-			r.Group(func(r chi.Router) {
-				r.Use(authMiddleware.RequireTransportAuth(streamSecret))
-				if deps.RateLimitMW != nil {
-					r.Use(deps.RateLimitMW.Handler)
-				}
-				if playbackHandler != nil {
-					r.Get("/playback/transcode/{session_id}/master.m3u8", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/playback/transcode/{session_id}/master.m3u8", playbackHandler.HandleGetTranscodeManifest))
-					r.Get("/playback/transcode/{session_id}/segment/{name}", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/playback/transcode/{session_id}/segment/{name}", playbackHandler.HandleGetTranscodeSegment))
-				}
-				if streamHandler != nil {
-					r.Get("/stream/{session_id}", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/stream/{session_id}", streamHandler.HandleStream))
-					r.Head("/stream/{session_id}", observeNative(deps.StreamTelemetry, http.MethodHead, "/api/v1/stream/{session_id}", streamHandler.HandleStream))
-					r.Get("/stream/{session_id}/subtitles/{track}", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/stream/{session_id}/subtitles/{track}", streamHandler.HandleSubtitle))
-					r.Head("/stream/{session_id}/subtitles/{track}", observeNative(deps.StreamTelemetry, http.MethodHead, "/api/v1/stream/{session_id}/subtitles/{track}", streamHandler.HandleSubtitle))
-					r.Get("/stream/{session_id}/subtitles/{track}/fonts", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/stream/{session_id}/subtitles/{track}/fonts", streamHandler.HandleSubtitleFonts))
-				}
-			})
-		}
-
 		// Apple notification display metadata: authenticated by either the
 		// normal access token or the long-lived display token minted at Apple
 		// push registration. Sits outside the RequireAuth group because the
@@ -2859,7 +2828,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 			)
 		}
 
-		// All remaining routes require auth and viewer-scope resolution.
+		// All remaining routes require auth.
 		if authMiddleware != nil {
 			r.Group(func(r chi.Router) {
 				r.Use(authMiddleware.RequireAuth)
@@ -3457,6 +3426,11 @@ func newChiRouter(deps Dependencies) chi.Router {
 
 					r.Route("/playback", func(r chi.Router) {
 						r.Get("/capability", playbackHandler.HandlePlaybackCapabilityV3)
+						// HLS transcode delivery. Legacy sessions treat the UUID
+						// as a bearer capability; negotiated V3 sessions require
+						// the authenticated owner inside the handler.
+						r.Get("/transcode/{session_id}/master.m3u8", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/playback/transcode/{session_id}/master.m3u8", playbackHandler.HandleGetTranscodeManifest))
+						r.Get("/transcode/{session_id}/segment/{name}", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/playback/transcode/{session_id}/segment/{name}", playbackHandler.HandleGetTranscodeSegment))
 
 						// Playback realtime control socket — needs auth but not profile.
 						r.Get("/sessions/{session_id}/control/ws", playbackHandler.HandleSessionWebSocket)
@@ -3492,6 +3466,15 @@ func newChiRouter(deps Dependencies) chi.Router {
 							r.Post("/rooms/{room_id}/suggestions/promote", watchTogetherHandler.HandlePromoteSuggestion)
 						})
 					})
+				}
+
+				// Stream routes.
+				if streamHandler != nil {
+					r.Get("/stream/{session_id}", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/stream/{session_id}", streamHandler.HandleStream))
+					r.Head("/stream/{session_id}", observeNative(deps.StreamTelemetry, http.MethodHead, "/api/v1/stream/{session_id}", streamHandler.HandleStream))
+					r.Get("/stream/{session_id}/subtitles/{track}", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/stream/{session_id}/subtitles/{track}", streamHandler.HandleSubtitle))
+					r.Head("/stream/{session_id}/subtitles/{track}", observeNative(deps.StreamTelemetry, http.MethodHead, "/api/v1/stream/{session_id}/subtitles/{track}", streamHandler.HandleSubtitle))
+					r.Get("/stream/{session_id}/subtitles/{track}/fonts", observeNative(deps.StreamTelemetry, http.MethodGet, "/api/v1/stream/{session_id}/subtitles/{track}/fonts", streamHandler.HandleSubtitleFonts))
 				}
 
 				// Download routes.

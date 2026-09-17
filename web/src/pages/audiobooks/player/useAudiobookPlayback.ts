@@ -809,6 +809,7 @@ export function useAudiobookPlayback({
     parts,
     rate,
     recoverFromPlanFailure,
+    sessionState.streamUrl,
     setAbsoluteTime,
     stopSession,
   ]);

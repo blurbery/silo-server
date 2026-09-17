@@ -128,7 +128,7 @@ func (h *StreamHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 	// ?seek= query for remux), so no runtime beyond the Session needs rebuilding.
 	// Without a token (or signing secret) reconstruct is off, collapsing to a
 	// plain GetSession + ownership check.
-	card, claims := verifiedStreamCardFromRequest(r, sessionID, h.JWTSecret)
+	card, claims := verifiedStreamCardFromToken(r.URL.Query().Get(streamTokenParam), sessionID, h.JWTSecret)
 	loadCard := card
 	if _, err := h.sessionMgr.GetSession(sessionID); err == nil {
 		// A live route may have been replanned since this token was issued. Do not
@@ -158,10 +158,6 @@ func (h *StreamHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 		// resolves a non-zero user before loading. Falling through would
 		// dereference the nil session the status carries.
 		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
-		return
-	}
-	if !transportStreamClaimsMatchSession(r.Context(), session) {
-		writeError(w, http.StatusForbidden, "forbidden", "Stream token no longer matches the playback session")
 		return
 	}
 	if !requireNativeSessionAPIEgressV3(w, session) {
@@ -274,11 +270,6 @@ func (h *StreamHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 // ownership before exposing a sidecar.
 func (h *StreamHandler) loadSidecarSession(ctx context.Context, reference, sessionID string, userID int) (*playback.Session, *streamtoken.Claims, error) {
 	card, claims := verifiedStreamCardFromToken(reference, sessionID, h.JWTSecret)
-	if transportClaims := apimw.GetTransportStreamClaims(ctx); transportClaims != nil && transportClaims.SessionID == sessionID {
-		claims = transportClaims
-		verifiedCard := playback.RecipeCardFromClaims(claims)
-		card = &verifiedCard
-	}
 	loadCard := card
 	if _, err := h.sessionMgr.GetSession(sessionID); err == nil {
 		loadCard = nil
@@ -301,9 +292,6 @@ func (h *StreamHandler) loadSidecarSession(ctx context.Context, reference, sessi
 	}
 	if profileID := apimw.GetProfileID(ctx); profileID != "" && session.ProfileID != "" && profileID != session.ProfileID {
 		return nil, nil, apiError(http.StatusForbidden, "forbidden", "Session belongs to another profile")
-	}
-	if !transportStreamClaimsMatchSession(ctx, session) {
-		return nil, nil, apiError(http.StatusForbidden, "forbidden", "Stream token no longer matches the playback session")
 	}
 	return session, claims, nil
 }

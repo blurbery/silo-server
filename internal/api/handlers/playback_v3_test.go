@@ -56,92 +56,6 @@ func TestSessionStartErrorV3DistinguishesPolicyFailureFromDenial(t *testing.T) {
 	}
 }
 
-func TestTransportStreamClaimsMatchLiveSessionUsesHLSServeMethod(t *testing.T) {
-	baseClaims := streamtoken.Claims{
-		SessionID:   "session-1",
-		UserID:      7,
-		ProfileID:   "profile-1",
-		MediaFileID: 42,
-	}
-	baseSession := playback.Session{
-		ID:          "session-1",
-		UserID:      7,
-		ProfileID:   "profile-1",
-		MediaFileID: 42,
-		PlayMethod:  playback.PlayRemux,
-	}
-
-	tests := []struct {
-		name    string
-		method  playback.PlayMethod
-		segment int
-		want    bool
-	}{
-		{name: "progressive remux accepts remux capability", method: playback.PlayRemux, want: true},
-		{name: "progressive remux rejects transcode capability", method: playback.PlayTranscode, want: false},
-		{name: "HLS remux accepts transcode recipe capability", method: playback.PlayTranscode, segment: 2, want: true},
-		{name: "HLS remux rejects stale progressive capability", method: playback.PlayRemux, segment: 2, want: false},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			claims := baseClaims
-			claims.PlayMethod = string(test.method)
-			session := baseSession
-			session.SegmentDuration = test.segment
-			if got := transportStreamClaimsMatchLiveSession(&claims, &session); got != test.want {
-				t.Fatalf("claims method %q with segment duration %d matched = %t, want %t", test.method, test.segment, got, test.want)
-			}
-		})
-	}
-}
-
-func TestSetStreamCapabilityQueryV3PreservesSubtitleIdentity(t *testing.T) {
-	const capability = "signed-stream-capability"
-	raw := "/stream/session-1/subtitles/3.vtt?file_id=42&downloaded_subtitle_id=71"
-	parsed, err := url.Parse(setStreamCapabilityQueryV3(raw, capability))
-	if err != nil {
-		t.Fatal(err)
-	}
-	query := parsed.Query()
-	if query.Get("file_id") != "42" || query.Get(playback.DownloadedSubtitleIDParamV3) != "71" {
-		t.Fatalf("subtitle identity query was not preserved: %q", parsed.RawQuery)
-	}
-	if query.Get(streamTokenParam) != capability {
-		t.Fatalf("stream capability = %q, want %q", query.Get(streamTokenParam), capability)
-	}
-}
-
-func TestAttachStreamCapabilityToSubtitleURLsV3SupportsEveryTopology(t *testing.T) {
-	const capability = "signed.stream.capability"
-	streamURLs := []string{
-		"/stream/session-1?st=" + capability,
-		"https://proxy.example/stream/direct/" + capability,
-		"https://proxy.example/stream/remux/" + capability + "?seek=39.5",
-		"https://proxy.example/stream/transcode/" + capability + "/master.m3u8",
-	}
-	for _, streamURL := range streamURLs {
-		t.Run(streamURL, func(t *testing.T) {
-			plan := &playback.PlanV3{
-				Stream: playback.StreamV3{URL: streamURL},
-				Subtitle: playback.SubtitleDecisionV3{Inventory: []playback.SubtitleInventoryItemV3{{
-					URL: "/stream/session-1/subtitles/3.vtt?file_id=42",
-				}}},
-			}
-			attachStreamCapabilityToSubtitleURLsV3(plan)
-			parsed, err := url.Parse(plan.Subtitle.Inventory[0].URL)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := parsed.Query().Get(streamTokenParam); got != capability {
-				t.Fatalf("capability = %q, want %q in %q", got, capability, plan.Subtitle.Inventory[0].URL)
-			}
-			if got := parsed.Query().Get("file_id"); got != "42" {
-				t.Fatalf("file_id = %q, want 42 in %q", got, plan.Subtitle.Inventory[0].URL)
-			}
-		})
-	}
-}
-
 type gatedPlaybackSettingsV3 struct {
 	started chan string
 	release chan struct{}
@@ -1067,14 +981,11 @@ func TestHandleStartPlaybackV3ReturnsExecutableDirectPlan(t *testing.T) {
 
 func TestHandleStartPlaybackV3NegotiatesHeaderAuthenticatedDirectAndSubtitleURLs(t *testing.T) {
 	for _, test := range []struct {
-		name                 string
-		optIn                bool
-		appleBuild31         bool
-		wantStream           bool
-		wantCapabilityHeader bool
+		name       string
+		optIn      bool
+		wantStream bool
 	}{
 		{name: "opted-in URLs carry no playback credential", optIn: true},
-		{name: "Apple build 31 uses a session-bound header credential", optIn: true, appleBuild31: true, wantCapabilityHeader: true},
 		{name: "legacy URL keeps restart token", wantStream: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1089,12 +1000,6 @@ func TestHandleStartPlaybackV3NegotiatesHeaderAuthenticatedDirectAndSubtitleURLs
 			start := v3HandlerStartRequest()
 			if test.optIn {
 				start.ClientFeatures = append(start.ClientFeatures, playback.FeatureHeaderAuthenticatedMediaV3)
-			}
-			if test.appleBuild31 {
-				start.ClientFeatures = append(start.ClientFeatures, playback.FeatureDeviceQuirksV3)
-				start.ClientPlaybackContext.FormFactor = "tv"
-				start.ClientPlaybackContext.AppBuild = "31"
-				start.ClientPlaybackContext.Device.Platform = "tvos"
 			}
 			subtitleIndex := 0
 			start.SubtitleTrackID = playback.TrackIDV3(file.ID, "subtitle", subtitleIndex)
@@ -1116,18 +1021,8 @@ func TestHandleStartPlaybackV3NegotiatesHeaderAuthenticatedDirectAndSubtitleURLs
 			if got := streamURL.Query().Get(streamTokenParam); (got != "") != test.wantStream {
 				t.Fatalf("stream token present = %v for URL %q, want %v", got != "", response.PlaybackPlan.Stream.URL, test.wantStream)
 			}
-			capability := response.PlaybackPlan.Stream.Headers[streamtoken.Header]
-			if (capability != "") != test.wantCapabilityHeader {
-				t.Fatalf("session capability header present = %v, want %v", capability != "", test.wantCapabilityHeader)
-			}
-			if _, ok := response.PlaybackPlan.Stream.Headers["Authorization"]; ok {
+			if len(response.PlaybackPlan.Stream.Headers) != 0 {
 				t.Fatalf("plan persisted bearer material in headers: %#v", response.PlaybackPlan.Stream.Headers)
-			}
-			if capability != "" {
-				claims, verifyErr := streamtoken.Verify(capability, handler.JWTSecret)
-				if verifyErr != nil || claims.SessionID != response.SessionID || claims.MediaFileID != file.ID {
-					t.Fatalf("session capability claims = %#v, err = %v", claims, verifyErr)
-				}
 			}
 
 			artifact := response.PlaybackPlan.Subtitle.Artifact
@@ -1136,89 +1031,12 @@ func TestHandleStartPlaybackV3NegotiatesHeaderAuthenticatedDirectAndSubtitleURLs
 			}
 			for _, raw := range []string{artifact.URL, response.PlaybackPlan.Subtitle.Inventory[0].URL} {
 				parsed, parseErr := url.Parse(raw)
-				hasStreamToken := parsed.Query().Get(streamTokenParam) != ""
-				if parseErr != nil || parsed.IsAbs() || hasStreamToken != test.wantStream || !strings.HasPrefix(parsed.Path, "/stream/"+response.SessionID+"/subtitles/") {
-					t.Fatalf("subtitle URL = %q, token present = %v, want API-local route with token present = %v (parse error %v)", raw, hasStreamToken, test.wantStream, parseErr)
+				if parseErr != nil || parsed.IsAbs() || parsed.Query().Get(streamTokenParam) != "" || !strings.HasPrefix(parsed.Path, "/stream/"+response.SessionID+"/subtitles/") {
+					t.Fatalf("subtitle URL = %q, want tokenless API-local route (parse error %v)", raw, parseErr)
 				}
 			}
 			if test.optIn && !playback.HasFeatureV3(response.ServerFeatures, playback.FeatureHeaderAuthenticatedMediaV3) {
 				t.Fatalf("server features = %v, want %q", response.ServerFeatures, playback.FeatureHeaderAuthenticatedMediaV3)
-			}
-		})
-	}
-}
-
-func TestMediaAuthModeForStartV3AppliesOnlyToAffectedAppleClient(t *testing.T) {
-	base := playback.StartRequestV3{
-		ClientFeatures: []string{
-			playback.FeatureHeaderAuthenticatedMediaV3,
-			playback.FeatureDeviceQuirksV3,
-		},
-		ClientPlaybackContext: playback.ClientPlaybackContextV3{
-			FormFactor: "tv",
-			AppBuild:   "31",
-			Device: playback.DeviceContextV3{
-				Platform: "tvos",
-			},
-		},
-	}
-
-	for _, test := range []struct {
-		name           string
-		mutate         func(*playback.StartRequestV3)
-		wantCapability bool
-	}{
-		{name: "tvOS build 31 uses session capability", wantCapability: true},
-		{
-			name: "iOS build 31 uses session capability",
-			mutate: func(req *playback.StartRequestV3) {
-				req.ClientPlaybackContext.Device.Platform = "ios"
-				req.ClientPlaybackContext.FormFactor = "mobile"
-			},
-			wantCapability: true,
-		},
-		{
-			name: "macOS build 31 uses session capability",
-			mutate: func(req *playback.StartRequestV3) {
-				req.ClientPlaybackContext.Device.Platform = "macos"
-				req.ClientPlaybackContext.FormFactor = "desktop"
-			},
-			wantCapability: true,
-		},
-		{
-			name: "later tvOS build keeps header authentication",
-			mutate: func(req *playback.StartRequestV3) {
-				req.ClientPlaybackContext.AppBuild = "32"
-			},
-		},
-		{
-			name: "client without device quirks keeps header authentication",
-			mutate: func(req *playback.StartRequestV3) {
-				req.ClientFeatures = []string{playback.FeatureHeaderAuthenticatedMediaV3}
-			},
-		},
-		{
-			name: "non Apple client keeps header authentication",
-			mutate: func(req *playback.StartRequestV3) {
-				req.ClientPlaybackContext.Device.Platform = "android"
-			},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			req := base
-			req.ClientFeatures = append([]string(nil), base.ClientFeatures...)
-			if test.mutate != nil {
-				test.mutate(&req)
-			}
-			got := mediaAuthModeForStartV3(req)
-			if !got.headerAuth {
-				t.Fatal("header-authenticated media contract was disabled")
-			}
-			if got.sessionHeaderCapability != test.wantCapability {
-				t.Fatalf("sessionHeaderCapability = %t, want %t", got.sessionHeaderCapability, test.wantCapability)
-			}
-			if got.sessionHeaderCapability && got.proxyEgress {
-				t.Fatal("session header capability must keep media on the API origin")
 			}
 		})
 	}
@@ -1290,7 +1108,6 @@ func TestHandleStartPlaybackV3PublishesSubtitleURLsWithSubtitlesOff(t *testing.T
 	handler := NewPlaybackHandler(manager, testPlaybackFileResolver{file: file})
 	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{"allow_4k_transcode": "true"}}
 	handler.ItemAccess = allowAllPlaybackItemAccess{}
-	handler.JWTSecret = "subtitle-stream-capability-secret"
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/playback/start", strings.NewReader(marshalV3StartRequest(t, v3HandlerStartRequest())))
 	req = req.WithContext(newAuthorizedPlaybackContext())
@@ -1314,26 +1131,11 @@ func TestHandleStartPlaybackV3PublishesSubtitleURLsWithSubtitlesOff(t *testing.T
 	if len(inventory) != 3 {
 		t.Fatalf("inventory = %#v, want all three tracks", inventory)
 	}
-	streamURL, err := url.Parse(response.PlaybackPlan.Stream.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	streamCapability := streamURL.Query().Get(streamTokenParam)
-	if streamCapability == "" {
-		t.Fatalf("stream URL omitted %s: %q", streamTokenParam, response.PlaybackPlan.Stream.URL)
-	}
 	for _, item := range inventory {
 		switch item.Delivery {
 		case playback.SubtitleDeliverySidecarV3:
 			if !strings.HasPrefix(item.URL, "/stream/"+response.SessionID+"/subtitles/") {
 				t.Errorf("track %d (%s) url = %q, want a session-scoped sidecar URL", item.CombinedIndex, item.Codec, item.URL)
-			}
-			subtitleURL, err := url.Parse(item.URL)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := subtitleURL.Query().Get(streamTokenParam); got != streamCapability {
-				t.Errorf("track %d capability = %q, want stream capability", item.CombinedIndex, got)
 			}
 		case playback.SubtitleDeliveryBurnInOnlyV3:
 			if item.URL != "" {
@@ -1345,10 +1147,6 @@ func TestHandleStartPlaybackV3PublishesSubtitleURLsWithSubtitlesOff(t *testing.T
 	}
 	if inventory[1].FontBundleURL == "" {
 		t.Errorf("embedded ASS track published no font bundle: %#v", inventory[1])
-	} else if fontURL, err := url.Parse(inventory[1].FontBundleURL); err != nil {
-		t.Fatal(err)
-	} else if got := fontURL.Query().Get(streamTokenParam); got != streamCapability {
-		t.Errorf("font bundle capability = %q, want stream capability", got)
 	}
 }
 

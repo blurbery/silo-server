@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -55,9 +54,6 @@ const (
 	transcodeStartFailedReasonV3 = "transcode_start_failed"
 	seekRestorationPlayerV3      = "player_position"
 	outputRouteChangedReasonV3   = "output_route_changed"
-	applePlatformIOSV3           = "ios"
-	applePlatformTVOSV3          = "tvos"
-	applePlatformMacOSV3         = "macos"
 	// Failed capability fetches are memoized briefly so an unreachable node
 	// costs one timeout per window instead of one per planning request.
 	v3NodeCapabilityErrorTTL = 15 * time.Second
@@ -99,7 +95,6 @@ type v3NodeCapabilityCache struct {
 
 type preparedTransportV3 struct {
 	url                string
-	headers            map[string]string
 	nodeURL            string
 	transportID        string
 	hwAccel            string
@@ -175,17 +170,10 @@ type playbackStartSideEffectsStateV3 struct {
 // it. Both bits are resolved once from the attempt's (pinned) feature list and
 // threaded down every branch rather than re-derived per URL builder.
 type mediaAuthModeV3 struct {
-	// headerAuth is header_authenticated_media_v1: no client-visible URL carries
-	// a signed playback credential. Ordinarily the client authenticates media
-	// requests with its own access token; sessionHeaderCapability is the bounded
-	// compatibility exception described below.
+	// headerAuth is header_authenticated_media_v1: no client-visible URL
+	// carries a signed playback credential, and the client authenticates every
+	// media request with its own access token instead.
 	headerAuth bool
-	// sessionHeaderCapability keeps the signed, session-bound credential in a
-	// plan-supplied header. It is used only for clients whose media engine freezes
-	// request headers at load time, so a stale bearer cannot interrupt bytes while
-	// the API client independently refreshes. The URL remains credential-free and
-	// the response continues to honor header_authenticated_media_v1.
-	sessionHeaderCapability bool
 	// proxyEgress is authorized_media_origins_v1 negotiated on top of
 	// headerAuth: the client also honors credential-free absolute URLs on
 	// server-designated proxy origins, so media bytes need not all egress from
@@ -206,52 +194,6 @@ func headerAuthenticatedMediaV3(clientFeatures []string) mediaAuthModeV3 {
 	return mediaAuthModeV3{
 		headerAuth:  headerAuth,
 		proxyEgress: headerAuth && playback.HasFeatureV3(clientFeatures, playback.FeatureAuthorizedMediaOriginsV3),
-	}
-}
-
-// mediaAuthModeForStartV3 keeps Apple build 31 media requests independent of
-// the short-lived access token. The shared iOS/tvOS/macOS AetherEngine snapshots
-// HTTP headers when an item loads and reuses them for range reads and internal
-// reloads. An automatic episode transition can therefore retain the old bearer
-// and begin receiving 401s while buffered playback continues. A session-bound
-// header capability preserves the selected playback route and is accepted
-// before any stale Authorization header.
-func mediaAuthModeForStartV3(req playback.StartRequestV3) mediaAuthModeV3 {
-	mode := headerAuthenticatedMediaV3(req.ClientFeatures)
-	ctx := req.ClientPlaybackContext
-	platform := strings.ToLower(strings.TrimSpace(ctx.Device.Platform))
-	isApplePlatform := platform == applePlatformIOSV3 || platform == applePlatformTVOSV3 || platform == applePlatformMacOSV3
-	if mode.headerAuth &&
-		playback.HasFeatureV3(req.ClientFeatures, playback.FeatureDeviceQuirksV3) &&
-		isApplePlatform &&
-		strings.TrimSpace(ctx.AppBuild) == "31" {
-		mode.proxyEgress = false
-		mode.sessionHeaderCapability = true
-	}
-	return mode
-}
-
-func (h *PlaybackHandler) sessionCapabilityHeadersV3(mode mediaAuthModeV3, card playback.RecipeCard) map[string]string {
-	if !mode.sessionHeaderCapability {
-		return nil
-	}
-	token := h.signStreamClaims(card.ToClaims())
-	if token == "" {
-		return nil
-	}
-	return map[string]string{streamtoken.Header: token}
-}
-
-func applyPreparedTransportToPlanV3(plan *playback.PlanV3, transport preparedTransportV3) {
-	if plan == nil {
-		return
-	}
-	plan.Stream.URL = transport.url
-	if plan.Stream.Headers == nil {
-		plan.Stream.Headers = map[string]string{}
-	}
-	for name, value := range transport.headers {
-		plan.Stream.Headers[name] = value
 	}
 }
 
@@ -1813,7 +1755,7 @@ func (h *PlaybackHandler) startPlaybackApplicationV3(r *http.Request, body []byt
 	}
 	// A refused progressive remux is escalated before the decision is logged or
 	// a session is opened, so the logged route is the one that will actually run.
-	escalated, escalateErr := h.escalateRefusedProgressiveRemuxV3(r.Context(), mediaAuthModeForStartV3(req),
+	escalated, escalateErr := h.escalateRefusedProgressiveRemuxV3(r.Context(), headerAuthenticatedMediaV3(req.ClientFeatures),
 		func() playback.PlannerInputV3 {
 			return h.plannerInputV3(r.Context(), req, requestedFile, effectiveFile, audioIndex, nil)
 		}, result)
@@ -1965,7 +1907,7 @@ func (h *PlaybackHandler) startPlannedPlaybackV3(r *http.Request, userID int, pr
 	if result.Plan == nil {
 		return playback.DecisionResponseV3{}, &transportErrorV3{reason: "internal_error", message: "The server produced no playback plan."}
 	}
-	mode := mediaAuthModeForStartV3(req)
+	mode := headerAuthenticatedMediaV3(req.ClientFeatures)
 	if checker, ok := h.sessionMgr.(transcodePermissionChecker); ok && (result.PlayMethod == playback.PlayTranscode || result.TranscodeAudio) {
 		if err := checker.CheckTranscodingAllowed(r.Context(), userID, result.PlayMethod == playback.PlayTranscode); err != nil {
 			reason := "transcoding_disabled"
@@ -2039,13 +1981,12 @@ func (h *PlaybackHandler) startPlannedPlaybackV3(r *http.Request, userID int, pr
 		abort()
 		return playback.DecisionResponseV3{}, subtitleArtifactErrorV3("Failed to freeze the selected subtitle identity.", frozenErr)
 	}
-	applyPreparedTransportToPlanV3(result.Plan, transport)
+	result.Plan.Stream.URL = transport.url
 	if err := h.attachSubtitleArtifactV3(r.Context(), session.ID, effectiveFile, result.Plan, result.SubtitleTrackIndex, &frozenRecipe); err != nil {
 		transport.rollback()
 		abort()
 		return playback.DecisionResponseV3{}, subtitleArtifactErrorV3("Failed to prepare the selected subtitle artifact.", err)
 	}
-	attachStreamCapabilityToSubtitleURLsV3(result.Plan)
 	response := playback.DecisionResponseV3{ProtocolVersion: playback.ProtocolV3, ServerFeatures: playback.ServerFeaturesV3(), Outcome: playback.OutcomePlayableV3, SessionID: session.ID, PlaybackPlan: result.Plan}
 	record := playback.AttemptRecordV3{PlaybackAttemptID: req.PlaybackAttemptID, SessionID: session.ID, UserID: userID, ProfileID: profileID, RequestedMediaFileID: requestedFile.ID, EffectiveMediaFileID: effectiveFile.ID, CurrentPlanID: result.Plan.PlanID, CurrentPlan: *result.Plan, FrozenRecipe: frozenRecipe, NormalizedRequest: req, StartResponse: response, RequestDigest: requestDigests.current, ExpiresAt: time.Now().Add(playback.MaxTokenTTL)}
 	if err := h.updateV3SessionState(r.Context(), session, effectiveFile, result, transport, mode); err != nil {
@@ -2743,7 +2684,6 @@ func (h *PlaybackHandler) prepareIdentityTransportV3(r *http.Request, session *p
 			streamURL = appendPlaybackQueryV3(streamURL, "seek", strconv.FormatFloat(seek, 'f', -1, 64))
 		}
 	}
-	capabilityHeaders := h.sessionCapabilityHeadersV3(mode, identityRecipeCard(&routeSession))
 	workload := routingWorkloadV3(result)
 	routingExecution := decision.Shape.Execution
 	routingEgress := noderouting.EgressAPI
@@ -2821,7 +2761,6 @@ func (h *PlaybackHandler) prepareIdentityTransportV3(r *http.Request, session *p
 	}
 	return preparedTransportV3{
 		url:                streamURL,
-		headers:            capabilityHeaders,
 		nodeURL:            nodeURL,
 		transportID:        transportID,
 		routingWorkload:    workload,
@@ -3759,7 +3698,6 @@ func (h *PlaybackHandler) prepareLocalTransportV3(r *http.Request, session *play
 	previousTransportID := remoteTransportID(session)
 	return preparedTransportV3{
 		url:              url,
-		headers:          h.sessionCapabilityHeadersV3(mode, card),
 		hwAccel:          ts.Opts().HWAccel,
 		toneMapMode:      ts.Opts().ToneMapMode,
 		routingWorkload:  routingWorkloadV3(result),
@@ -4042,7 +3980,7 @@ func (h *PlaybackHandler) prepareRemoteTransportV3(r *http.Request, session *pla
 	if routingWorkloadV3(result) == noderouting.WorkloadRemux {
 		rollbackRequired = func() error { return rollbackTransport(true) }
 	}
-	return preparedTransportV3{url: url, headers: h.sessionCapabilityHeadersV3(mode, card), nodeURL: node.URL, transportID: transportID, hwAccel: confirmedHWAccel, toneMapMode: confirmedToneMapMode,
+	return preparedTransportV3{url: url, nodeURL: node.URL, transportID: transportID, hwAccel: confirmedHWAccel, toneMapMode: confirmedToneMapMode,
 		routingWorkload: routingWorkloadV3(result), routingExecution: noderouting.ExecutionTranscode, routingExecutorID: node.ID, routingExecutorURL: node.URL,
 		routingEgress: routingEgress, routingEgressID: egressNodeID, routingEgressURL: egressNodeURL, commit: func() *transportErrorV3 {
 			if committed {
@@ -4532,8 +4470,7 @@ func (h *PlaybackHandler) replanPlaybackApplicationV3(r *http.Request, sessionID
 	if req.EffectiveOperation() == playback.ReplanOperationFailureRecoveryV3 &&
 		req.Failure.Classification == outputRouteChangedReasonV3 &&
 		sameLegacyOutputRouteReplanV3(record, req) {
-		writeError(w, http.StatusConflict, "output_route_unchanged", "Output route capabilities did not change")
-		return
+		return playback.DecisionResponseV3{}, playbackOperationError(http.StatusConflict, "output_route_unchanged", "Output route capabilities did not change")
 	}
 	response, updated, transport, replanErr := h.executeReplanV3(r, record, req)
 	if replanErr != nil {
@@ -5032,7 +4969,7 @@ func (h *PlaybackHandler) executeReplanV3(r *http.Request, record *playback.Atte
 	// Media authentication is attempt-sticky (pinned in HandleReplanPlaybackV3),
 	// so this mode always equals the one the attempt started under: a reused
 	// transport cannot change the session's media security contract.
-	mode := mediaAuthModeForStartV3(start)
+	mode := headerAuthenticatedMediaV3(start.ClientFeatures)
 	if !seekReanchor {
 		// A freshly planned replan can land on the same refused progressive
 		// remux a start would have; escalate it identically. A seek reanchor
@@ -5147,12 +5084,11 @@ func (h *PlaybackHandler) executeReplanV3(r *http.Request, record *playback.Atte
 		// fallible subtitle-identity freeze after authority publication.
 		artifactRecipe.ToneMapMode = result.ToneMapMode
 	}
-	applyPreparedTransportToPlanV3(result.Plan, transport)
+	result.Plan.Stream.URL = transport.url
 	if err := h.attachSubtitleArtifactV3(r.Context(), session.ID, effectiveFile, result.Plan, result.SubtitleTrackIndex, &artifactRecipe); err != nil {
 		transport.rollback()
 		return playback.DecisionResponseV3{}, *record, nil, subtitleArtifactErrorV3("Failed to prepare the selected subtitle artifact.", err)
 	}
-	attachStreamCapabilityToSubtitleURLsV3(result.Plan)
 	if seekReanchor {
 		if err := validateSeekReanchorPlanV3(record, result.Plan); err != nil {
 			changedFields := seekReanchorIdentityChangesV3(record, result.Plan)
@@ -5240,65 +5176,6 @@ func (h *PlaybackHandler) executeReplanV3(r *http.Request, record *playback.Atte
 	}
 	reservationHandedOff = true
 	return response, updated, &transport, nil
-}
-
-func attachStreamCapabilityToSubtitleURLsV3(plan *playback.PlanV3) {
-	if plan == nil || plan.Stream.URL == "" {
-		return
-	}
-	streamURL, err := url.Parse(plan.Stream.URL)
-	if err != nil {
-		return
-	}
-	token := streamCapabilityFromPlanURLV3(streamURL)
-	if token == "" {
-		return
-	}
-	for index := range plan.Subtitle.Inventory {
-		plan.Subtitle.Inventory[index].URL = setStreamCapabilityQueryV3(plan.Subtitle.Inventory[index].URL, token)
-		plan.Subtitle.Inventory[index].FontBundleURL = setStreamCapabilityQueryV3(plan.Subtitle.Inventory[index].FontBundleURL, token)
-	}
-	if plan.Subtitle.Artifact != nil {
-		plan.Subtitle.Artifact.URL = setStreamCapabilityQueryV3(plan.Subtitle.Artifact.URL, token)
-	}
-}
-
-// streamCapabilityFromPlanURLV3 returns the session capability regardless of
-// transport topology. Integrated delivery carries it in ?st=; proxy delivery
-// carries the same signed token in a route segment so the proxy can validate
-// the request without API-server state.
-func streamCapabilityFromPlanURLV3(streamURL *url.URL) string {
-	if streamURL == nil {
-		return ""
-	}
-	if token := streamURL.Query().Get(streamTokenParam); token != "" {
-		return token
-	}
-	segments := strings.Split(strings.Trim(streamURL.Path, "/"), "/")
-	for index := 0; index+2 < len(segments); index++ {
-		if segments[index] != "stream" {
-			continue
-		}
-		switch segments[index+1] {
-		case string(playback.PlayDirect), string(playback.PlayRemux), string(playback.PlayTranscode):
-			return segments[index+2]
-		}
-	}
-	return ""
-}
-
-func setStreamCapabilityQueryV3(rawURL, token string) string {
-	if rawURL == "" || token == "" {
-		return rawURL
-	}
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
-	}
-	query := parsed.Query()
-	query.Set(streamTokenParam, token)
-	parsed.RawQuery = query.Encode()
-	return parsed.String()
 }
 
 // applyTransportToneMapModeV3 records an executor fallback in the result before

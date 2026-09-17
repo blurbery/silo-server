@@ -17,6 +17,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/access"
 	"github.com/Silo-Server/silo-server/internal/auth"
 	evt "github.com/Silo-Server/silo-server/internal/events"
+	"github.com/Silo-Server/silo-server/internal/models"
 	"github.com/Silo-Server/silo-server/internal/playback"
 )
 
@@ -401,5 +402,38 @@ func TestControlSocketTicketStoreBoundsAndValidation(t *testing.T) {
 	}
 	if _, err := store.Consume(ctx, value); !errors.Is(err, evt.ErrSocketTicket) {
 		t.Fatal("credential consumed twice")
+	}
+}
+
+func TestControlSocketV2SendsPersistedMarkersOnHelloAndReconnect(t *testing.T) {
+	f := newControlSocketFixture(t)
+	start, end := 4.0, 58.0
+	f.pb.fileResolver = mapPlaybackFileResolver{files: map[int]*models.MediaFile{
+		100: {ID: 100, IntroStart: &start, IntroEnd: &end},
+	}}
+	f.pb.MarkerUpdateNotifier = playback.NewMarkerUpdateNotifier(f.manager, f.hub)
+	for connection := range 2 {
+		conn, _, err := f.dial(t, f.mint(t, controlInstallation), nil) //nolint:bodyclose // dial registers response cleanup
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.hello(t, conn)
+		if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		var event playback.EventEnvelope
+		if err := conn.ReadJSON(&event); err != nil {
+			t.Fatalf("connection %d marker snapshot: %v", connection, err)
+		}
+		var payload playback.MarkersUpdatedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Intro == nil || payload.Intro.Start != start || payload.Intro.End != end {
+			t.Fatalf("connection %d lost persisted intro markers: %+v", connection, payload.Intro)
+		}
+		if err := conn.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

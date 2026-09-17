@@ -181180,10 +181180,16 @@
           "copy_video_mpegts": {
             "type": "boolean"
           },
+          "drop_initial_leading_pictures": {
+            "type": "boolean"
+          },
           "hw_accel": {
             "type": "string"
           },
           "input_path": {
+            "type": "string"
+          },
+          "remux_dv_mode": {
             "type": "string"
           },
           "require_ready": {

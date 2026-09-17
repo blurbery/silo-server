@@ -12629,7 +12629,7 @@
           "Authorization": "Bearer tok-admin",
           "Content-Type": "multipart/form-data; boundary=silo-fixture-boundary"
         },
-        "body": "--silo-fixture-boundary\r\nContent-Disposition: form-data; name=\"poster\"; filename=\"poster.png\"\r\nContent-Type: image/png\r\n\r\n\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\r\n--silo-fixture-boundary--\r\n"
+        "body": "--silo-fixture-boundary\r\nContent-Disposition: form-data; name=\"poster\"; filename=\"poster.png\"\r\nContent-Type: image/png\r\n\r\n����������������\r\n--silo-fixture-boundary--\r\n"
       },
       "expected_status": 200,
       "response_headers": {
@@ -12651,7 +12651,7 @@
           "Authorization": "Bearer tok-admin",
           "Content-Type": "multipart/form-data; boundary=silo-fixture-boundary"
         },
-        "body": "--silo-fixture-boundary\r\nContent-Disposition: form-data; name=\"poster\"; filename=\"poster.png\"\r\nContent-Type: image/gif\r\n\r\n\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\r\n--silo-fixture-boundary--\r\n"
+        "body": "--silo-fixture-boundary\r\nContent-Disposition: form-data; name=\"poster\"; filename=\"poster.png\"\r\nContent-Type: image/gif\r\n\r\n����������������\r\n--silo-fixture-boundary--\r\n"
       },
       "expected_status": 422,
       "response_headers": {
