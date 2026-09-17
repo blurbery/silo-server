@@ -86,6 +86,9 @@ func (f *controlSocketFixture) mint(t *testing.T, installation string) string {
 
 func (f *controlSocketFixture) dial(t *testing.T, ticket string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 	t.Helper()
+	f.handler.laneMu.Lock()
+	previousLane := f.handler.lanes[f.session.ID]
+	f.handler.laneMu.Unlock()
 	endpoint := "ws" + strings.TrimPrefix(f.server.URL, "http") + "/api/v2/playback/sessions/" + f.session.ID + "/control/ws"
 	dialer := websocket.Dialer{Subprotocols: []string{PlaybackControlSocketProtocol, eventsTicketProtocolPrefix + ticket}}
 	if headers == nil {
@@ -97,6 +100,17 @@ func (f *controlSocketFixture) dial(t *testing.T, ticket string, headers http.He
 	}
 	if resp != nil {
 		t.Cleanup(func() { _ = resp.Body.Close() })
+	}
+	if err == nil && conn != nil {
+		// The HTTP upgrade reaches the client before the handler registers its
+		// new hub connection. On reconnect the old session is already marked
+		// connected, so that flag cannot prove takeover has completed.
+		waitForCondition(t, func() bool {
+			f.handler.laneMu.Lock()
+			defer f.handler.laneMu.Unlock()
+			lane := f.handler.lanes[f.session.ID]
+			return lane != nil && lane != previousLane
+		}, "control socket did not take over its delivery lane")
 	}
 	return conn, resp, err
 }
