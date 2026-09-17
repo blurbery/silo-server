@@ -1956,15 +1956,6 @@ func (h *ItemsHandler) viewerUserStore(ctx context.Context, profileID string) (u
 	return store, profileID, ok
 }
 
-func (h *ItemsHandler) userStoreForRequest(r *http.Request) (userstore.UserStore, string, bool) {
-	profileID := requestProfileID(r)
-	store, ok := h.userStoreFor(r.Context(), apimw.GetUserID(r.Context()), profileID)
-	if !ok {
-		return nil, "", false
-	}
-	return store, profileID, true
-}
-
 // userStoreFor opens the account's store for a profile; false when either
 // identity is missing or the store cannot be opened.
 func (h *ItemsHandler) userStoreFor(ctx context.Context, userID int, profileID string) (userstore.UserStore, bool) {

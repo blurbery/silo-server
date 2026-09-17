@@ -14,15 +14,15 @@ import (
 
 type adminTranslationRepo struct {
 	translation.JobRepository
-	job       translation.Job
-	cancelled int
+	job      translation.Job
+	canceled int
 }
 
 func (r *adminTranslationRepo) GetJob(context.Context, int64) (*translation.Job, error) {
 	return &r.job, nil
 }
 func (r *adminTranslationRepo) FailJob(_ context.Context, _ int64, status translation.JobStatus, _ string) error {
-	r.cancelled++
+	r.canceled++
 	r.job.Status = status
 	return nil
 }
@@ -32,19 +32,19 @@ func TestAdminTranslationCancelBindsAuthorizedItem(t *testing.T) {
 	h := NewMetadataAIHandler(service)
 	err := h.CancelAdminMetadataTranslation(t.Context(), "other", 7)
 	apiErr, ok := errors.AsType[*APIError](err)
-	if !ok || apiErr.Status != 404 || repo.cancelled != 0 {
-		t.Fatalf("cross-item cancellation: %v calls=%d", err, repo.cancelled)
+	if !ok || apiErr.Status != 404 || repo.canceled != 0 {
+		t.Fatalf("cross-item cancellation: %v calls=%d", err, repo.canceled)
 	}
 	router := chi.NewRouter()
 	router.Post("/items/{id}/jobs/{job_id}/cancel", h.HandleCancelJob)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/items/other/jobs/7/cancel", nil))
-	if rec.Code != 404 || repo.cancelled != 0 {
+	if rec.Code != 404 || repo.canceled != 0 {
 		t.Fatalf("v1 cross-item: %d %s", rec.Code, rec.Body)
 	}
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/items/owned/jobs/7/cancel", nil))
-	if rec.Code != 204 || rec.Body.Len() != 0 || repo.cancelled != 1 || repo.job.Status != jobrunner.StatusCancelled {
+	if rec.Code != 204 || rec.Body.Len() != 0 || repo.canceled != 1 || repo.job.Status != jobrunner.StatusCancelled {
 		t.Fatalf("cancel: %d %s %#v", rec.Code, rec.Body, repo)
 	}
 }

@@ -31,15 +31,15 @@ func KeyAuthorityUsageAcceptance(catalogs []*Catalog) ([]*Catalog, error) {
 	}
 	const keyPath = "/api/v2/api-keys"
 	routes := map[string][3]string{
-		"keys_list.api_key_forbidden":   {http.MethodGet, keyPath, "listPersonalAPIKeys"},
-		"keys_list.error_shape":         {http.MethodGet, keyPath, "listPersonalAPIKeys"},
-		"keys_create.api_key_forbidden": {http.MethodPost, keyPath, "createPersonalAPIKey"},
+		"keys_list.api_key_forbidden":   {http.MethodGet, keyPath, listPersonalAPIKeysOperation},
+		"keys_list.error_shape":         {http.MethodGet, keyPath, listPersonalAPIKeysOperation},
+		"keys_create.api_key_forbidden": {http.MethodPost, keyPath, createPersonalAPIKeyOperation},
 		"scopes.api_key_allowed":        {http.MethodGet, "/api/v2/api-keys/scopes", "getPersonalAPIKeyScopes"},
 		"keys_delete.api_key_forbidden": {http.MethodDelete, "/api/v2/api-keys/1", "revokePersonalAPIKey"},
-		"me.api_key":                    {http.MethodGet, "/api/v2/account/me", "getCurrentUser"},
-		"me.scoped_api_key":             {http.MethodGet, "/api/v2/account/me", "getCurrentUser"},
+		"me.api_key":                    {http.MethodGet, accountMeV2Path, "getCurrentUser"},
+		"me.scoped_api_key":             {http.MethodGet, accountMeV2Path, "getCurrentUser"},
 		"logout.api_key":                {http.MethodPost, "/api/v2/auth/logout", "logout"},
-		"adm_inv_list.scoped_key":       {http.MethodGet, "/api/v2/admin/invitations", "listAdminInvitations"},
+		"adm_inv_list.scoped_key":       {http.MethodGet, adminInvitationInputV2Path, "listAdminInvitations"},
 	}
 	seen := map[string]bool{}
 	var result []*Catalog

@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+const subscriptionSeriesType = "series"
+
 // SubscriptionResult is the outcome of creating/updating a subscription: the
 // stored subscription plus how many in-scope episodes were registered as managed
 // downloads.
@@ -331,7 +333,7 @@ func (s *Service) prepareSubscription(ctx context.Context, userID int, req Subsc
 	if err != nil {
 		return nil, fmt.Errorf("loading series: %w", err)
 	}
-	if item.Type != "series" {
+	if item.Type != subscriptionSeriesType {
 		return nil, ErrNotSeries
 	}
 	if err := s.itemAccess.EnsureAccessible(ctx, req.SeriesID, filter); err != nil {

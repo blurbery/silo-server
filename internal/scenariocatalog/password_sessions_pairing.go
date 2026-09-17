@@ -34,7 +34,7 @@ func PasswordSessionsAcceptance(catalogs []*Catalog) ([]*Catalog, error) {
 			for _, s := range r.Scenarios {
 				pair := s.V2Expectation
 				password := strings.HasPrefix(s.ID, "password.")
-				op, principal := "deleteSession", Principal{Class: "authenticated"}
+				op, principal := "deleteSession", Principal{Class: decisionAuthenticatedPrincipal}
 				if password {
 					op = passwordSessionsChangeOperation
 					principal = Principal{Class: passwordSessionsPrimaryPrincipal}

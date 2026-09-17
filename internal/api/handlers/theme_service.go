@@ -46,7 +46,7 @@ func (h *ThemeHandler) DownloadThemeFile(ctx context.Context, rawURL string) ([]
 	if err != nil {
 		return nil, apiError(http.StatusBadGateway, "download_failed", "Failed to fetch theme file")
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, apiError(http.StatusBadGateway, "download_failed", "Theme file returned non-200")
 	}
@@ -94,7 +94,7 @@ func (h *ThemeHandler) LoadThemeCatalog(ctx context.Context) (*ThemeCatalogResul
 		}
 		return nil, apiError(http.StatusServiceUnavailable, "catalog_unavailable", "Theme catalog is unavailable")
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		if cached != nil {
 			return &ThemeCatalogResult{Body: cached, Stale: true}, nil

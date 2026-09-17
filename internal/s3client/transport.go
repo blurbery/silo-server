@@ -57,4 +57,10 @@ var sharedDeliveryHTTPClient = &http.Client{Transport: sharedHTTPClientValue.Tra
 
 func sharedHTTPClient() *http.Client { return sharedHTTPClientValue }
 
-func sharedTransport() *http.Transport { return sharedHTTPClientValue.Transport.(*http.Transport) }
+func sharedTransport() *http.Transport {
+	transport, ok := sharedHTTPClientValue.Transport.(*http.Transport)
+	if !ok {
+		panic("shared S3 transport must be an HTTP transport")
+	}
+	return transport
+}

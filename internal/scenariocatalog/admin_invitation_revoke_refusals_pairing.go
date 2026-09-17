@@ -31,7 +31,7 @@ func AdminInvitationRevokeRefusalsAcceptance(catalogs []*Catalog) ([]*Catalog, e
 				status := http.StatusUnauthorized
 				switch s.ID {
 				case "adm_inv_revoke.admin_secondary_profile":
-					principal = Principal{Class: adminInvitationRevokeAdminPrincipal, Profile: "admin_secondary"}
+					principal = Principal{Class: adminInvitationRevokeAdminPrincipal, Profile: inviteCodeDeleteSecondaryProfile}
 					status = http.StatusForbidden
 				case "adm_inv_revoke.non_admin":
 					principal = Principal{Class: adminInvitationRevokeMemberPrincipal}

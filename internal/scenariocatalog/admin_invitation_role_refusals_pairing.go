@@ -27,7 +27,7 @@ func AdminInvitationRoleRefusalsAcceptance(catalogs []*Catalog) ([]*Catalog, err
 				expected := map[string]any{adminInvitationRoleEmail: "fixture-guest@silo.example.test", "role": "owner"}
 				originalStatus := http.StatusForbidden
 				if s.ID == "adm_inv_create.admin_grouped" {
-					expected["role"] = "admin"
+					expected["role"] = decisionAdminPrincipal
 					expected["access_group_id"] = float64(1)
 					originalStatus = http.StatusUnprocessableEntity
 				}

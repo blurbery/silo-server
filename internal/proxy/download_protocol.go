@@ -8,6 +8,8 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
+const conditionIfMatch = "If-Match"
+
 // ProtocolDownloads describes the signed download-token surface, which is
 // distinct from playback egress/grant authorization and node bearer commands.
 func ProtocolDownloads() []workerprotocol.Operation {
@@ -31,7 +33,7 @@ func ProtocolDownloads() []workerprotocol.Operation {
 			Parameters:  []*huma.Param{{Name: "token", In: pathParameter, Required: true, Schema: &huma.Schema{Type: huma.TypeString}, Description: "Signed download authority, including local path or remote artifact and optional exact execution attestation."}},
 			Responses:   map[string]*huma.Response{},
 		}
-		for _, name := range []string{rangeHeader, "If-Range", "If-Match", conditionNoneMatch, "If-Modified-Since", "If-Unmodified-Since"} {
+		for _, name := range []string{rangeHeader, "If-Range", conditionIfMatch, conditionNoneMatch, "If-Modified-Since", "If-Unmodified-Since"} {
 			op.Parameters = append(op.Parameters, &huma.Param{Name: name, In: header, Schema: &huma.Schema{Type: huma.TypeString}})
 		}
 		headers := map[string]*huma.Param{}

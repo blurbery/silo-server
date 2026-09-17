@@ -66,10 +66,10 @@ func TestEventsSocketV2TrustedProxyDenialPreservesTicket(t *testing.T) {
 	headers := http.Header{"Origin": []string{origin}, "X-Forwarded-Proto": []string{"https", "http"}, "X-Forwarded-For": []string{"198.51.100.1"}}
 	conn, resp, err := dialer.DialContext(t.Context(), endpoint, headers)
 	if conn != nil {
-		conn.Close()
+		_ = conn.Close()
 	}
 	if resp != nil {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 	}
 	if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("ambiguous proxy handshake: %v, %v", resp, err)
@@ -77,12 +77,12 @@ func TestEventsSocketV2TrustedProxyDenialPreservesTicket(t *testing.T) {
 	headers.Set("X-Forwarded-Proto", "https")
 	conn, resp, err = dialer.DialContext(t.Context(), endpoint, headers)
 	if resp != nil {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if conn.Subprotocol() != EventsSocketProtocol {
 		t.Fatal("protocol mismatch")
 	}

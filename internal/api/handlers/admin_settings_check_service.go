@@ -3,8 +3,11 @@ package handlers
 import (
 	"context"
 	"errors"
+
 	"github.com/Silo-Server/silo-server/internal/config"
 )
+
+const connectionCheckFailedMessage = "Connection check failed. Verify the submitted settings and provider availability."
 
 var ErrAdminSettingsCheckKind = errors.New("unsupported settings check kind")
 var ErrAdminSettingsCheckConfig = errors.New("invalid settings check configuration")
@@ -43,7 +46,7 @@ func (h *AdminHandler) CheckAdminSettingsConnection(ctx context.Context, kind st
 	if !result.Success {
 		result.Message = result.safeMessage
 		if result.Message == "" {
-			result.Message = "Connection check failed. Verify the submitted settings and provider availability."
+			result.Message = connectionCheckFailedMessage
 		}
 	}
 	return AdminSettingsCheckResult{Success: result.Success, Message: result.Message}, nil

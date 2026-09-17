@@ -32,7 +32,7 @@ func SignupFamilyAcceptance(catalogs []*Catalog) ([]*Catalog, error) {
 				if seen {
 					return nil, fmt.Errorf("duplicate required scenario %s", scenario.ID)
 				}
-				if r.Listener != listenerAPI || r.Method != http.MethodPost || r.Path != "/api/v1/auth/signup" {
+				if r.Listener != listenerAPI || r.Method != http.MethodPost || r.Path != signupCodesLegacyRoute {
 					return nil, fmt.Errorf("%s: changed signup route", scenario.ID)
 				}
 				if err := ValidatePairing(scenario.V2Expectation); err != nil {

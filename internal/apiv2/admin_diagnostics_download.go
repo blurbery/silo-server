@@ -60,7 +60,7 @@ func registerAdminDiagnosticDownload(reg *Registry) {
 			writeProblem(w, r, NewProblem(TypeInternalError, "Diagnostic report download failed"))
 			return
 		}
-		defer download.Body.Close()
+		defer func() { _ = download.Body.Close() }()
 		w.Header().Set("Content-Type", diagnostics.ReportDownloadContentType)
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": download.Filename}))
 		w.Header().Set("Cache-Control", "no-store")

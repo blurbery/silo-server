@@ -29,7 +29,7 @@ func InviteCodeCreateRefusalsAcceptance(catalogs []*Catalog) ([]*Catalog, error)
 				status := http.StatusUnauthorized
 				switch s.ID {
 				case "codes_create.admin_secondary_profile":
-					principal = Principal{Class: inviteCodeAdminPrincipal, Profile: "admin_secondary"}
+					principal = Principal{Class: inviteCodeAdminPrincipal, Profile: inviteCodeDeleteSecondaryProfile}
 					status = http.StatusForbidden
 				case "codes_create.non_admin":
 					principal = Principal{Class: inviteCodeMemberPrincipal}

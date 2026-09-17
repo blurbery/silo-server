@@ -11,6 +11,8 @@ import (
 	apiv2 "github.com/Silo-Server/silo-server/contracts/api/v2"
 )
 
+const profilesV2Path = "/api/v2/profiles"
+
 // openAPIOperation is the slice of one embedded v2 operation the validators read.
 type openAPIOperation struct {
 	OperationID string `json:"operationId"`
@@ -142,7 +144,7 @@ func DeviceMutationAcceptance(catalogs []*Catalog) ([]*Catalog, error) {
 					return nil, fmt.Errorf("%s: required household read-after is missing", scenario.ID)
 				}
 				step := then[0]
-				if step.OperationID != deviceListOperation || step.Method != http.MethodGet || step.Request.Path != deviceListPath || step.Request.Query["scope"] != "household" || step.Principal == nil || step.Principal.Class != "primary_profile" || len(step.Expect.Body) == 0 {
+				if step.OperationID != deviceListOperation || step.Method != http.MethodGet || step.Request.Path != deviceListPath || step.Request.Query["scope"] != "household" || step.Principal == nil || step.Principal.Class != adminInvitationCreateMemberPrincipal || len(step.Expect.Body) == 0 {
 					return nil, fmt.Errorf("%s: required household read-after is invalid", scenario.ID)
 				}
 			}
@@ -228,11 +230,11 @@ func ProfileMutationAcceptance(catalogs []*Catalog) ([]*Catalog, error) {
 					return nil, fmt.Errorf("%s: required profile read-after is missing", scenario.ID)
 				}
 				step := then[0]
-				principal := "primary_profile"
+				principal := adminInvitationCreateMemberPrincipal
 				if scenario.ID == "profiles_delete.primary_protected" {
-					principal = "acting_admin"
+					principal = adminInvitationCreateAdminPrincipal
 				}
-				if step.OperationID != "listProfiles" || step.Method != http.MethodGet || step.Request.Path != "/api/v2/profiles" || step.Principal == nil || step.Principal.Class != principal || len(step.Expect.Body) == 0 {
+				if step.OperationID != "listProfiles" || step.Method != http.MethodGet || step.Request.Path != profilesV2Path || step.Principal == nil || step.Principal.Class != principal || len(step.Expect.Body) == 0 {
 					return nil, fmt.Errorf("%s: required profile read-after is invalid", scenario.ID)
 				}
 			}

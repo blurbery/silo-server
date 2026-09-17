@@ -160,11 +160,11 @@ func (s Scenario) Method() string { return s.method }
 // NeedsDatabase reports whether the scenario can only run against a live
 // Postgres: anything that sends a credential, applies settings, or says so.
 func (s Scenario) NeedsDatabase() bool {
-	if s.Principal.Class != "public" || len(s.Settings) > 0 || len(s.Then) > 0 {
+	if s.Principal.Class != adminInvitationCreatePublicPrincipal || len(s.Settings) > 0 || len(s.Then) > 0 {
 		return true
 	}
 	for _, req := range s.Requires {
-		if req == "database" {
+		if req == frozenDatabaseRequirement {
 			return true
 		}
 	}

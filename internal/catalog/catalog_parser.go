@@ -454,7 +454,7 @@ func parseCatalogScalar(raw string) any {
 // a persisted collection sort. Relevance is meaningful only for a text query.
 func (r CatalogRequest) ValidateQueryDefinition() error {
 	q := r.Query
-	if NormalizeQuerySort(q.Sort).Field == "relevance" {
+	if NormalizeQuerySort(q.Sort).Field == relevanceSortField {
 		if r.Source != CatalogSourceQuery || strings.TrimSpace(r.SearchQuery) == "" {
 			return fmt.Errorf("relevance sort requires query source and q")
 		}

@@ -350,7 +350,7 @@ func (h *DiagnosticsHandler) logRejected(ctx context.Context, userID int, reason
 }
 
 // DiagnosticsUploadFailure preserves the bridge's public error classification.
-// The v2 adapter translates it into its catalogued Problem Details response.
+// The v2 adapter translates it into its documented Problem Details response.
 type DiagnosticsUploadFailure struct {
 	Status     int
 	Code       string

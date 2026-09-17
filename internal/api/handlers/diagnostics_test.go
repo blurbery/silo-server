@@ -901,7 +901,7 @@ func TestOpenAdminDiagnosticDownloadAlwaysStreams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer download.Body.Close()
+	defer func() { _ = download.Body.Close() }()
 	body, err := io.ReadAll(download.Body)
 	if err != nil || string(body) != "bundle" || service.presignCalls != 0 || service.openCalls != 1 || download.Size == nil || download.Filename == "" {
 		t.Fatal(download, err, service.presignCalls, service.openCalls)

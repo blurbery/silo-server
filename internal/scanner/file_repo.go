@@ -867,7 +867,7 @@ func (r *FileRepository) UpsertBatchTx(ctx context.Context, tx pgx.Tx, files []m
 		batch.Queue(query, capture.args...)
 	}
 	results := tx.SendBatch(ctx, batch)
-	defer results.Close()
+	defer func() { _ = results.Close() }()
 	for range files {
 		if _, err := results.Exec(); err != nil {
 			return fmt.Errorf("media file batch upsert: %w", err)

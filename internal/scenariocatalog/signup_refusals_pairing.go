@@ -8,7 +8,7 @@ import (
 var RequiredSignupRefusalsScenarios = []string{"signup.disabled_setting", "signup.missing_fields"}
 
 func SignupRefusalsAcceptance(catalogs []*Catalog) ([]*Catalog, error) {
-	selected, err := requiredAcceptance(catalogs, http.MethodPost, []string{"/api/v1/auth/signup"}, RequiredSignupRefusalsScenarios)
+	selected, err := requiredAcceptance(catalogs, http.MethodPost, []string{signupCodesLegacyRoute}, RequiredSignupRefusalsScenarios)
 	if err != nil {
 		return nil, err
 	}

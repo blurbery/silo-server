@@ -5,6 +5,10 @@ import (
 	"net/http"
 )
 
+const schemeHTTPS = "https"
+
+const schemeHTTP = "http"
+
 type contextKey string
 
 const clientIPKey contextKey = "client_ip"
@@ -76,7 +80,7 @@ func RequestScheme(r *http.Request) string {
 		return scheme
 	}
 	if r.TLS != nil {
-		return "https"
+		return schemeHTTPS
 	}
-	return "http"
+	return schemeHTTP
 }

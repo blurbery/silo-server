@@ -31,7 +31,7 @@ func AuthLifecycleAcceptance(catalogs []*Catalog) ([]*Catalog, error) {
 				}
 				if s.ID == "logout.session_gone" {
 					op = lifecycleLogoutOperation
-					principal = Principal{Class: "authenticated"}
+					principal = Principal{Class: decisionAuthenticatedPrincipal}
 					repeat = 2
 				}
 				want := s.Request

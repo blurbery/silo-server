@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const listAdminInvitationsOperation = "listAdminInvitations"
+
 const adminInvitationLifecycleRevokeOperation = "revokeAdminInvitation"
 const adminInvitationLifecycleGuestEmail = "fixture-guest@silo.example.test"
 
@@ -32,7 +34,7 @@ func AdminInvitationLifecycleAcceptance(catalogs []*Catalog) ([]*Catalog, error)
 		method, route, operation string
 		start, end               int
 	}{
-		{http.MethodGet, adminInvitationCreateLegacyPath, "listAdminInvitations", 0, 6},
+		{http.MethodGet, adminInvitationCreateLegacyPath, listAdminInvitationsOperation, 0, 6},
 		{http.MethodPost, adminInvitationCreateLegacyPath, adminInvitationRoleOperation, 6, 11},
 		{http.MethodPost, adminInvitationResendLegacyPath, adminInvitationEmailConflictResendOperation, 11, 14},
 		{http.MethodDelete, adminInvitationRevokeLegacyPath, adminInvitationLifecycleRevokeOperation, 14, 18},
@@ -53,7 +55,7 @@ func AdminInvitationLifecycleAcceptance(catalogs []*Catalog) ([]*Catalog, error)
 					switch i {
 					case 0:
 						if s.ID == "adm_inv_list.admin_no_profile" {
-							principal.Class = "admin"
+							principal.Class = decisionAdminPrincipal
 						}
 						if s.ID == "adm_inv_list.error_shape" {
 							principal.Class = adminInvitationResendMemberPrincipal

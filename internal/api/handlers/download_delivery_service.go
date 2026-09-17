@@ -18,7 +18,7 @@ func (h *DownloadHandler) ServeDownloadFile(w http.ResponseWriter, r *http.Reque
 	}
 	userID := apimw.GetUserID(r.Context())
 	if userID == 0 {
-		return &APIError{Status: 401, Message: "Authentication required"}
+		return &APIError{Status: 401, Message: authenticationRequiredMessage}
 	}
 	profileID, deviceID, _, _ := managedIdentity(r)
 	filter := requestAccessFilter(r)

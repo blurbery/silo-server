@@ -16,6 +16,8 @@ import (
 	"github.com/Silo-Server/silo-server/internal/models"
 )
 
+const audiobookLanguageKey = "language"
+
 // handlePlayStart handles POST /abs/api/items/{libraryItemId}/play.
 //
 // Real ABS clients hit this endpoint to start a playback session and get back
@@ -347,28 +349,28 @@ func buildSiloPlayMediaMetadata(item *models.MediaItem) map[string]any {
 	}
 
 	return map[string]any{
-		"title":             title,
-		"titleIgnorePrefix": titleIgnorePrefix(title),
-		"subtitle":          nil,
-		"authors":           authors,
-		"authorName":        authorName,
-		"authorNameLF":      authorNameLF,
-		"narrators":         narrators,
-		"narratorName":      strings.Join(narrators, ", "),
-		"series":            series,
-		"seriesName":        strings.Join(seriesNames, ", "),
-		"genres":            genres,
-		"tags":              []string{},
-		"publishedYear":     publishedYear,
-		"publishedDate":     nil,
-		"publisher":         publisher,
-		"description":       nilIfEmpty(item.Overview),
-		"descriptionPlain":  nilIfEmpty(stripHTML(item.Overview)),
-		"isbn":              nil,
-		"asin":              nil,
-		"language":          audiobookLanguage(item),
-		"explicit":          false,
-		"abridged":          false,
+		"title":              title,
+		"titleIgnorePrefix":  titleIgnorePrefix(title),
+		"subtitle":           nil,
+		"authors":            authors,
+		"authorName":         authorName,
+		"authorNameLF":       authorNameLF,
+		"narrators":          narrators,
+		"narratorName":       strings.Join(narrators, ", "),
+		"series":             series,
+		"seriesName":         strings.Join(seriesNames, ", "),
+		"genres":             genres,
+		"tags":               []string{},
+		"publishedYear":      publishedYear,
+		"publishedDate":      nil,
+		"publisher":          publisher,
+		"description":        nilIfEmpty(item.Overview),
+		"descriptionPlain":   nilIfEmpty(stripHTML(item.Overview)),
+		"isbn":               nil,
+		"asin":               nil,
+		audiobookLanguageKey: audiobookLanguage(item),
+		"explicit":           false,
+		"abridged":           false,
 	}
 }
 

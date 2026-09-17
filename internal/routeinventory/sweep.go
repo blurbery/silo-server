@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const profilingImportPath = "net/http/pprof"
+
 // The sweep is the module-wide half of the completeness guarantee. The walk
 // enumerates what the declared listeners register and seal.go proves nothing
 // can get a listener's router back; the sweep proves that no router can come
@@ -60,7 +62,7 @@ var defaultMuxRegistrars = map[string]bool{methodHandle: true, methodHandleFunc:
 // defaultMuxImports register on http.DefaultServeMux at init time.
 const profilingImportAlias = "pprof"
 
-var defaultMuxImports = map[string]bool{"net/http/pprof": true, "expvar": true}
+var defaultMuxImports = map[string]bool{profilingImportPath: true, "expvar": true}
 
 type sweeper struct {
 	a        *Analyzer
@@ -130,7 +132,7 @@ func (s *sweeper) file(file *ast.File) {
 // everywhere. Only its named standard handlers in the sealed, inventoried
 // operational listener are permitted; this grants no router/mux exemption.
 func (s *sweeper) allowedProfilingImport(rel string, spec *ast.ImportSpec, path string) bool {
-	if path != "net/http/pprof" || rel != debugServerHandlerFile || spec.Name == nil || spec.Name.Name != profilingImportAlias {
+	if path != profilingImportPath || rel != debugServerHandlerFile || spec.Name == nil || spec.Name.Name != profilingImportAlias {
 		return false
 	}
 	for _, listener := range s.a.cfg.Listeners {

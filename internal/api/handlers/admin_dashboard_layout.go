@@ -14,6 +14,8 @@ import (
 	apimw "github.com/Silo-Server/silo-server/internal/api/middleware"
 )
 
+const authenticationRequiredMessage = "Authentication required"
+
 // maxDashboardLayoutBytes bounds the PUT body. The layout is a short list of
 // widget ids and spans; 16 KiB leaves generous headroom while keeping the blob
 // small enough that last-write-wins per admin account stays cheap.
@@ -122,7 +124,7 @@ func (h *AdminHandler) HandleGetDashboardLayout(w http.ResponseWriter, r *http.R
 	}
 	userID := apimw.GetUserID(r.Context())
 	if userID == 0 {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		writeError(w, http.StatusUnauthorized, "unauthorized", authenticationRequiredMessage)
 		return
 	}
 
@@ -154,7 +156,7 @@ func (h *AdminHandler) HandlePutDashboardLayout(w http.ResponseWriter, r *http.R
 	}
 	userID := apimw.GetUserID(r.Context())
 	if userID == 0 {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		writeError(w, http.StatusUnauthorized, "unauthorized", authenticationRequiredMessage)
 		return
 	}
 
@@ -192,7 +194,7 @@ func (h *AdminHandler) HandleDeleteDashboardLayout(w http.ResponseWriter, r *htt
 	}
 	userID := apimw.GetUserID(r.Context())
 	if userID == 0 {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		writeError(w, http.StatusUnauthorized, "unauthorized", authenticationRequiredMessage)
 		return
 	}
 
@@ -227,7 +229,7 @@ func (h *AdminHandler) ReadAdminDashboardLayout(ctx context.Context, userID int)
 		return AdminDashboardLayoutView{}, &APIError{Status: http.StatusServiceUnavailable, Message: "Dashboard layout storage unavailable"}
 	}
 	if userID <= 0 {
-		return AdminDashboardLayoutView{}, &APIError{Status: http.StatusUnauthorized, Message: "Authentication required"}
+		return AdminDashboardLayoutView{}, &APIError{Status: http.StatusUnauthorized, Message: authenticationRequiredMessage}
 	}
 	return readDashboardLayout(ctx, h.pool, userID)
 }
@@ -239,7 +241,7 @@ func (h *AdminHandler) writeAdminDashboardLayout(ctx context.Context, userID int
 		return AdminDashboardLayoutView{}, &APIError{Status: http.StatusServiceUnavailable, Message: "Dashboard layout storage unavailable"}
 	}
 	if userID <= 0 {
-		return AdminDashboardLayoutView{}, &APIError{Status: http.StatusUnauthorized, Message: "Authentication required"}
+		return AdminDashboardLayoutView{}, &APIError{Status: http.StatusUnauthorized, Message: authenticationRequiredMessage}
 	}
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {

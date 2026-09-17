@@ -101,7 +101,7 @@ func TestRawStreamingFlushesBeforeCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	first := make([]byte, 5)
 	if _, err := io.ReadFull(response.Body, first); err != nil {
 		t.Fatal(err)

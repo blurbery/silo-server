@@ -12,14 +12,14 @@ var RequiredAPIKeyCreateRefusalScenarios = []string{
 }
 
 func APIKeyCreateRefusalAcceptance(catalogs []*Catalog) ([]*Catalog, error) {
-	selected, err := requiredAcceptance(catalogs, http.MethodPost, []string{"/api/v1/api-keys/"}, RequiredAPIKeyCreateRefusalScenarios)
+	selected, err := requiredAcceptance(catalogs, http.MethodPost, []string{frozenPersonalAPIKeysPath}, RequiredAPIKeyCreateRefusalScenarios)
 	if err != nil {
 		return nil, err
 	}
 	for _, c := range selected {
 		for _, r := range c.Rows {
 			for _, s := range r.Scenarios {
-				if s.V2Expectation.OperationID != "createPersonalAPIKey" || len(s.Then) != 0 || len(s.V2Expectation.Then) != 0 || len(s.Requires) != 0 {
+				if s.V2Expectation.OperationID != createPersonalAPIKeyOperation || len(s.Then) != 0 || len(s.V2Expectation.Then) != 0 || len(s.Requires) != 0 {
 					return nil, fmt.Errorf("%s: unsupported creation refusal acceptance sequence", s.ID)
 				}
 			}

@@ -34,7 +34,7 @@ func SectionReplaceAcceptance(catalogs []*Catalog) ([]*Catalog, error) {
 				if len(then) != 3 {
 					return nil, fmt.Errorf("%s: three profile read-after steps required", scenario.ID)
 				}
-				for i, principal := range []string{"profile", "primary_profile", "acting_admin"} {
+				for i, principal := range []string{"profile", "primary_profile", adminInvitationCreateAdminPrincipal} {
 					step := then[i]
 					if step.OperationID != "listProfileSectionOverrides" || step.Method != http.MethodGet || step.Request.Path != "/api/v2/profile/sections" || len(step.Request.Query) != 0 || step.Principal == nil || step.Principal.Class != principal || len(step.Expect.Body) == 0 {
 						return nil, fmt.Errorf("%s: invalid profile read-after step %d", scenario.ID, i)

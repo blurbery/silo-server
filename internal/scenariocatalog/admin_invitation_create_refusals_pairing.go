@@ -45,7 +45,7 @@ func AdminInvitationCreateRefusalsAcceptance(catalogs []*Catalog) ([]*Catalog, e
 				}
 				translated := original
 				translated.Body = pair.Request.Body
-				translated.Path = "/api/v2/admin/invitations"
+				translated.Path = adminInvitationInputV2Path
 				if !reflect.DeepEqual(s.Request, original) || !reflect.DeepEqual(pair.Request, translated) ||
 					!reflect.DeepEqual(s.Principal, principal) || pair.Principal != nil ||
 					pair.Method != http.MethodPost || pair.OperationID != "createAdminInvitation" ||
