@@ -226,7 +226,8 @@ func TestHomePreferenceFiltersOnlyHomeResponses(t *testing.T) {
 	reqCtx := apimw.SetClaims(req.Context(), &auth.Claims{UserID: 1})
 	req = req.WithContext(apimw.SetProfileID(reqCtx, "profile-1"))
 
-	home := handler.buildHomeSectionsResponse(req, sectionItems)
+	filtered := handler.prepareHomeSections(req.Context(), sectionItems, handler.homeOptions(req.Context()))
+	home := handler.buildSections(req.Context(), filtered, nil, requestAccessFilter(req), requestImageSize(req))
 	if got := home.Sections[0].Items; len(got) != 1 || got[0].ContentID != "unwatched" {
 		t.Fatalf("Home response items = %#v, want only unwatched", got)
 	}

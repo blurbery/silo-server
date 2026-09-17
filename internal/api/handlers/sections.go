@@ -1644,8 +1644,6 @@ func shouldLogOverlaySummaryError(err error) bool {
 
 type sectionResponseOptions struct {
 	hideWatchedHomeItems bool
-	userStates           map[string]*itemUserStateResponse
-	libraryID            *int
 }
 
 const (
@@ -1654,38 +1652,6 @@ const (
 	// refill window bounded rather than scanning the whole section.
 	homeWatchedMaxExpandedCandidates = 200
 )
-
-func (h *SectionHandler) homeSectionResponseOptions(r *http.Request) sectionResponseOptions {
-	options := sectionResponseOptions{}
-	userID := apimw.GetUserID(r.Context())
-	profileID := apimw.GetProfileID(r.Context())
-	if h.StoreProvider != nil && userID > 0 && profileID != "" {
-		store, err := h.StoreProvider.ForUser(r.Context(), userID)
-		if err == nil {
-			options.hideWatchedHomeItems = sections.HideWatchedItemsFromHome(r.Context(), store, profileID)
-		}
-	}
-	return options
-}
-
-func (h *SectionHandler) buildHomeSectionsResponse(r *http.Request, withItems []sections.SectionWithItems) homeSectionsResponse {
-	options := h.homeSectionResponseOptions(r)
-	withItems, options = h.prepareHomeSectionsResponse(r, withItems, options)
-	return h.buildSectionsResponseWithOptions(r, withItems, options)
-}
-
-func (h *SectionHandler) prepareHomeSectionsResponse(
-	r *http.Request,
-	withItems []sections.SectionWithItems,
-	options sectionResponseOptions,
-) ([]sections.SectionWithItems, sectionResponseOptions) {
-	if !options.hideWatchedHomeItems {
-		return withItems, options
-	}
-
-	options.userStates = h.listSectionItemUserStates(r.Context(), sectionMediaItems(withItems))
-	return filterWatchedHomeSectionItems(withItems, options.userStates), options
-}
 
 func homeSectionsForFetch(
 	resolved []sections.ResolvedSection,
@@ -1776,9 +1742,6 @@ func sectionMediaItems(withItems []sections.SectionWithItems) []*models.MediaIte
 	return items
 }
 
-func (h *SectionHandler) buildSectionsResponseWithOptions(r *http.Request, withItems []sections.SectionWithItems, options sectionResponseOptions) homeSectionsResponse {
-	return h.buildSections(r.Context(), withItems, options.libraryID, requestAccessFilter(r), requestImageSize(r))
-}
 func (h *SectionHandler) prepareHomeSections(ctx context.Context, withItems []sections.SectionWithItems, options sectionResponseOptions) []sections.SectionWithItems {
 	if !options.hideWatchedHomeItems {
 		return withItems

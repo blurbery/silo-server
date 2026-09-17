@@ -164,30 +164,6 @@ type interestTrackingStoreWithDevicesAndRollup struct {
 	userstore.SeriesEpisodeRollupStore
 }
 
-type interestTrackingStoreWithSuperseded struct {
-	*interestTrackingStore
-	userstore.SupersededEpisodeProgressStore
-}
-
-type interestTrackingStoreWithDevicesAndSuperseded struct {
-	*interestTrackingStore
-	userstore.DeviceRegistry
-	userstore.SupersededEpisodeProgressStore
-}
-
-type interestTrackingStoreWithRollupAndSuperseded struct {
-	*interestTrackingStore
-	userstore.SeriesEpisodeRollupStore
-	userstore.SupersededEpisodeProgressStore
-}
-
-type interestTrackingStoreWithDevicesRollupAndSuperseded struct {
-	*interestTrackingStore
-	userstore.DeviceRegistry
-	userstore.SeriesEpisodeRollupStore
-	userstore.SupersededEpisodeProgressStore
-}
-
 // Completion reads also need catalog tables, so preserve this capability only
 // for supporting backends while retaining all mutation hooks on the base wrapper.
 type interestTrackingStoreWithCompletion struct {
@@ -231,12 +207,6 @@ var _ userstore.HistoryVisibilityStore = (*interestTrackingStoreWithDevices)(nil
 var _ userstore.SeriesEpisodeRollupStore = (*interestTrackingStoreWithRollup)(nil)
 var _ userstore.SeriesEpisodeRollupStore = (*interestTrackingStoreWithDevicesAndRollup)(nil)
 var _ userstore.DeviceRegistry = (*interestTrackingStoreWithDevicesAndRollup)(nil)
-var _ userstore.SupersededEpisodeProgressStore = (*interestTrackingStoreWithSuperseded)(nil)
-var _ userstore.SupersededEpisodeProgressStore = (*interestTrackingStoreWithDevicesAndSuperseded)(nil)
-var _ userstore.SupersededEpisodeProgressStore = (*interestTrackingStoreWithRollupAndSuperseded)(nil)
-var _ userstore.SupersededEpisodeProgressStore = (*interestTrackingStoreWithDevicesRollupAndSuperseded)(nil)
-var _ userstore.DeviceRegistry = (*interestTrackingStoreWithDevicesRollupAndSuperseded)(nil)
-var _ userstore.SeriesEpisodeRollupStore = (*interestTrackingStoreWithDevicesRollupAndSuperseded)(nil)
 
 var _ userstore.EpisodeParentCompletionStore = (*interestTrackingStoreWithCompletion)(nil)
 var _ userstore.EpisodeParentCompletionStore = (*interestTrackingStoreWithDevicesAndCompletion)(nil)

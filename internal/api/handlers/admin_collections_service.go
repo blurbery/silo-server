@@ -263,7 +263,17 @@ func (h *LibraryCollectionHandler) updateAdminCollection(ctx context.Context, co
 		SyncSchedule:     req.SyncSchedule,
 	}
 	applyCollectionPosterURLUpdate(&update, req.PosterURL)
-	if err := h.repo.Update(ctx, update); err != nil {
+	updateErr := func() error {
+		if req.PosterURL != nil && req.LibraryIDs == nil {
+			unlock, err := h.lockCollectionPosterMutation(ctx, collectionID)
+			if err != nil {
+				return err
+			}
+			defer unlock()
+		}
+		return h.repo.Update(ctx, update)
+	}()
+	if err := updateErr; err != nil {
 		if errors.Is(err, catalog.ErrLibraryCollectionRevisionMismatch) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return none, err
 		}

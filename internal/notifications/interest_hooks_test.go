@@ -402,7 +402,8 @@ func TestInterestTrackingStorePreservesCombinedPostgresCatalogCapabilities(t *te
 	inner := &struct {
 		*postgresCatalogCapableStore
 		userstore.EpisodeParentCompletionStore
-	}{catalogStore, completionStore}
+		userstore.DeviceSettingsStore
+	}{catalogStore, completionStore, nil}
 	provider := WrapUserStoreProvider(preferenceTransactionTestProvider{store: inner}, &System{})
 	wrapped, err := provider.ForUser(context.Background(), 1)
 	if err != nil {
@@ -411,6 +412,9 @@ func TestInterestTrackingStorePreservesCombinedPostgresCatalogCapabilities(t *te
 
 	if _, ok := wrapped.(userstore.DeviceRegistry); !ok {
 		t.Error("combined wrapper dropped DeviceRegistry")
+	}
+	if _, ok := wrapped.(userstore.DeviceSettingsStore); !ok {
+		t.Fatal("combined wrapper dropped API v2 DeviceSettingsStore")
 	}
 	rollup, ok := wrapped.(userstore.SeriesEpisodeRollupStore)
 	if !ok {

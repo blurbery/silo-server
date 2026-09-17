@@ -1655,20 +1655,3 @@ func (r *ImageCacheJobRepository) enqueueProviderArtwork(ctx context.Context, li
 	}
 	return r.enqueueBatch(ctx, inputs, true)
 }
-
-// ladderRecachableSchemesSQL lists the source schemes the ladder backfill
-// cannot re-download, for use as a NOT LIKE ALL guard. It deliberately differs
-// from nonProviderImageSchemesSQL by omitting file://: a local sidecar IS
-// re-cacheable (the processor's processLocalOne reads it back, confined to the
-// owning library's roots), so excluding sidecars would leave that artwork stuck
-// on the old ladder forever.
-const ladderRecachableSchemesSQL = `ARRAY['s3://%', 'local://%', 'upload://%', 'generated://%']`
-
-// ladderRungLiteral renders the SQL LIKE pattern matching an object key at the
-// rung this ladder version added for an image type. It is derived from the
-// ladder rather than spelled out, so it cannot drift from
-// artworkkey.VariantWidths.
-//
-// The pattern matches both key forms: revisioned ("…/w780.<revision>.webp") and
-// legacy ("…/w780.webp"). Both contain "/w780." — matching only one of them
-// would make the sweep never converge, so both are covered by test.

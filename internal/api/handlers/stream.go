@@ -274,6 +274,11 @@ func (h *StreamHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 // ownership before exposing a sidecar.
 func (h *StreamHandler) loadSidecarSession(ctx context.Context, reference, sessionID string, userID int) (*playback.Session, *streamtoken.Claims, error) {
 	card, claims := verifiedStreamCardFromToken(reference, sessionID, h.JWTSecret)
+	if transportClaims := apimw.GetTransportStreamClaims(ctx); transportClaims != nil && transportClaims.SessionID == sessionID {
+		claims = transportClaims
+		verifiedCard := playback.RecipeCardFromClaims(claims)
+		card = &verifiedCard
+	}
 	loadCard := card
 	if _, err := h.sessionMgr.GetSession(sessionID); err == nil {
 		loadCard = nil
