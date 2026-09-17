@@ -81,6 +81,7 @@ jobs:
         run: make embed-stub
 
       - name: Build
+        id: build
         run: go build ./...
 
       - name: gofmt
@@ -94,6 +95,24 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      # Runs the settings-contract gate among everything else: the embedded
+      # manifest must parse, satisfy its own schema, hold every structural
+      # invariant, and agree with the live settings registry on keys and
+      # defaults. Without this job those tests exist but never run.
+      - name: Test
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: make test-go
+
+      - name: Test PostgreSQL integration for upstream synchronization
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          DATABASE_URL: postgres://silo_test:silo_test@localhost:5432/silo_test?sslmode=disable
+          SILO_TEST_DATABASE_URL: postgres://silo_test:silo_test@localhost:5432/silo_test?sslmode=disable
+          SECRET_KEY: ci-only-disposable-database-encryption-key-00000000
+        run: |
+          go run ./cmd/silo --migrate-only
+          go test -p 1 -count=1 ./internal/catalog ./internal/userstore/pgstore ./internal/jellycompat ./internal/api ./internal/api/handlers ./internal/apiv2 ./internal/playback/planstore ./internal/sections ./internal/metadata
 
       # Scoped to the lines this branch touched. The repo does not pass a full
       # golangci-lint run today — there are a few hundred pre-existing findings,
@@ -192,22 +211,6 @@ jobs:
       # a client testing against them tests against what the server sends.
       - name: Verify the v2 contract fixtures are current and valid
         run: make verify-apiv2-fixtures
-
-      # Runs the settings-contract gate among everything else: the embedded
-      # manifest must parse, satisfy its own schema, hold every structural
-      # invariant, and agree with the live settings registry on keys and
-      # defaults. Without this job those tests exist but never run.
-      - name: Test
-        run: make test-go
-
-      - name: Test PostgreSQL integration for upstream synchronization
-        env:
-          DATABASE_URL: postgres://silo_test:silo_test@localhost:5432/silo_test?sslmode=disable
-          SILO_TEST_DATABASE_URL: postgres://silo_test:silo_test@localhost:5432/silo_test?sslmode=disable
-          SECRET_KEY: ci-only-disposable-database-encryption-key-00000000
-        run: |
-          go run ./cmd/silo --migrate-only
-          go test -p 1 -count=1 ./internal/catalog ./internal/userstore/pgstore ./internal/jellycompat ./internal/api ./internal/api/handlers ./internal/apiv2 ./internal/playback/planstore ./internal/sections ./internal/metadata
 
   web:
     name: Web
