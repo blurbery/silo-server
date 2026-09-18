@@ -18,7 +18,7 @@ func (r *onDemandPersonRefresher) RefreshPerson(_ context.Context, id int64) (*m
 	return &models.Person{ID: id}, nil
 }
 
-// Retained on the fake to catch accidental catalogue discovery.
+// Retained on the fake to catch discovery of unrequested people.
 func (r *onDemandPersonRefresher) FindCandidates(context.Context, int) ([]int64, error) {
 	r.discovered++
 	return []int64{99}, nil
