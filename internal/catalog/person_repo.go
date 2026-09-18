@@ -115,7 +115,7 @@ func (r *PersonRepository) FindOrCreate(ctx context.Context, p models.Person) (i
 // Anything that is not a cached key is still replaceable by a real image: an
 // empty column, the "-" no-photo sentinel, and a provider URL that never made
 // it through the cache. Keeping URLs replaceable is what stops a person with
-// no external id — FindRefreshCandidates skips them, so no refresh will ever
+// no external id — PersonRefreshDue skips them, so no refresh will ever
 // revisit the row — from being stuck with a dead URL forever. The
 // LIKE '%://%' test for "not a cached key" is the same one the artwork GC
 // trigger and the image cache sweep use.
@@ -1083,8 +1083,7 @@ func (r *PersonRepository) MarkRefreshAttempt(ctx context.Context, id int64) err
 	return nil
 }
 
-// Person metadata refresh policy. FindRefreshCandidates (SQL) and
-// PersonRefreshDue (Go) are two views of the same rule; keep them in sync.
+// Person metadata refresh policy for on-demand detail lookups.
 const (
 	// PersonMetadataStaleAfter is how long complete person metadata is trusted
 	// before another provider lookup is attempted.
@@ -1093,14 +1092,14 @@ const (
 	// PersonRefreshRetryAfter bounds how often one person may be sent to a
 	// provider. It applies to every candidate, so a person the providers simply
 	// have no bio or birth date for is retried on this cadence instead of on
-	// every sweep.
+	// every page view.
 	PersonRefreshRetryAfter = 7 * 24 * time.Hour
 )
 
 // PersonMetadataIncomplete reports whether a provider could still fill in
 // metadata Silo does not have. A photo_path of "-" is the "provider has no
 // photo" sentinel — an answer, not a gap — so it counts as complete, matching
-// the SQL predicate in FindRefreshCandidates.
+// the on-demand refresh policy.
 func PersonMetadataIncomplete(person models.Person) bool {
 	return person.Bio == "" || person.PhotoPath == "" || person.BirthDate == nil
 }
@@ -1109,8 +1108,7 @@ func PersonMetadataIncomplete(person models.Person) bool {
 // carry an external id, no lookup has been attempted within
 // PersonRefreshRetryAfter, and their metadata is either incomplete or older
 // than PersonMetadataStaleAfter. Callers that already hold the row use this
-// instead of re-querying; the worker sweep uses FindRefreshCandidates, which
-// encodes the same rule in SQL.
+// to decide whether a page view should enqueue enrichment.
 func PersonRefreshDue(person models.Person, now time.Time) bool {
 	if person.TmdbID == "" && person.ImdbID == "" && person.TvdbID == "" {
 		return false
@@ -1121,58 +1119,6 @@ func PersonRefreshDue(person models.Person, now time.Time) bool {
 	}
 	return PersonMetadataIncomplete(person) ||
 		person.UpdatedAt.Before(now.Add(-PersonMetadataStaleAfter))
-}
-
-// FindRefreshCandidates returns people who are due for a provider metadata
-// lookup, least recently touched first. See PersonRefreshDue for the rule.
-//
-// Gating on metadata_refresh_attempted_at rather than on updated_at is what
-// keeps this from becoming a hot loop: a person the providers cannot complete
-// is retried once per PersonRefreshRetryAfter instead of on every sweep, while
-// a person nobody has ever looked up is eligible immediately, so freshly
-// ingested credits are backfilled without waiting out a staleness window.
-func (r *PersonRepository) FindRefreshCandidates(ctx context.Context, limit int) ([]int64, error) {
-	if limit <= 0 {
-		return []int64{}, nil
-	}
-
-	now := time.Now()
-	rows, err := r.pool.Query(ctx, `
-		SELECT id
-		FROM people
-		WHERE
-			(tmdb_id <> '' OR imdb_id <> '' OR tvdb_id <> '')
-			AND (metadata_refresh_attempted_at IS NULL OR metadata_refresh_attempted_at < $2)
-			AND (
-				COALESCE(bio, '') = ''
-				OR COALESCE(photo_path, '') = ''
-				OR birth_date IS NULL
-				OR updated_at < $3
-			)
-		ORDER BY GREATEST(updated_at, COALESCE(metadata_refresh_attempted_at, updated_at)) ASC, id ASC
-		LIMIT $1`,
-		limit,
-		now.Add(-PersonRefreshRetryAfter),
-		now.Add(-PersonMetadataStaleAfter),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query refresh candidates: %w", err)
-	}
-	defer rows.Close()
-
-	ids := make([]int64, 0, limit)
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan refresh candidate: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate refresh candidates: %w", err)
-	}
-
-	return ids, nil
 }
 
 // ListForItem returns all people credited on a media item, ordered by sort_order.
