@@ -1124,7 +1124,9 @@ func PersonRefreshDue(person models.Person, now time.Time) bool {
 }
 
 // FindRefreshCandidates returns people who are due for a provider metadata
-// lookup, least recently touched first. See PersonRefreshDue for the rule.
+// lookup. Most slots favour recently ingested or enriched credits; one fifth
+// remain oldest-first so the existing backlog still makes progress. The same
+// eligibility and retry cooldown apply to both groups. See PersonRefreshDue.
 //
 // Gating on metadata_refresh_attempted_at rather than on updated_at is what
 // keeps this from becoming a hot loop: a person the providers cannot complete
@@ -1137,11 +1139,33 @@ func (r *PersonRepository) FindRefreshCandidates(ctx context.Context, limit int)
 	}
 
 	now := time.Now()
+	ids, err := r.findRefreshCandidates(ctx, limit-limit/5, now, true, []int64{})
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == limit {
+		return ids, nil
+	}
+	older, err := r.findRefreshCandidates(ctx, limit-len(ids), now, false, ids)
+	if err != nil {
+		return nil, err
+	}
+	return append(ids, older...), nil
+}
+
+func (r *PersonRepository) findRefreshCandidates(ctx context.Context, limit int, now time.Time, newestFirst bool, exclude []int64) ([]int64, error) {
+	order := "ASC"
+	if newestFirst {
+		order = "DESC"
+	}
+	// Both directions use idx_people_metadata_refresh_due. Avoid a computed
+	// priority sort over the entire catalogue for each small worker batch.
 	rows, err := r.pool.Query(ctx, `
 		SELECT id
 		FROM people
 		WHERE
 			(tmdb_id <> '' OR imdb_id <> '' OR tvdb_id <> '')
+			AND id <> ALL($4::bigint[])
 			AND (metadata_refresh_attempted_at IS NULL OR metadata_refresh_attempted_at < $2)
 			AND (
 				COALESCE(bio, '') = ''
@@ -1149,11 +1173,12 @@ func (r *PersonRepository) FindRefreshCandidates(ctx context.Context, limit int)
 				OR birth_date IS NULL
 				OR updated_at < $3
 			)
-		ORDER BY GREATEST(updated_at, COALESCE(metadata_refresh_attempted_at, updated_at)) ASC, id ASC
+		ORDER BY GREATEST(updated_at, COALESCE(metadata_refresh_attempted_at, updated_at)) `+order+`, id `+order+`
 		LIMIT $1`,
 		limit,
 		now.Add(-PersonRefreshRetryAfter),
 		now.Add(-PersonMetadataStaleAfter),
+		exclude,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query refresh candidates: %w", err)
