@@ -64,12 +64,36 @@ type pluginImageResolverSourceEntry struct {
 // by parsing the prefix, routing to the correct plugin, and returning resolved URLs.
 // It implements catalog.ImageResolver and the catalog expiry-aware resolver extension.
 type PluginImageResolver struct {
-	mu                  sync.RWMutex
-	sources             map[string][]pluginImageResolverSourceEntry
-	artworkResolver     artworkurl.Resolver
-	urlCache            *cache.TTLCache[catalog.ResolvedImageURL]
-	artworkAvailability ArtworkAvailabilityReader
-	group               singleflight.Group
+	mu                     sync.RWMutex
+	sources                map[string][]pluginImageResolverSourceEntry
+	artworkResolver        artworkurl.Resolver
+	urlCache               *cache.TTLCache[catalog.ResolvedImageURL]
+	artworkAvailability    ArtworkAvailabilityReader
+	group                  singleflight.Group
+	missingSourceWarningAt time.Time
+}
+
+// HasImageSource reports whether a plugin currently handles the scheme.
+// Availability is checked live so registering a provider can unblock queued work.
+func (r *PluginImageResolver) HasImageSource(scheme string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.sources[scheme]) > 0
+}
+
+func (r *PluginImageResolver) warnMissingSource(ctx context.Context, scheme string) {
+	// Share a warning budget across schemes to keep both memory and log volume
+	// bounded even when a catalogue contains many unsupported schemes.
+	r.mu.Lock()
+	now := time.Now()
+	warn := r.missingSourceWarningAt.IsZero() || now.Sub(r.missingSourceWarningAt) >= time.Hour
+	if warn {
+		r.missingSourceWarningAt = now
+	}
+	r.mu.Unlock()
+	if warn {
+		slog.WarnContext(ctx, "no image resolver registered for scheme", "component", "metadata", "scheme", scheme)
+	}
 }
 
 // NewPluginImageResolver creates a new resolver with no registered sources.
@@ -243,7 +267,7 @@ func (r *PluginImageResolver) ResolveImageURLsWithExpiry(ctx context.Context, pa
 			}
 			sources := sourcesSnapshot[pluginID]
 			if len(sources) == 0 {
-				slog.WarnContext(ctx, "no image resolver registered for scheme", "component", "metadata", "scheme", pluginID)
+				r.warnMissingSource(ctx, pluginID)
 				return map[string]catalog.ResolvedImageURL{}, nil
 			}
 			return r.resolvePluginBatchWithFallback(ctx, pluginID, sources, entries, variant), nil

@@ -1,11 +1,23 @@
 package metadata
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestImageCacheFailureDefersMissingSourceWithoutSpendingAttempts(t *testing.T) {
+	for _, attempts := range []int{0, 7, 8} {
+		t.Run(fmt.Sprint(attempts), func(t *testing.T) {
+			got := classifyImageCacheFailure(attempts, "image resolver source unavailable")
+			if got.status != ImageCacheStatusQueued || got.attempt != attempts || got.retryDelay != time.Hour {
+				t.Fatalf("disposition = %+v, want queued with %d attempts and 1h delay", got, attempts)
+			}
+		})
+	}
+}
 
 func TestImageCacheRetryDelayCaps(t *testing.T) {
 	if got := imageCacheRetryDelay(1); got != time.Minute {
@@ -34,9 +46,8 @@ func TestImageCacheFailureRetryDelayDefersStableProviderFailures(t *testing.T) {
 }
 
 func TestClassifyImageCacheFailureRetriesEmptyResolverURL(t *testing.T) {
-	// The resolver also returns an empty URL while a plugin is disabled,
-	// upgrading, or still loading, so this must never tombstone artwork on the
-	// first attempt.
+	// Registered providers can return an empty URL during an outage, so this
+	// must never tombstone artwork on the first attempt.
 	got := classifyImageCacheFailure(0, imageCacheEmptyResolvedURLError)
 	if got.status != ImageCacheStatusQueued {
 		t.Fatalf("status = %q, want %q", got.status, ImageCacheStatusQueued)

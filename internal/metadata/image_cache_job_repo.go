@@ -56,6 +56,8 @@ const (
 	imageCachePermanentPark = 100 * 365 * 24 * time.Hour
 
 	imageCacheEmptyResolvedURLError = "image resolver returned empty URL"
+	imageCacheMissingSourceError    = "image resolver source unavailable"
+	imageCacheMissingSourceRetry    = time.Hour
 )
 
 type EnqueueImageCacheJobInput struct {
@@ -148,10 +150,14 @@ type imageCacheFailureDisposition struct {
 // deduplication tombstone, while every other exhausted row parks for a cooldown
 // so that a long outage does not permanently kill artwork caching.
 //
-// Note that an empty resolved URL is *not* treated as permanent: the resolver
-// also returns "" while a plugin is disabled, upgrading, or still loading, and
-// this layer cannot tell that apart from artwork the provider no longer has.
+// A missing source waits without spending attempts. An empty result from a
+// registered source still uses ordinary retries because it may be transient.
 func classifyImageCacheFailure(attemptCount int, errText string) imageCacheFailureDisposition {
+	if errText == imageCacheMissingSourceError {
+		return imageCacheFailureDisposition{
+			status: ImageCacheStatusQueued, attempt: attemptCount, retryDelay: imageCacheMissingSourceRetry,
+		}
+	}
 	nextAttempt := attemptCount + 1
 	if nextAttempt < imageCacheMaxAttempts {
 		return imageCacheFailureDisposition{

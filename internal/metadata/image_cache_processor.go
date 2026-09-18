@@ -822,6 +822,13 @@ func (p *ImageCacheProcessor) processOne(ctx context.Context, job *models.Metada
 			p.markFailed(ctx, job, "missing image resolver")
 			return imageCacheProcessResult{outcome: "failed"}
 		}
+		if availability, ok := p.resolver.(interface{ HasImageSource(string) bool }); ok {
+			scheme, _ := parsePluginPrefix(job.SourcePath)
+			if !availability.HasImageSource(scheme) {
+				p.markFailed(ctx, job, imageCacheMissingSourceError)
+				return imageCacheProcessResult{outcome: "skipped"}
+			}
+		}
 		downloadURL = p.resolver.ResolveImageURL(ctx, job.SourcePath, "original")
 		if downloadURL == "" {
 			p.markFailed(ctx, job, imageCacheEmptyResolvedURLError)

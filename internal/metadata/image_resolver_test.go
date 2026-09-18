@@ -1,8 +1,11 @@
 package metadata
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +15,46 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+func TestPluginImageResolverThrottlesMissingSourceWarnings(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	resolver := NewPluginImageResolver()
+	t.Cleanup(resolver.Close)
+	for i := range 10 {
+		if got := resolver.ResolveImageURL(context.Background(), fmt.Sprintf("metadb://profile/%d.jpg", i), "original"); got != "" {
+			t.Fatalf("unavailable image = %q, want empty placeholder", got)
+		}
+	}
+	if got := strings.Count(logs.String(), "no image resolver registered for scheme"); got != 1 {
+		t.Fatalf("warnings = %d, want 1", got)
+	}
+	resolver.mu.Lock()
+	resolver.missingSourceWarningAt = time.Now().Add(-time.Hour)
+	resolver.mu.Unlock()
+	resolver.ResolveImageURL(context.Background(), "metadb://profile/next.jpg", "original")
+	if got := strings.Count(logs.String(), "no image resolver registered for scheme"); got != 2 {
+		t.Fatalf("warnings after interval = %d, want 2", got)
+	}
+}
+
+func TestPluginImageResolverSourceAvailabilityTracksReplacement(t *testing.T) {
+	resolver := NewPluginImageResolver()
+	t.Cleanup(resolver.Close)
+	if resolver.HasImageSource("metadb") {
+		t.Fatal("new resolver reports an installed source")
+	}
+	resolver.ReplaceSources([]PluginImageResolverSourceRegistration{{Scheme: "metadb", Source: &scriptedImageSource{}}})
+	if !resolver.HasImageSource("metadb") {
+		t.Fatal("replacement source is unavailable")
+	}
+	resolver.ReplaceSources(nil)
+	if resolver.HasImageSource("metadb") {
+		t.Fatal("removed source remains available")
+	}
+}
 
 type fakeExpiringImageSource struct {
 	expiresAt *time.Time

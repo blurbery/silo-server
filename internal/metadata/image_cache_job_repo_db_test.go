@@ -164,6 +164,59 @@ func TestImageCacheFailedJobReadmission(t *testing.T) {
 	})
 }
 
+func TestImageCacheMissingSourceDeferralSurvivesRediscovery(t *testing.T) {
+	pool := imageCacheQueueTestPool(t)
+	ctx := context.Background()
+	repo := NewImageCacheJobRepository(pool)
+	contentID := fmt.Sprintf("image-cache-missing-source-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM metadata_image_cache_jobs WHERE target_content_id = $1`, contentID)
+	})
+	input := EnqueueImageCacheJobInput{
+		TargetType: ImageCacheTargetItem, TargetContentID: contentID,
+		SourcePath: "metadb://poster/missing.jpg", ImageType: ImageCacheImagePoster, ContentType: "movie",
+	}
+	if err := repo.Enqueue(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := repo.claimDueForTarget(ctx, "missing-source-test", contentID, 1)
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("claim: jobs=%d, err=%v", len(jobs), err)
+	}
+	if err := repo.MarkFailed(ctx, jobs[0].ID, jobs[0].AttemptCount, "missing-source-test", imageCacheMissingSourceError); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Enqueue(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	status, attempts := readImageCacheJobState(t, pool, contentID)
+	if status != ImageCacheStatusQueued || attempts != 0 {
+		t.Fatalf("rediscovered job: status=%q, attempts=%d", status, attempts)
+	}
+	var remainingSeconds float64
+	var unlocked bool
+	if err := pool.QueryRow(ctx, `SELECT EXTRACT(EPOCH FROM next_attempt_at - NOW()),
+		locked_at IS NULL AND locked_by = '' FROM metadata_image_cache_jobs WHERE id = $1`, jobs[0].ID).
+		Scan(&remainingSeconds, &unlocked); err != nil {
+		t.Fatal(err)
+	}
+	if remainingSeconds < 3500 || remainingSeconds > 3600 || !unlocked {
+		t.Fatalf("deferral: remaining seconds=%f, unlocked=%v", remainingSeconds, unlocked)
+	}
+	jobs, err = repo.claimDueForTarget(ctx, "missing-source-test", contentID, 1)
+	if err != nil || len(jobs) != 0 {
+		t.Fatalf("premature claim: jobs=%d, err=%v", len(jobs), err)
+	}
+	input.SourcePath = "tmdb://poster/replacement.jpg"
+	if err := repo.Enqueue(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err = repo.claimDueForTarget(ctx, "missing-source-test", contentID, 1)
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("replacement claim: jobs=%d, err=%v", len(jobs), err)
+	}
+}
+
 func TestImageCacheDiscoveryQueriesExplain(t *testing.T) {
 	pool := imageCacheQueueTestPool(t)
 	ctx := context.Background()

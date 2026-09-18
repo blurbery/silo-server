@@ -536,6 +536,57 @@ func TestImageCacheProcessorPassesLanguageToLocalizedItemArtwork(t *testing.T) {
 	}
 }
 
+func TestImageCacheProcessorRecoversWhenMissingSourceReturns(t *testing.T) {
+	job := &models.MetadataImageCacheJob{
+		ID: 22, TargetType: ImageCacheTargetPerson, TargetContentID: "287",
+		SourcePath: "metadb://profile/287.jpg", ProviderID: "metadb",
+		ProviderContentID: "287", ContentType: "people", ImageType: ImageCacheImageProfile,
+	}
+	jobs := &fakeImageCacheJobs{claimed: []*models.MetadataImageCacheJob{job}}
+	cacher := &fakeImageCacher{result: &CacheImageResult{BasePath: "metadb/people/287/profile", Ext: ".webp"}}
+	resolver := NewPluginImageResolver()
+	t.Cleanup(resolver.Close)
+	people := &fakePersonPhotoUpdater{updated: true}
+	processor := NewImageCacheProcessorWithTargets(jobs, cacher, resolver, ImageCacheProcessorTargets{People: people})
+	stats, err := processor.RunOnce(context.Background(), "test-worker", 10, 1)
+	if err != nil || stats.Skipped != 1 || stats.Failed != 0 {
+		t.Fatalf("deferral: stats=%+v, err=%v", stats, err)
+	}
+	if jobs.failedText != "image resolver source unavailable" || len(cacher.reqs) != 0 || people.cachedPath != "" {
+		t.Fatalf("missing source: error=%q, downloads=%d, cachedPath=%q", jobs.failedText, len(cacher.reqs), people.cachedPath)
+	}
+	if job.SourcePath != "metadb://profile/287.jpg" {
+		t.Fatal("missing source discarded the original reference")
+	}
+	resolver.RegisterSource("metadb", &scriptedImageSource{urls: map[string]string{
+		"profile/287.jpg": "https://example.invalid/person.jpg",
+	}})
+	stats, err = processor.RunOnce(context.Background(), "test-worker", 10, 1)
+	if err != nil || stats.Succeeded != 1 || people.cachedPath != "metadb/people/287/profile/original.webp" {
+		t.Fatalf("recovery: stats=%+v, err=%v, cachedPath=%q", stats, err, people.cachedPath)
+	}
+}
+
+func TestImageCacheProcessorRetriesRegisteredSourceErrors(t *testing.T) {
+	for _, sourceErr := range []error{nil, errors.New("provider temporarily unavailable")} {
+		jobs := &fakeImageCacheJobs{claimed: []*models.MetadataImageCacheJob{{
+			ID: 22, TargetType: ImageCacheTargetPerson, TargetContentID: "287",
+			SourcePath: "metadb://profile/287.jpg", ImageType: ImageCacheImageProfile,
+		}}}
+		resolver := NewPluginImageResolver()
+		t.Cleanup(resolver.Close)
+		resolver.RegisterSource("metadb", &scriptedImageSource{err: sourceErr})
+		cacher := &fakeImageCacher{}
+		processor := NewImageCacheProcessor(jobs, cacher, resolver, nil, nil)
+		if _, err := processor.RunOnce(context.Background(), "test-worker", 10, 1); err != nil {
+			t.Fatal(err)
+		}
+		if jobs.failedText != imageCacheEmptyResolvedURLError || len(cacher.reqs) != 0 {
+			t.Fatalf("registered source error %v: failure=%q, downloads=%d", sourceErr, jobs.failedText, len(cacher.reqs))
+		}
+	}
+}
+
 func TestImageCacheProcessorUpdatesPersonProfileOnSuccess(t *testing.T) {
 	jobs := &fakeImageCacheJobs{claimed: []*models.MetadataImageCacheJob{{
 		ID:                22,
