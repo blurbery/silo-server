@@ -1307,7 +1307,7 @@ export function usePlaybackSession(
         // The settled output-change replan will carry this newest source
         // position, so a stale-capability seek must not overtake it.
         deferredSeekPositionRef.current = positionSeconds;
-        return;
+        return Promise.resolve(true);
       }
       deferredSeekPositionRef.current = null;
       return replan({ operation: "seek_reanchor", positionSeconds });
