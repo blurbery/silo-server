@@ -13,6 +13,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/catalog"
 	"github.com/Silo-Server/silo-server/internal/clientip"
 	"github.com/Silo-Server/silo-server/internal/config"
+	"github.com/Silo-Server/silo-server/internal/netaccess"
 	"github.com/Silo-Server/silo-server/internal/nodepool"
 	"github.com/Silo-Server/silo-server/internal/recommendations"
 	"github.com/Silo-Server/silo-server/internal/scantrigger"
@@ -42,6 +43,9 @@ type Dependencies struct {
 	DB               *pgxpool.Pool
 	SecretCipher     *secret.Cipher // at-rest credential cipher (required when DB is set)
 	ClientIPResolver *clientip.Resolver
+	// IngressTokens validates the X-Silo-Ingress-Token network access
+	// provider plugins stamp on proxied requests. Nil accepts no tokens.
+	IngressTokens *netaccess.Registry
 	// StreamTelemetry is the local observation-only registry shared with the
 	// native API process. May be nil, which makes every media route unobserved.
 	StreamTelemetry *streamtelemetry.Registry
@@ -103,6 +107,7 @@ type Dependencies struct {
 	// the activity dashboard doesn't wait for the periodic reconciler tick.
 	// Optional.
 	SessionSyncer          PlaybackSessionSyncer
+	MarkerPopulation       MarkerPopulationService
 	FileResolver           FilePathResolver
 	UserStoreProvider      userstore.UserStoreProvider
 	WatchScrobbler         PlaybackWatchScrobbler
@@ -117,9 +122,8 @@ type Dependencies struct {
 	SettingsRepo SettingsReader
 
 	// Subtitle support (optional)
-	SubtitleRepo subtitles.Repository // optional; downloaded subtitle support
-	S3Client     subtitles.S3Client   // optional
-	S3Bucket     string               // optional
+	SubtitleRepo  subtitles.Repository // optional; downloaded subtitle support
+	SubtitleBlobs subtitles.BlobStore  // optional; backs downloaded subtitle reads
 }
 
 // CurrentConfig returns the live config when hot reload is wired, falling
@@ -186,7 +190,7 @@ func (s *Server) SessionStore() *SessionStore {
 func (s *Server) StartBackgroundTasks(ctx context.Context) <-chan struct{} {
 	if s.deps.DB != nil {
 		repo := NewSessionRepository(s.deps.DB, s.deps.SecretCipher)
-		StartSessionCleanupWithPlaybackStore(ctx, repo, s.deps.PlaybackStore, 1*time.Hour)
+		StartSessionCleanupWithPlaybackStore(ctx, repo, s.deps.PlaybackStore, s.deps.DeviceProfiles, 1*time.Hour)
 	}
 	return StartTerminalScrobbleRecovery(ctx, s.deps.PlaybackStore, s.deps.WatchScrobbler, 30*time.Second)
 }

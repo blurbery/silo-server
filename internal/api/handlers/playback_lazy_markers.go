@@ -9,7 +9,6 @@ import (
 	"github.com/Silo-Server/silo-server/internal/markers"
 	"github.com/Silo-Server/silo-server/internal/models"
 	"github.com/Silo-Server/silo-server/internal/playback"
-	"github.com/Silo-Server/silo-server/internal/scanner"
 )
 
 const playbackLazyMarkerTimeout = 10 * time.Minute
@@ -21,13 +20,6 @@ type PlaybackIntroEligibilityChecker interface {
 
 type PlaybackMarkerUpdateNotifier interface {
 	MarkersUpdated(ctx context.Context, file *models.MediaFile)
-}
-
-// PlaybackMarkerUpserter narrows scanner.FileRepository down to just the
-// marker write path so tests can supply a fake without dragging in the
-// full repository.
-type PlaybackMarkerUpserter interface {
-	UpsertMarkers(ctx context.Context, fileID int, update scanner.MarkerUpdate) (bool, error)
 }
 
 func (h *PlaybackHandler) maybeQueueLazyPlaybackMarkers(
@@ -59,9 +51,6 @@ func (h *PlaybackHandler) maybeQueueLazyPlaybackMarkers(
 			"error", err)
 		return
 	}
-	if strings.ToLower(strings.TrimSpace(lazy)) != "true" {
-		return
-	}
 
 	rawMode, err := h.SettingsRepo.Get(ctx, markers.SettingMode)
 	if err != nil {
@@ -73,6 +62,13 @@ func (h *PlaybackHandler) maybeQueueLazyPlaybackMarkers(
 		return
 	}
 	mode := markers.NormalizeMode(rawMode)
+	lazyEnabled := strings.EqualFold(strings.TrimSpace(lazy), "true")
+	if !lazyEnabled {
+		storage, err := h.SettingsRepo.Get(ctx, markers.SettingOnlineStorage)
+		if err != nil || storage != "on_demand" || (mode != markers.ModeOnline && mode != markers.ModeBoth) {
+			return
+		}
+	}
 	if mode == markers.ModeOff {
 		slog.DebugContext(ctx, "playback lazy markers: skipped; marker mode is off", "component", "api",
 			"session_id", session.ID,
@@ -82,7 +78,7 @@ func (h *PlaybackHandler) maybeQueueLazyPlaybackMarkers(
 	}
 
 	hasOnline := h.hasOnlineMarkerProviders()
-	shouldRunLocal := markers.ShouldRunLocal(mode)
+	shouldRunLocal := lazyEnabled && markers.ShouldRunLocal(mode)
 	shouldRunOnline := (mode == markers.ModeOnline || mode == markers.ModeBoth) && hasOnline
 	if shouldRunOnline && hasCompletePlaybackSkipMarkers(file) {
 		shouldRunOnline = false
@@ -172,7 +168,7 @@ func (h *PlaybackHandler) runLazyPlaybackMarkers(
 		"mode", mode)
 
 	if runOnline {
-		wrote, err := h.fetchOnlineMarkersForPlayback(ctx, file)
+		effective, _, err := h.MarkerPopulation.Populate(ctx, file)
 		if err != nil {
 			slog.Warn("playback lazy markers: online fetch failed",
 				"session_id", sessionID,
@@ -181,10 +177,11 @@ func (h *PlaybackHandler) runLazyPlaybackMarkers(
 				"mode", mode,
 				"error", err.Error())
 		}
-		if wrote {
-			if refreshed := h.reloadPlaybackMarkerFile(ctx, file.ID); hasAnyMarker(refreshed) {
-				h.notifyPlaybackMarkers(ctx, sessionID, refreshed, mode)
-				if !runLocal || hasLocalDetectionMarkers(refreshed) {
+		if effective != nil {
+			file = effective
+			if hasAnyMarker(file) {
+				h.notifyPlaybackMarkers(ctx, sessionID, file, mode)
+				if !runLocal || hasLocalDetectionMarkers(file) {
 					return
 				}
 			}
@@ -236,59 +233,7 @@ func (h *PlaybackHandler) runLazyPlaybackMarkers(
 }
 
 func (h *PlaybackHandler) hasOnlineMarkerProviders() bool {
-	return h != nil && h.MarkerRegistry != nil && len(h.MarkerRegistry.Providers()) > 0
-}
-
-// fetchOnlineMarkersForPlayback resolves external IDs for the given file,
-// asks the marker registry for the first hit, and persists the result via
-// the scanner upserter. Returns true when at least one segment was
-// actually written to storage.
-func (h *PlaybackHandler) fetchOnlineMarkersForPlayback(ctx context.Context, file *models.MediaFile) (bool, error) {
-	if h == nil || file == nil || !h.hasOnlineMarkerProviders() {
-		return false, nil
-	}
-	if h.MarkerResolver == nil || h.MarkerUpserter == nil {
-		slog.DebugContext(ctx, "playback lazy markers: online fetch skipped; resolver or upserter missing", "component", "api",
-			"file_id", file.ID)
-		return false, nil
-	}
-
-	ids, err := h.MarkerResolver.ResolveForFile(ctx, file)
-	if err != nil {
-		return false, err
-	}
-	if !ids.HasAnyID() {
-		slog.DebugContext(ctx, "playback lazy markers: online fetch skipped; no external IDs available", "component", "api",
-			"file_id", file.ID,
-			"episode_id", file.EpisodeID,
-			"content_id", file.ContentID)
-		return false, nil
-	}
-
-	req := markers.Request{
-		Kind:          ids.Kind,
-		ExternalIDs:   ids.AsRequestMap(),
-		SeasonNumber:  ids.SeasonNumber,
-		EpisodeNumber: ids.EpisodeNumber,
-		Duration:      time.Duration(file.Duration) * time.Second,
-	}
-	result, ok, err := h.MarkerRegistry.FetchMerged(ctx, req)
-	if err != nil {
-		return false, err
-	}
-	if !ok || len(result.Markers) == 0 {
-		return false, nil
-	}
-
-	payload := markers.BuildUpdatePayload(result)
-	if !payload.HasAnySegment() {
-		return false, nil
-	}
-	wrote, err := h.MarkerUpserter.UpsertMarkers(ctx, file.ID, markerUpdateFromPayload(payload))
-	if err != nil {
-		return false, err
-	}
-	return wrote, nil
+	return h != nil && h.MarkerPopulation != nil && h.MarkerRegistry != nil && len(h.MarkerRegistry.Providers()) > 0
 }
 
 func (h *PlaybackHandler) reloadPlaybackMarkerFile(ctx context.Context, fileID int) *models.MediaFile {
@@ -352,39 +297,4 @@ func hasLocalDetectionMarkers(file *models.MediaFile) bool {
 	}
 	return (file.IntroStart != nil && file.IntroEnd != nil) ||
 		(file.CreditsStart != nil && file.CreditsEnd != nil)
-}
-
-// markerUpdateFromPayload adapts the generic markers.MarkerUpdatePayload to
-// the scanner.MarkerUpdate shape consumed by FileRepository.UpsertMarkers.
-// Kept narrow on purpose — the packages it bridges should not need to import
-// each other.
-func markerUpdateFromPayload(p markers.MarkerUpdatePayload) scanner.MarkerUpdate {
-	return scanner.MarkerUpdate{
-		IntroStart:        p.Intro.Start,
-		IntroEnd:          p.Intro.End,
-		CreditsStart:      p.Credits.Start,
-		CreditsEnd:        p.Credits.End,
-		RecapStart:        p.Recap.Start,
-		RecapEnd:          p.Recap.End,
-		PreviewStart:      p.Preview.Start,
-		PreviewEnd:        p.Preview.End,
-		MarkersSource:     p.SummarySource(),
-		MarkersConfidence: p.SummaryConfidence(),
-		IntroProvenance:   segmentProvenance(p.Intro),
-		CreditsProvenance: segmentProvenance(p.Credits),
-		RecapProvenance:   segmentProvenance(p.Recap),
-		PreviewProvenance: segmentProvenance(p.Preview),
-	}
-}
-
-func segmentProvenance(s markers.SegmentPayload) *scanner.SegmentProvenance {
-	if !s.Present() {
-		return nil
-	}
-	return &scanner.SegmentProvenance{
-		Source:     s.Source,
-		Provider:   s.Provider,
-		Confidence: s.Confidence,
-		Algorithm:  s.Algorithm,
-	}
 }

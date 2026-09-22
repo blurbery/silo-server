@@ -24,6 +24,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/config"
 	"github.com/Silo-Server/silo-server/internal/httpstream"
 	"github.com/Silo-Server/silo-server/internal/models"
+	"github.com/Silo-Server/silo-server/internal/netaccess"
 	"github.com/Silo-Server/silo-server/internal/nodepool"
 	"github.com/Silo-Server/silo-server/internal/noderouting"
 	"github.com/Silo-Server/silo-server/internal/playback"
@@ -274,7 +275,11 @@ func compatHLSRecipeSourceAudioChannels(source PlaybackMediaSource) int {
 	if !compatHLSTranscodesAudio(source) {
 		return 0
 	}
-	return compatSourceAudioChannels(source)
+	channels := compatSourceAudioChannels(source)
+	if !playback.IsAudioToAACStereoDownmixV3(channels, "aac", source.TargetAudioChannels) {
+		return 0
+	}
+	return channels
 }
 
 func compatSourceHasSurroundAudio(source PlaybackMediaSource) bool {
@@ -291,7 +296,10 @@ func compatRecipeMatchesSource(recipe *playback.RecipeCard, source PlaybackMedia
 		recipe.MediaFileID == source.FileID &&
 		recipe.AudioTrackIndex == compatAudioTrackIndexOrDefault(source) &&
 		recipe.SourceAudioChannels == compatHLSRecipeSourceAudioChannels(source) &&
-		recipe.CopyVideoMPEGTS == source.HLSRemuxMPEGTS
+		recipe.CopyVideoMPEGTS == source.HLSRemuxMPEGTS &&
+		recipe.SubtitleBurnIn == source.SubtitleBurnIn && (!source.SubtitleBurnIn || (recipe.SubtitleTrackIndex == source.SubtitleTrackIndex && recipe.SubtitleCodec == source.SubtitleCodec)) &&
+		(source.TargetBitrateKbps == 0 || recipe.TargetBitrateKbps == source.TargetBitrateKbps) &&
+		(source.TargetResolution == "" || recipe.TargetResolution == source.TargetResolution)
 }
 
 // Versioned wrappers put a literal path segment in every byte URL whose
@@ -423,7 +431,7 @@ func (h *PlaybackHandler) HandleVideoStream(w http.ResponseWriter, r *http.Reque
 	mediaSourceID := firstNonEmpty(r.URL.Query().Get("mediaSourceId"), r.URL.Query().Get("MediaSourceId"))
 	staticRequest := strings.EqualFold(newCaseInsensitiveQuery(r.URL.Query()).Get("Static"), "true")
 	playSession, source, err := h.resolvePlaybackRoute(r, session, routeID, mediaSourceID)
-	if err != nil && staticRequest {
+	if errors.Is(err, ErrSessionNotFound) && staticRequest {
 		// Infuse uses Static=true for direct play without calling PlaybackInfo first.
 		// Create an on-the-fly play session so the stream can proceed. The key
 		// lookup must be case-insensitive: SenPlayer sends "static=true"
@@ -490,7 +498,7 @@ func (h *PlaybackHandler) HandleVideoStream(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if proxyNode := decision.Plan.ProxyNode; proxyNode != nil {
-		if redirectURL, redirectErr := h.buildProxyRedirectURL(playSession.ID, playSession.UpstreamSessionID, method, file, *source, session, playSession.CreatedAt, "", seekSeconds, proxyNode); redirectErr == nil {
+		if redirectURL, redirectErr := h.buildProxyRedirectURL(playSession.ID, playSession.UpstreamSessionID, method, file, *source, session, playSession.CreatedAt, "", seekSeconds, proxyNode, netaccess.PathFromContext(r.Context())); redirectErr == nil {
 			assignment := playback.NodeRoutingAssignment{
 				Workload: string(decision.Shape.Workload), Execution: string(decision.Shape.Execution),
 				Egress: string(decision.Shape.Egress), EgressNodeID: proxyNode.ID, EgressNodeURL: proxyNode.URL,
@@ -794,7 +802,7 @@ func (h *PlaybackHandler) HandleMasterManifest(w http.ResponseWriter, r *http.Re
 		executionNodeID := h.compatTranscodeNodeID(remoteNodeURL, tcNode)
 
 		if decision.Shape.Egress == noderouting.EgressProxy {
-			redirectURL, redirectErr := h.buildProxyRedirectURL(playSession.ID, playSession.UpstreamSessionID, string(playback.PlayTranscode), file, *source, session, playSession.CreatedAt, remoteNodeURL, 0, plan.ProxyNode)
+			redirectURL, redirectErr := h.buildProxyRedirectURL(playSession.ID, playSession.UpstreamSessionID, string(playback.PlayTranscode), file, *source, session, playSession.CreatedAt, remoteNodeURL, 0, plan.ProxyNode, netaccess.PathFromContext(r.Context()))
 			if redirectErr == nil {
 				if err := h.recordNodeRoutingAssignment(r.Context(), playSession.ID, playSession.UpstreamSessionID, playback.NodeRoutingAssignment{
 					Workload: string(decision.Shape.Workload), Execution: string(noderouting.ExecutionTranscode),
@@ -1038,9 +1046,12 @@ func (h *PlaybackHandler) HandleHLSSegment(w http.ResponseWriter, r *http.Reques
 	// Recover the playback session and local runtime as one transaction. If a
 	// frozen tone-map recipe cannot be rebuilt, the manager rolls back the exact
 	// provisional playback session before this handler returns an error.
+	// The master binds its route after persisting the executable recipe, so
+	// overlay that durable assignment before reconstructing from a child request.
+	card := h.upstreamRecipeCard(playSession, session, *source, playSession.UpstreamPlayMethod)
 	_, transcodeSession, status, reconstructErr := h.tm.LoadOrReconstructTranscodeWithError(
 		r.Context(), h.sessionMgr.GetSession, playSession.UpstreamSessionID,
-		session.StreamAppUserID, requestedSegment, playSession.Recipe,
+		session.StreamAppUserID, requestedSegment, &card,
 	)
 	switch status {
 	case playback.SessionMissing:
@@ -1356,7 +1367,7 @@ func (h *PlaybackHandler) HandleSubtitleStream(w http.ResponseWriter, r *http.Re
 	// Subtitle DeliveryUrls are authenticated API-origin auxiliaries published
 	// before the primary media route is selected. A proxy egress assignment
 	// therefore governs the file or HLS transport, not this sidecar resource.
-	playSession, source, err := h.resolvePlaybackRoute(r, session, chiURLParam(r, "routeMediaSourceId"), chiURLParam(r, "routeMediaSourceId"))
+	playSession, source, err := h.resolvePlaybackRoute(r, session, chiURLParam(r, "routeItemId"), chiURLParam(r, "routeMediaSourceId"))
 	if err != nil || source == nil {
 		writeError(w, http.StatusNotFound, "NotFound", "Playback session not found")
 		return
@@ -1397,7 +1408,7 @@ func (h *PlaybackHandler) HandleSubtitleStream(w http.ResponseWriter, r *http.Re
 					writeError(w, http.StatusInternalServerError, "ServerError", "Failed to load subtitle")
 					return
 				}
-				writeSubtitleResponse(w, "ass", data)
+				h.deliverSubtitle(w, r, "ass", data)
 				return
 			}
 			if requestedFormat == "srt" && subtitleCanServeSRT(sub.Format) {
@@ -1406,7 +1417,7 @@ func (h *PlaybackHandler) HandleSubtitleStream(w http.ResponseWriter, r *http.Re
 					writeError(w, http.StatusInternalServerError, "ServerError", "Failed to load subtitle")
 					return
 				}
-				writeSubtitleResponse(w, requestedFormat, data)
+				h.deliverSubtitle(w, r, requestedFormat, data)
 				return
 			}
 			data, subErr := playback.LoadExternalSubtitleAsVTT(r.Context(), sub.Path, sub.Format, h.FFmpegPath)
@@ -1414,19 +1425,13 @@ func (h *PlaybackHandler) HandleSubtitleStream(w http.ResponseWriter, r *http.Re
 				writeError(w, http.StatusInternalServerError, "ServerError", "Failed to load subtitle")
 				return
 			}
-			if requestedFormat == "js" {
-				if writeErr := writeJellyfinJSONSubtitleResponse(w, data); writeErr != nil {
-					writeError(w, http.StatusInternalServerError, "ServerError", "Failed to encode subtitle")
-				}
-				return
-			}
-			writeSubtitleResponse(w, "vtt", data)
+			h.deliverSubtitle(w, r, "vtt", data)
 			return
 		}
 	}
 
-	// Check downloaded subtitles (from S3).
-	if h.SubtitleRepo != nil && h.S3Client != nil {
+	// Check downloaded subtitles (from blob storage).
+	if h.SubtitleRepo != nil && h.SubtitleBlobs != nil {
 		downloaded, _ := h.SubtitleRepo.ListDownloadedSubtitles(r.Context(), file.ID)
 		// Compute the base index for downloaded subtitles to match how PlaybackInfo assigns them.
 		// Downloaded subs are indexed after all existing streams (last existing index + 1).
@@ -1434,7 +1439,7 @@ func (h *PlaybackHandler) HandleSubtitleStream(w http.ResponseWriter, r *http.Re
 		downloadedIndex := trackIndex - baseIndex
 		if downloadedIndex >= 0 && downloadedIndex < len(downloaded) {
 			dl := downloaded[downloadedIndex]
-			data, err := h.S3Client.GetObject(r.Context(), h.S3Bucket, dl.S3Key)
+			data, err := h.SubtitleBlobs.Get(r.Context(), dl.S3Key)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "ServerError", "Failed to load subtitle from storage")
 				return
@@ -1442,22 +1447,16 @@ func (h *PlaybackHandler) HandleSubtitleStream(w http.ResponseWriter, r *http.Re
 
 			// Serve downloaded ASS/SSA as raw data when requested.
 			if requestedFormat == "ass" && playback.IsASS(string(dl.Format)) {
-				writeSubtitleResponse(w, "ass", data)
+				h.deliverSubtitle(w, r, "ass", data)
 				return
 			}
 			if requestedFormat == "srt" && subtitleCanServeSRT(string(dl.Format)) {
-				writeSubtitleResponse(w, requestedFormat, data)
+				h.deliverSubtitle(w, r, requestedFormat, data)
 				return
 			}
 			// If already VTT, serve directly.
 			if dl.Format == subtitles.FormatVTT {
-				if requestedFormat == "js" {
-					if writeErr := writeJellyfinJSONSubtitleResponse(w, data); writeErr != nil {
-						writeError(w, http.StatusInternalServerError, "ServerError", "Failed to encode subtitle")
-					}
-					return
-				}
-				writeSubtitleResponse(w, "vtt", data)
+				h.deliverSubtitle(w, r, "vtt", data)
 				return
 			}
 
@@ -1466,13 +1465,7 @@ func (h *PlaybackHandler) HandleSubtitleStream(w http.ResponseWriter, r *http.Re
 				writeError(w, http.StatusInternalServerError, "ServerError", "Failed to convert subtitle")
 				return
 			}
-			if requestedFormat == "js" {
-				if writeErr := writeJellyfinJSONSubtitleResponse(w, vttData); writeErr != nil {
-					writeError(w, http.StatusInternalServerError, "ServerError", "Failed to encode subtitle")
-				}
-				return
-			}
-			writeSubtitleResponse(w, "vtt", vttData)
+			h.deliverSubtitle(w, r, "vtt", vttData)
 			return
 		}
 	}
@@ -1494,7 +1487,7 @@ func (h *PlaybackHandler) HandleSubtitleStream(w http.ResponseWriter, r *http.Re
 			writeError(w, http.StatusInternalServerError, "ServerError", "Failed to extract subtitle")
 			return
 		}
-		writeSubtitleResponse(w, "ass", data)
+		h.deliverSubtitle(w, r, "ass", data)
 		return
 	}
 
@@ -1505,7 +1498,7 @@ func (h *PlaybackHandler) HandleSubtitleStream(w http.ResponseWriter, r *http.Re
 	}
 	format := "srt"
 	if requestedFormat == "srt" && subtitleCanServeSRT(format) {
-		writeSubtitleResponse(w, requestedFormat, data)
+		h.deliverSubtitle(w, r, requestedFormat, data)
 		return
 	}
 	vttData, convErr := playback.ConvertToVTT(data, format)
@@ -1513,13 +1506,7 @@ func (h *PlaybackHandler) HandleSubtitleStream(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, "ServerError", "Failed to convert subtitle")
 		return
 	}
-	if requestedFormat == "js" {
-		if writeErr := writeJellyfinJSONSubtitleResponse(w, vttData); writeErr != nil {
-			writeError(w, http.StatusInternalServerError, "ServerError", "Failed to encode subtitle")
-		}
-		return
-	}
-	writeSubtitleResponse(w, "vtt", vttData)
+	h.deliverSubtitle(w, r, "vtt", vttData)
 }
 
 func findEmbeddedSubtitle(file *models.MediaFile, routeIndex int) (int, models.SubtitleTrack) {
@@ -2234,6 +2221,8 @@ func (h *PlaybackHandler) upstreamRecipeCard(ps *PlaybackSession, cs *Session, s
 		card.OriginalStartedAt = ps.CreatedAt
 	}
 	if ps != nil && ps.RoutingAssignment != nil {
+		card.RoutingNetworkProvider = ps.RoutingAssignment.NetworkProvider
+		card.RoutingExecutionNodeID = ps.RoutingAssignment.ExecutionNodeID
 		card.RoutingWorkload = ps.RoutingAssignment.Workload
 		card.RoutingExecution = ps.RoutingAssignment.Execution
 		card.RoutingEgress = ps.RoutingAssignment.Egress
@@ -2581,26 +2570,43 @@ func (h *PlaybackHandler) ensureTranscodeSessionWithToneMapMode(
 		)
 	}
 
+	streamOriginSeconds := 0.0
+	copySeekAnchorResolved := source.SiloSeekReanchor && compatHLSCopiesVideo(source)
+	if copySeekAnchorResolved {
+		streamOriginSeconds, startSegmentNumber, err = playback.ResolveCopySeekAnchor(ctx, h.FFmpegPath, file.FilePath, initialSeekSeconds, h.compatSegmentDuration())
+		if err != nil {
+			return nil, fmt.Errorf("resolve compatibility seek anchor: %w", err)
+		}
+	}
+
 	opts := playback.TranscodeOpts{
-		SessionID:           upstreamSessionID,
-		InputPath:           file.FilePath,
-		SourceVideoCodec:    sourceVideoCodec,
-		SourceVideoProfile:  sourceVideoProfile,
-		SourceVideoBitDepth: sourceVideoBitDepth,
-		OutputDir:           filepath.Join(h.TranscodeDir, upstreamSessionID),
-		SeekSeconds:         initialSeekSeconds,
-		StartSegmentNumber:  startSegmentNumber,
-		TargetCodecVideo:    compatTargetVideoCodec,
-		TargetCodecAudio:    compatTargetAudioCodec,
-		FFmpegPath:          h.FFmpegPath,
-		HWAccel:             h.HWAccel,
-		AudioTrackIndex:     audioTrackIndex,
-		SourceAudioChannels: sourceAudioChannels,
-		TotalDuration:       float64(source.Version.Duration),
-		FastStart:           true,
+		SessionID:              upstreamSessionID,
+		InputPath:              file.FilePath,
+		SourceVideoCodec:       sourceVideoCodec,
+		SourceVideoProfile:     sourceVideoProfile,
+		SourceVideoBitDepth:    sourceVideoBitDepth,
+		OutputDir:              filepath.Join(h.TranscodeDir, upstreamSessionID),
+		SeekSeconds:            initialSeekSeconds,
+		StreamOriginSeconds:    streamOriginSeconds,
+		CopySeekAnchorResolved: copySeekAnchorResolved,
+		StartSegmentNumber:     startSegmentNumber,
+		SubtitleBurnIn:         source.SubtitleBurnIn,
+		SubtitleTrackIndex:     source.SubtitleTrackIndex,
+		SubtitleCodec:          source.SubtitleCodec,
+		TargetBitrateKbps:      source.TargetBitrateKbps,
+		TargetResolution:       source.TargetResolution,
+		TargetAudioChannels:    source.TargetAudioChannels,
+		TargetCodecVideo:       compatTargetVideoCodec,
+		TargetCodecAudio:       compatTargetAudioCodec,
+		FFmpegPath:             h.FFmpegPath,
+		HWAccel:                h.HWAccel,
+		AudioTrackIndex:        audioTrackIndex,
+		SourceAudioChannels:    sourceAudioChannels,
+		TotalDuration:          float64(source.Version.Duration),
+		FastStart:              true,
 	}
 	opts.SegmentRetentionSeconds = h.segmentRetentionSeconds()
-	if sourceAudioChannels > 0 {
+	if sourceAudioChannels > 0 && opts.TargetAudioChannels == 0 {
 		opts.TargetAudioChannels = 2
 	}
 	if compatHLSCopiesVideo(source) {
@@ -2633,7 +2639,7 @@ func (h *PlaybackHandler) ensureTranscodeSessionWithToneMapMode(
 			return nil, toneMapErr
 		}
 		toneMapRecipe.apply(&opts)
-		autoVideoToolboxBitrate = compatVideoToolboxToneMapBitrateKbps(source.Version, toneMapRecipe)
+		autoVideoToolboxBitrate = compatVideoToolboxToneMapBitrateKbps(source.Version, toneMapRecipe, source.TargetBitrateKbps)
 		if autoVideoToolboxBitrate > 0 {
 			opts.TargetBitrateKbps = autoVideoToolboxBitrate
 		}
@@ -2796,7 +2802,10 @@ func compatLiveTranscodeMatchesAudioSource(transcodeSession *playback.TranscodeS
 	opts := transcodeSession.Opts()
 	return opts.AudioTrackIndex == compatAudioTrackIndexOrDefault(source) &&
 		opts.SourceAudioChannels == compatHLSRecipeSourceAudioChannels(source) &&
-		opts.CopyVideoMPEGTS == source.HLSRemuxMPEGTS
+		opts.CopyVideoMPEGTS == source.HLSRemuxMPEGTS &&
+		opts.SubtitleBurnIn == source.SubtitleBurnIn && (!source.SubtitleBurnIn || (opts.SubtitleTrackIndex == source.SubtitleTrackIndex && opts.SubtitleCodec == source.SubtitleCodec)) &&
+		(source.TargetBitrateKbps == 0 || opts.TargetBitrateKbps == source.TargetBitrateKbps) &&
+		(source.TargetResolution == "" || opts.TargetResolution == source.TargetResolution)
 }
 
 func shouldGenerateCompatFullManifest(source PlaybackMediaSource, segmentDuration int) bool {
@@ -2806,13 +2815,17 @@ func shouldGenerateCompatFullManifest(source PlaybackMediaSource, segmentDuratio
 	return playback.CanGenerateSyntheticManifest(float64(source.Version.Duration), segmentDuration)
 }
 
-// compatInitialTranscodePosition starts Jellyfin-compatible HLS at source zero.
+// compatInitialTranscodePosition starts legacy Jellyfin-compatible HLS at source zero.
 // Jellyfin 10.11's native webOS player must load init.mp4 and the beginning of
 // the source-aligned media playlist before it applies its own resume seek. A
 // pre-seeked process advertises segments 0..K-1 that can never exist and makes
 // the player's initial segment-zero request fail. Later segment-K requests use
-// the normal on-demand restart path.
-func compatInitialTranscodePosition(_ PlaybackMediaSource, _ int, _ float64) (float64, int) {
+// the normal on-demand restart path. Clients opting into SiloSeekReanchor instead
+// receive a fresh generation anchored at their explicit source-time request.
+func compatInitialTranscodePosition(source PlaybackMediaSource, _ int, requested float64) (float64, int) {
+	if source.SiloSeekReanchor && compatHLSCopiesVideo(source) {
+		return math.Max(0, requested), 0 // Segment numbering is resolved from the actual anchor before start.
+	}
 	return 0, 0
 }
 
@@ -3164,54 +3177,44 @@ func (h *PlaybackHandler) createStaticPlaySession(ctx context.Context, session *
 		UserID:              session.PseudoUserID.String(),
 		MediaSources:        sources,
 	}
-	h.playbackStore.Put(*ps)
-
-	var matched *PlaybackMediaSource
-	if mediaSourceID != "" {
-		matched = findMediaSource(ps, mediaSourceID)
-	}
-	if matched == nil {
-		matched = firstMediaSource(ps)
+	matched := playbackRouteSource(ps, mediaSourceID, true)
+	if matched != nil {
+		h.playbackStore.Put(*ps)
 	}
 	return ps, matched, nil
 }
 
+var errPlaybackRouteMismatch = errors.New("playback session does not match requested item")
+
 func (h *PlaybackHandler) resolvePlaybackRoute(r *http.Request, compatSession *Session, routeID, mediaSourceID string) (*PlaybackSession, *PlaybackMediaSource, error) {
 	clientPlaySessionID := newCaseInsensitiveQuery(r.URL.Query()).Get("PlaySessionId")
+	// Only progressive routes support Jellyfin's MediaSource.Id == Item.Id
+	// convention. Subtitle and attachment routes identify an exact source.
+	allowItemAlias := chiURLParam(r, "routeMediaSourceId") == ""
 	if clientPlaySessionID != "" {
 		if playSession, ok := h.playbackStore.Get(clientPlaySessionID); ok && playSession.CompatToken == compatSession.Token {
-			// Fall back to the primary source only for the Jellyfin
-			// MediaSource.Id == Item.Id convention: a client that reused the
-			// server's PlaySessionId may send the item id (== routeID) as
-			// mediaSourceId, which never matches Silo's fileID-based source ids.
-			// Any other unmatched id (stale/foreign, or a wrong multi-version
-			// id) keeps source nil so HandleVideoStream rejects it rather than
-			// silently serving the wrong file. Mirrors Jellyfin's
-			// StreamingHelpers, which defaults to the primary source only for an
-			// empty or item-id mediaSourceId.
-			source := findMediaSource(playSession, mediaSourceID)
-			if source == nil && (mediaSourceID == "" || mediaSourceIDsEqual(mediaSourceID, routeID)) {
-				source = firstMediaSource(playSession)
+			if !mediaSourceIDsEqual(playSession.RouteItemID, routeID) {
+				return nil, nil, errPlaybackRouteMismatch
 			}
-			return playSession, source, nil
+			return playSession, playbackRouteSource(playSession, mediaSourceID, allowItemAlias), nil
 		}
-		// The PlaySessionId is unknown to us (the client never called PlaybackInfo,
-		// so it is the client's own id) or belongs to another caller. Fall through
-		// to route-based reuse below instead of erroring: a Static=true direct play
-		// repeats this same client id on every range request, and minting a fresh,
-		// separately stream-capped upstream session each time piles up orphaned
-		// sessions that trip the per-user stream limit (429). Route reuse keeps one
-		// session per direct play. (Reuse stays scoped to this caller's CompatToken
-		// via FindByRoute, so a guessed/foreign id cannot bind another user's session.)
+		// Clients that skip PlaybackInfo reuse their own PlaySessionId on range
+		// requests. Reuse remains scoped to this token and the requested item.
 	}
 
-	playSession, source, ok := h.playbackStore.FindByRoute(compatSession.Token, routeID)
+	playSession, _, ok := h.playbackStore.FindByRoute(compatSession.Token, routeID)
 	if !ok {
 		return nil, nil, ErrSessionNotFound
 	}
+	if !mediaSourceIDsEqual(playSession.RouteItemID, routeID) {
+		return nil, nil, errPlaybackRouteMismatch
+	}
+	source := playbackRouteSource(playSession, mediaSourceID, allowItemAlias)
+	if source == nil {
+		return playSession, nil, nil
+	}
 	if clientPlaySessionID != "" && playSession.ClientPlaySessionID != clientPlaySessionID {
-		// Remember the client's own PlaySessionId so playback reports carrying
-		// it resolve to this session directly instead of by ambiguous route.
+		// Remember the client's ID only after item and source validation.
 		if h.playbackStore.Update(playSession.ID, func(current *PlaybackSession) error {
 			current.ClientPlaySessionID = clientPlaySessionID
 			return nil
@@ -3219,13 +3222,14 @@ func (h *PlaybackHandler) resolvePlaybackRoute(r *http.Request, compatSession *S
 			playSession.ClientPlaySessionID = clientPlaySessionID
 		}
 	}
-	if source == nil && mediaSourceID != "" {
-		source = findMediaSource(playSession, mediaSourceID)
-	}
-	if source == nil {
-		source = firstMediaSource(playSession)
-	}
 	return playSession, source, nil
+}
+
+func playbackRouteSource(session *PlaybackSession, mediaSourceID string, allowItemAlias bool) *PlaybackMediaSource {
+	if mediaSourceID == "" || (allowItemAlias && mediaSourceIDsEqual(mediaSourceID, session.RouteItemID)) {
+		return firstMediaSource(session)
+	}
+	return findMediaSource(session, mediaSourceID)
 }
 
 func firstMediaSource(session *PlaybackSession) *PlaybackMediaSource {

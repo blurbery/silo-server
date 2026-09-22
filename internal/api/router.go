@@ -25,10 +25,10 @@ import (
 	"github.com/Silo-Server/silo-server/internal/api/handlers"
 	apimw "github.com/Silo-Server/silo-server/internal/api/middleware"
 	"github.com/Silo-Server/silo-server/internal/apiv2"
-	"github.com/Silo-Server/silo-server/internal/artworkstore"
 	"github.com/Silo-Server/silo-server/internal/artworkurl"
 	"github.com/Silo-Server/silo-server/internal/auth"
 	"github.com/Silo-Server/silo-server/internal/autoscan"
+	"github.com/Silo-Server/silo-server/internal/blobstore"
 	"github.com/Silo-Server/silo-server/internal/branding"
 	"github.com/Silo-Server/silo-server/internal/cache"
 	"github.com/Silo-Server/silo-server/internal/catalog"
@@ -52,6 +52,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/metadata/tmdb"
 	metatrakt "github.com/Silo-Server/silo-server/internal/metadata/trakt"
 	metadatatranslation "github.com/Silo-Server/silo-server/internal/metadata/translation"
+	"github.com/Silo-Server/silo-server/internal/netaccess"
 	"github.com/Silo-Server/silo-server/internal/nodemetrics"
 	"github.com/Silo-Server/silo-server/internal/nodepool"
 	"github.com/Silo-Server/silo-server/internal/noderecipe"
@@ -71,6 +72,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/scanqueue"
 	"github.com/Silo-Server/silo-server/internal/secret"
 	"github.com/Silo-Server/silo-server/internal/sections"
+	"github.com/Silo-Server/silo-server/internal/serveridentity"
 	"github.com/Silo-Server/silo-server/internal/settingscontract"
 	"github.com/Silo-Server/silo-server/internal/streamtelemetry"
 	"github.com/Silo-Server/silo-server/internal/subtitles"
@@ -118,9 +120,9 @@ type Dependencies struct {
 	DB              *pgxpool.Pool
 	SecretCipher    *secret.Cipher // at-rest credential cipher (required when DB is set)
 	FrontendFS      fs.FS
-	S3Public        *s3client.Client   // public assets bucket client (may be nil)
-	Artwork         artworkstore.Store // backend-neutral artwork store
-	ArtworkBackend  string             // resolved artwork backend name
+	S3Public        *s3client.Client // public assets bucket client (may be nil)
+	Blobs           blobstore.Stores // backend-neutral blob stores (assets and operational)
+	ArtworkBackend  string           // resolved blob storage backend name
 	ArtworkDelivery ArtworkDelivery
 	ArtworkSigner   *artworkurl.Signer
 	ArtworkResolver artworkurl.Resolver
@@ -128,7 +130,6 @@ type Dependencies struct {
 		EnqueueArtworkRepair(context.Context, []string, int) (int, error)
 	}
 	S3Private         *s3client.Client              // private internal bucket client (may be nil)
-	S3UserDB          *s3client.Client              // user-db bucket client (may be nil)
 	BrandingService   *branding.Service             // white-label branding (nil when DB unavailable)
 	FolderRepo        *catalog.FolderRepository     // media folder repository (may be nil)
 	FileRepo          *scanner.FileRepository       // media file repository (may be nil)
@@ -164,13 +165,18 @@ type Dependencies struct {
 	CatalogSearchVectorizer   catalog.CatalogSearchQueryVectorizer
 	// CatalogSearchSettings is the process-lifetime startup snapshot shared by
 	// every native/jellycompat provider and the index maintenance worker.
-	CatalogSearchSettings     *catalog.CatalogSearchSettings
-	RatingsRepo               *catalog.RatingsRepo
-	PersonRepo                *catalog.PersonRepository
-	PersonRefreshQueue        handlers.PersonRefreshQueue
-	PersonRefresher           handlers.PersonRefresher
-	RateLimitMW               *ratelimit.Middleware
-	ClientIPResolver          *clientip.Resolver
+	CatalogSearchSettings *catalog.CatalogSearchSettings
+	RatingsRepo           *catalog.RatingsRepo
+	PersonRepo            *catalog.PersonRepository
+	PersonRefreshQueue    handlers.PersonRefreshQueue
+	PersonRefresher       handlers.PersonRefresher
+	RateLimitMW           *ratelimit.Middleware
+	ClientIPResolver      *clientip.Resolver
+	// NetworkAccess is the ingress-token registry and provider status cache
+	// for network access provider plugins on this host. The token middleware
+	// runs on every native request and connected overlay origins are accepted
+	// by WebSocket handshakes. Nil disables both (tests, worker modes).
+	NetworkAccess             *netaccess.Broker
 	NodeID                    string
 	LogStreamHub              *logstream.Hub
 	RealtimeHub               *notifications.Hub
@@ -194,6 +200,8 @@ type Dependencies struct {
 	MarkerProviderConfig      *markers.ProviderConfigStore
 	MarkerContributionStore   *markers.ContributionStore
 	MarkerContributionService *markers.ContributionService
+	MarkerPopulation          *markers.PopulationService
+	MarkerUpdateNotifier      *playback.MarkerUpdateNotifier
 	WatchProviderService      handlers.WatchProviderService
 	// WatchProviderRegistry is the watchsync registry, used by the admin stats
 	// to list every provider — built-in or plugin-contributed — even when none
@@ -328,6 +336,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 	r := chi.NewRouter()
 
 	useBaseMiddleware(r, deps)
+	if overlay := deps.overlayOrigins(); overlay != nil {
+		handlers.SetWebSocketOverlayOrigins(overlay)
+	}
 
 	// Build the readiness handler with optional S3 check.
 	var s3Checker handlers.S3HealthChecker
@@ -343,7 +354,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 		pgPinger = deps.DB
 	}
 
-	readyHandler := handlers.NewReadyHandler(pgPinger, s3Checker, deps.Artwork)
+	readyHandler := handlers.NewReadyHandler(pgPinger, s3Checker, deps.Blobs.Assets)
 
 	// Resolves whether a declared profile belongs to the user and is the
 	// household primary profile. Nil (no user store) disables the
@@ -412,9 +423,13 @@ func newChiRouter(deps Dependencies) chi.Router {
 	if deps.DB != nil {
 		accessGroupStore = access.NewGroupStore(deps.DB)
 	}
+	// Private S3 keeps its existing keys and presigned delivery. Without it,
+	// bundles go to the operational blob store and download by streaming.
 	var diagnosticsStore diagnostics.ObjectStore
 	if deps.S3Private != nil {
 		diagnosticsStore = diagnostics.NewS3ObjectStore(deps.S3Private)
+	} else {
+		diagnosticsStore = diagnostics.NewLocalObjectStore(deps.Blobs.Operational)
 	}
 	var diagnosticsHandler *handlers.DiagnosticsHandler
 	if deps.DB != nil {
@@ -614,7 +629,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 
 		// Library poster uploads are writable client-facing assets, so they
 		// belong in the public assets bucket.
-		libraryHandler.ArtworkStore = deps.Artwork
+		libraryHandler.ArtworkStore = deps.Blobs.Assets
 		libraryHandler.ArtworkResolver = deps.ArtworkResolver
 
 		// Wire provider chain repos for per-library provider priority management.
@@ -733,12 +748,14 @@ func newChiRouter(deps Dependencies) chi.Router {
 		rootClaimRepo := catalog.NewRootClaimRepository(deps.DB)
 		groupClaimRepo := catalog.NewGroupClaimRepository(deps.DB)
 		literaryRepo := literaryworks.NewRepository(deps.DB)
-		literaryWorkHandler = &handlers.LiteraryWorkHandler{Service: literaryworks.NewService(literaryRepo)}
+		literaryService := literaryworks.NewService(literaryRepo)
+		literaryWorkHandler = &handlers.LiteraryWorkHandler{Service: literaryService}
 		detailSvc = catalog.NewDetailService(itemRepo, episodeRepo, seasonRepo, deps.PersonRepo, fileFetcher)
 		detailSvc.SetFolderRepository(folderRepo)
 		detailSvc.SetRootClaimRepository(rootClaimRepo)
 		detailSvc.SetGroupClaimRepository(groupClaimRepo)
 		detailSvc.SetWorkSummaryProvider(literaryRepo)
+		detailSvc.SetLiteraryWorkLinker(literaryService)
 		detailSvc.SetProbeEnsurer(deps.ProbeEnsurer)
 		detailSvc.SetChapterThumbnailQueuer(deps.ChapterThumbnailQueuer)
 		if deps.ImageResolver != nil {
@@ -759,6 +776,10 @@ func newChiRouter(deps Dependencies) chi.Router {
 		if catalogSearchService != nil {
 			itemsHandler.SetCatalogSearchProvider(catalogSearchService.Provider())
 		}
+		if deps.MarkerPopulation != nil {
+			itemsHandler.MarkerPopulation = deps.MarkerPopulation
+		}
+		itemsHandler.MarkerFileResolver = deps.FileRepo
 		itemsHandler.EventsHub = deps.EventsHub
 		itemsHandler.UserRepo = userRepo
 		if accessGroupStore != nil {
@@ -937,7 +958,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 		profileHandler.ProfileTokens = profileTokenService
 		// Private S3 preserves existing avatar keys and presigned delivery. Local
 		// avatars use the signed artwork endpoint. Never use public S3 here.
-		profileHandler.AvatarStore = handlers.NewProfileAvatarStore(deps.Artwork, deps.S3Private, deps.ArtworkBackend)
+		profileHandler.AvatarStore = handlers.NewProfileAvatarStore(deps.Blobs)
 		profileHandler.AvatarResolver = deps.ArtworkResolver
 		profileHandler.SessionsReader = playbackSessionsLoader
 		personalDataHandler = handlers.NewPersonalDataHandler(deps.UserStoreProvider, itemRepo)
@@ -965,7 +986,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 		if deps.DB != nil {
 			collectionHandler.Executor = &catalog.QueryExecutor{Pool: deps.DB}
 		}
-		collectionHandler.ArtworkStore = deps.Artwork
+		collectionHandler.ArtworkStore = deps.Blobs.Assets
 		collectionHandler.ArtworkResolver = deps.ArtworkResolver
 		// The import handler is built beside the collection handler so the v1
 		// route group and the v2 operations share one instance; the v1 routes
@@ -979,7 +1000,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 				deps.MDBListClient,
 				deps.FrontendFS,
 			)
-			userImportHandler.ArtworkStore = deps.Artwork
+			userImportHandler.ArtworkStore = deps.Blobs.Assets
 			userImportHandler.ArtworkResolver = deps.ArtworkResolver
 		}
 		settingsHandler = handlers.NewSettingsHandler(deps.UserStoreProvider)
@@ -1207,14 +1228,21 @@ func newChiRouter(deps Dependencies) chi.Router {
 		playbackHandler.CommandTracker = commandTracker
 		playbackHandler.CommandDispatcher = playback.NewCommandDispatcher(deps.SessionMgr, realtimeHub, commandTracker)
 		playbackCommandDispatcher = playbackHandler.CommandDispatcher
-		playbackHandler.IntroAnalyzer = deps.IntroAnalyzer
-		playbackHandler.IntroRepository = deps.IntroRepository
-		playbackHandler.MarkerRegistry = deps.MarkerRegistry
-		playbackHandler.MarkerResolver = deps.MarkerResolver
-		if deps.FileRepo != nil {
-			playbackHandler.MarkerUpserter = deps.FileRepo
+		if deps.IntroAnalyzer != nil {
+			playbackHandler.IntroAnalyzer = deps.IntroAnalyzer
 		}
-		playbackHandler.MarkerUpdateNotifier = playback.NewMarkerUpdateNotifier(deps.SessionMgr, realtimeHub)
+		if deps.IntroRepository != nil {
+			playbackHandler.IntroRepository = deps.IntroRepository
+		}
+		playbackHandler.MarkerRegistry = deps.MarkerRegistry
+		if deps.MarkerPopulation != nil {
+			playbackHandler.MarkerPopulation = deps.MarkerPopulation
+		}
+		if deps.MarkerUpdateNotifier != nil {
+			playbackHandler.MarkerUpdateNotifier = deps.MarkerUpdateNotifier
+		} else {
+			playbackHandler.MarkerUpdateNotifier = playback.NewMarkerUpdateNotifier(deps.SessionMgr, realtimeHub)
+		}
 		// Optimistic remux: a play is never blocked on the H.264 copy-safety
 		// scan, so the scan runs behind the issued plan and the notifier moves
 		// any session that is already stream-copying an unsafe source off that
@@ -1274,6 +1302,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 				watchtogether.NewSuggestionRepository(deps.DB),
 				watchtogether.NewProfileNameResolver(deps.UserStoreProvider),
 			)
+			watchTogetherService.SetPlaybackAttemptStore(playbackHandler.PlanStoreV3)
 			if err := watchTogetherService.SetClusterEventBus(deps.EventBus); err != nil {
 				slog.Warn("watch together cluster synchronization unavailable", "error", err)
 			}
@@ -1282,14 +1311,24 @@ func newChiRouter(deps Dependencies) chi.Router {
 				viewerResolver,
 				roomTokenService,
 			)
+			if deps.UserStoreProvider != nil {
+				watchTogetherHandler.MemberState = watchtogether.NewMemberStateReader(
+					deps.UserStoreProvider,
+					episodeRepo,
+					catalog.NewNextUpRepository(deps.DB, deps.UserStoreProvider),
+				)
+				watchTogetherHandler.Details = detailSvc
+				watchTogetherHandler.MemberStateCatalog = itemRepo
+			}
 		}
 	}
 
-	// Wire subtitle repo and S3 client onto streamHandler for S3-stored subtitle serving.
-	if streamHandler != nil && subtitleRepo != nil && deps.S3Public != nil {
+	// Wire the subtitle repo and blob store onto streamHandler so downloaded
+	// subtitles serve from whichever backend stores them.
+	subtitleBlobs := blobstore.NewByteStore(deps.Blobs.Assets)
+	if streamHandler != nil && subtitleRepo != nil && subtitleBlobs != nil {
 		streamHandler.SubtitleRepo = subtitleRepo
-		streamHandler.S3Client = deps.S3Public
-		streamHandler.S3Bucket = deps.S3Public.Bucket()
+		streamHandler.SubtitleBlobs = subtitleBlobs
 	}
 	if streamHandler != nil && deps.Config != nil {
 		streamHandler.PlaybackConfig = func() config.PlaybackConfig {
@@ -1350,11 +1389,13 @@ func newChiRouter(deps Dependencies) chi.Router {
 	}
 	if deps.DB != nil {
 		jobRepo := adminjob.NewRepository(deps.DB)
-		// Avoid wrapping a nil *s3client.Client in a non-nil interface;
-		// handlers rely on interface-nil checks to gate S3 features.
+		// Avoid wrapping a nil store in a non-nil interface; handlers rely on
+		// interface-nil checks to gate artifact features.
 		var privateStore handlers.CatalogSeedArtifactStore
 		if deps.S3Private != nil {
 			privateStore = deps.S3Private
+		} else if api := blobstore.NewBucketAPI(deps.Blobs.Operational); api != nil {
+			privateStore = api
 		}
 		catalogSeedHandler = handlers.NewCatalogSeedHandler(catalogseed.NewService(deps.DB, deps.PersonRepo, recommendations.NewRepo(deps.DB)), jobRepo, privateStore)
 		catalogSeedHandler.RealtimeHub = deps.RealtimeHub
@@ -1426,6 +1467,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 		)
 		adminIntroHandler.Settings = settingsRepo
 		adminIntroHandler.FileResolver = deps.FileRepo
+		if deps.MarkerPopulation != nil {
+			adminIntroHandler.OnlineMarkers = deps.MarkerPopulation
+		}
 		if playbackHandler != nil {
 			adminIntroHandler.MarkerUpdateNotifier = playbackHandler.MarkerUpdateNotifier
 		}
@@ -1449,6 +1493,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 			deps.FileRepo, deps.FileRepo, contributor, contributions, notifier, slog.Default(),
 		)
 		markersHandler.BaseContext = deps.AppContext
+		if deps.MarkerPopulation != nil {
+			markersHandler.MarkerPopulation = deps.MarkerPopulation
+		}
 		markersHandler.AuditHistory = deps.FileRepo
 		if itemRepo != nil {
 			markersHandler.Authorizer = &handlers.MediaFileAuthorizer{
@@ -1474,10 +1521,11 @@ func newChiRouter(deps Dependencies) chi.Router {
 		adminSubtitleHandler = handlers.NewAdminSubtitleHandler(subtitleRepo)
 	}
 
-	// Build subtitle search handler if we have DB and S3.
+	// Build the subtitle search handler if we have a database and somewhere to
+	// store subtitle files. Either backend will do.
 	var subtitleSearchHandler *handlers.SubtitleSearchHandler
-	if deps.DB != nil && deps.S3Public != nil && subtitleRepo != nil {
-		subtitleManager = subtitles.NewManager(subtitleRepo, deps.S3Public, deps.S3Public.Bucket())
+	if deps.DB != nil && subtitleBlobs != nil && subtitleRepo != nil {
+		subtitleManager = subtitles.NewManager(subtitleRepo, subtitleBlobs)
 
 		// Load provider configs from DB and register enabled providers.
 		providerConfigs, _ := subtitleRepo.ListProviderConfigs(deps.AppContext)
@@ -1630,6 +1678,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 		}
 		sections.InstallRecipeDelegate(sectionFetcher)
 		sectionHandler = handlers.NewSectionHandler(sectionRepo, sectionFetcher)
+		if deps.TrendingRefresher != nil {
+			sectionHandler.TrendingRefresher = deps.TrendingRefresher
+		}
 		sectionHandler.CollectionRepo = sectionFetcher.CollectionRepo
 		sectionHandler.FolderRepo = deps.FolderRepo
 		if deps.UserStoreProvider != nil {
@@ -1745,7 +1796,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 			itemRepo,
 			nil,
 		)
-		libraryCollectionHandler.ArtworkStore = deps.Artwork
+		libraryCollectionHandler.ArtworkStore = deps.Blobs.Assets
 		libraryCollectionHandler.ArtworkResolver = deps.ArtworkResolver
 		libraryCollectionHandler.FrontendFS = deps.FrontendFS
 		libraryCollectionHandler.Executor = &catalog.QueryExecutor{Pool: deps.DB}
@@ -1878,6 +1929,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 				subtitleSource = subtitleManager
 			}
 			downloadSvc.SetOfflineDeps(detailSvc, subtitleSource, nil)
+		}
+		if deps.MarkerPopulation != nil {
+			downloadSvc.SetMarkerPopulation(deps.MarkerPopulation)
 		}
 		if deps.ArtifactManager != nil {
 			// Prepare-to-file pipeline (Phase 3): remux/transcode-to-single-file.
@@ -2019,6 +2073,20 @@ func newChiRouter(deps Dependencies) chi.Router {
 	)
 	v2deps := v2Dependencies(deps, authMiddleware, viewerAccessMiddleware, requireActingAdmin, metadataCurationAccess, markerEditAccess, settingsRepo)
 	v2deps.CompatConnectInfo = compatConnectInfoHandler
+	// Server identity is public discovery data, so it reads through the raw
+	// settings repo: a SECRET_KEY rotation must not change who the server is.
+	if deps.DB != nil {
+		v2deps.ServerIdentity = serveridentity.New(catalog.NewServerSettingsRepo(deps.DB))
+	}
+	v2deps.ServerConnections = apiv2.ServerConnections{PublicURL: func() string {
+		if cfg := deps.CurrentConfig(); cfg != nil {
+			return cfg.Server.PublicURL
+		}
+		return ""
+	}}
+	if deps.NetworkAccess != nil {
+		v2deps.ServerConnections.Providers = deps.NetworkAccess.Status
+	}
 	if deps.OpsLogRepo != nil {
 		v2deps.AdminOperationalLogs = deps.OpsLogRepo
 	}
@@ -2033,6 +2101,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 		v2deps.AdminLogsSocket = socket
 		if deps.OnConfigChange != nil {
 			deps.OnConfigChange(func(_, updated *config.Config) { socket.SetPublicOrigin(updated.Server.PublicURL) })
+		}
+		if overlay := deps.overlayOrigins(); overlay != nil {
+			socket.SetOverlayOrigins(overlay)
 		}
 	}
 	if autoscanHandler != nil {
@@ -2136,6 +2207,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 			if deps.OnConfigChange != nil {
 				deps.OnConfigChange(func(_, updated *config.Config) { socket.SetPublicOrigin(updated.Server.PublicURL) })
 			}
+			if overlay := deps.overlayOrigins(); overlay != nil {
+				socket.SetOverlayOrigins(overlay)
+			}
 		}
 		// Raw v2 delivery shares the byte-protocol handlers; fonts use the typed
 		// service. Both retain token-carried reconstruction and deny markers.
@@ -2211,12 +2285,28 @@ func newChiRouter(deps Dependencies) chi.Router {
 		v2deps.WatchTogetherPolicy = watchTogetherHandler
 		v2deps.WatchTogetherJoin = watchTogetherHandler
 		v2deps.WatchTogetherSelection = watchTogetherHandler
+		v2deps.WatchTogetherSourceFallback = watchTogetherHandler
+		v2deps.WatchTogetherStage = watchTogetherHandler
+		v2deps.WatchTogetherStart = watchTogetherHandler
+		v2deps.WatchTogetherStop = watchTogetherHandler
+		v2deps.WatchTogetherSelectionMode = watchTogetherHandler
+		if watchTogetherHandler.MemberState != nil && watchTogetherHandler.MemberStateCatalog != nil {
+			v2deps.WatchTogetherMemberState = watchTogetherHandler
+		}
+		if watchTogetherHandler.MemberState != nil && watchTogetherHandler.Details != nil {
+			v2deps.WatchTogetherPicker = watchTogetherHandler
+		}
+		v2deps.WatchTogetherCapability = watchTogetherHandler
 		v2deps.WatchTogetherCreate = watchTogetherHandler
 		if deps.RedisClient != nil && sessionRepo != nil && userRepo != nil {
 			socket := handlers.NewWatchTogetherSocketV2(watchTogetherHandler, watchtogether.NewRoomSocketCredentialStore(deps.RedisClient), sessionRepo, userRepo, viewerResolver, checkPrimaryProfile, deps.PublicURL)
 			v2deps.WatchTogetherSocket = socket
+			playbackHandler.WatchTogetherAvailable = true
 			if deps.OnConfigChange != nil {
 				deps.OnConfigChange(func(_, updated *config.Config) { socket.SetPublicOrigin(updated.Server.PublicURL) })
+			}
+			if overlay := deps.overlayOrigins(); overlay != nil {
+				socket.SetOverlayOrigins(overlay)
 			}
 		}
 	}
@@ -2229,6 +2319,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 			v2deps.EventsSocket = socket
 			if deps.OnConfigChange != nil {
 				deps.OnConfigChange(func(_, updated *config.Config) { socket.SetPublicOrigin(updated.Server.PublicURL) })
+			}
+			if overlay := deps.overlayOrigins(); overlay != nil {
+				socket.SetOverlayOrigins(overlay)
 			}
 		}
 	}
@@ -2289,6 +2382,12 @@ func newChiRouter(deps Dependencies) chi.Router {
 	}
 	if adminJobsHandler != nil {
 		v2deps.AdminTaskJobs = adminJobsHandler
+		// Both sides share one signer so they cannot disagree.
+		if signer := newAdminJobArtifactSigner(&deps); signer != nil {
+			adminJobsHandler.ArtifactSigner = signer
+			v2deps.AdminJobArtifacts = adminJobsHandler
+			v2deps.AdminJobArtifactSigner = signer
+		}
 	}
 	if catalogSeedHandler != nil {
 		v2deps.AdminCatalogSources = catalogSeedHandler
@@ -2326,6 +2425,11 @@ func newChiRouter(deps Dependencies) chi.Router {
 		v2deps.AdminNodesRead = nodeHandler
 		v2deps.AdminNodeCommands = nodeHandler
 		v2deps.AdminNodeReload = nodeHandler
+		// Network access admin operations fan out to every enabled proxy node
+		// over its bearer routes, the same way force-reload does.
+		if deps.PluginService != nil {
+			deps.PluginService.SetNetworkAccessNodes(nodeHandler)
+		}
 		if deps.DB != nil {
 			nodeHandler.SetConfigurationStore(nodepool.NewAdminConfigurationStore(deps.DB))
 			v2deps.AdminNodeConfiguration = nodeHandler
@@ -2389,6 +2493,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 		v2deps.AdminPluginConfiguration = v2PluginHandler
 		v2deps.AdminPluginLifecycle = v2PluginHandler
 		v2deps.AdminPluginUploads = v2PluginHandler
+	}
+	if deps.PluginService != nil {
+		v2deps.NetworkAccess = deps.PluginService
 	}
 	if deps.TaskManager != nil && deps.DB != nil {
 		v2deps.AdminTasks = deps.TaskManager
@@ -4128,6 +4235,15 @@ func newChiRouter(deps Dependencies) chi.Router {
 	return r
 }
 
+// overlayOrigins returns the source of connected overlay origins the
+// WebSocket handshakes accept, or nil when network access is not wired.
+func (d Dependencies) overlayOrigins() handlers.OverlayOriginSource {
+	if d.NetworkAccess == nil || d.NetworkAccess.Status == nil {
+		return nil
+	}
+	return d.NetworkAccess.Status.ConnectedOrigins
+}
+
 // useBaseMiddleware mounts the middleware chain every native request passes
 // through, in order. It is factored out of NewRouter so a test can drive the
 // real chain over a real socket: re-declaring the stack in a test would let the
@@ -4140,6 +4256,13 @@ func useBaseMiddleware(r chi.Router, deps Dependencies) {
 	// Client IP resolution must run before request logging.
 	if deps.ClientIPResolver != nil {
 		r.Use(clientip.Middleware(deps.ClientIPResolver))
+	}
+
+	// Ingress token from network access provider plugins: validated and
+	// stripped before anything can log or forward it; an unknown token is
+	// refused outright. Requests without it stay on the default access path.
+	if deps.NetworkAccess != nil {
+		r.Use(netaccess.Middleware(deps.NetworkAccess.Registry))
 	}
 
 	r.Use(apimw.RequestLogger(deps.NodeID))
@@ -4444,6 +4567,23 @@ func (a *tmdbDiscoverAdapter) Discover(ctx context.Context, mediaType string, pa
 // upstream call, so a saved change converges without a restart.
 const traktClientIDSettingKey = "watchsync.trakt.client_id"
 
+// adminJobArtifactURLTTL matches the presigned lifetime an S3 deployment hands
+// out, so the two backends expire a download link on the same schedule.
+const adminJobArtifactURLTTL = 15 * time.Minute
+
+// newAdminJobArtifactSigner returns the signer for the streaming artifact
+// route, or nil when the deployment has no use for it. Only a store that cannot
+// presign needs the route, so an S3 deployment keeps handing out presigned URLs
+// and never mints a capability. A deployment with no operational store has no
+// artifacts to serve, and wiring the route there would advertise downloads
+// through the job capabilities that can never complete.
+func newAdminJobArtifactSigner(deps *Dependencies) *artworkurl.Signer {
+	if deps.Config == nil || deps.S3Private != nil || deps.Blobs.Operational == nil {
+		return nil
+	}
+	return artworkurl.NewJobArtifactSigner(deps.CurrentConfig().Auth.JWTSecret, adminJobArtifactURLTTL)
+}
+
 type traktCollectionAdapter struct {
 	client *metatrakt.Client
 	// settings is the live source of the app client ID. Nil only where no
@@ -4595,7 +4735,7 @@ func v2Dependencies(
 		ViewerAccess:    viewer,
 		ActingAdmin:     actingAdmin,
 		PermissionGates: map[string]func(http.Handler) http.Handler{},
-		ArtworkStore:    deps.Artwork,
+		ArtworkStore:    deps.Blobs.Assets,
 		ArtworkBackend:  deps.ArtworkBackend,
 		ArtworkSigner:   deps.ArtworkSigner,
 		ArtworkRepair:   deps.ArtworkRepair,

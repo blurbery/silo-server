@@ -108,8 +108,9 @@ var adminSettingDefaults = map[string]string{
 	"metadata.cache_images":                "true",
 	"artwork.storage_backend":              "auto",
 	"artwork.local_path":                   "/var/lib/silo/artwork",
-	"markers.mode":                         "local",
-	"markers.lazy_playback":                "false",
+	"markers.mode":                         "both",
+	"markers.lazy_playback":                "true",
+	"markers.online_storage":               "stored",
 
 	"playback.ffmpeg_path":                           "",
 	playbackTranscodeDirSettingKey:                   DefaultTranscodeDir,
@@ -729,7 +730,7 @@ func normalizeAdminDuration(key, value string) (string, error) {
 }
 
 // ValidateArtworkStorageSettings rejects an explicit S3 artwork backend with
-// no public bucket to back it. artworkstore.Open fails on that combination, so
+// no public bucket to back it. blobstore.Open fails on that combination, so
 // accepting it here would only surface as a fatal restart.
 func ValidateArtworkStorageSettings(effective map[string]string) error {
 	if strings.ToLower(strings.TrimSpace(effective["artwork.storage_backend"])) != "s3" {

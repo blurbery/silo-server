@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import {
   Info,
   ListVideo,
@@ -10,6 +10,7 @@ import {
   Play,
   RotateCcw,
   RotateCw,
+  Scaling,
   SkipBack,
   SkipForward,
   Tags,
@@ -29,6 +30,7 @@ import type {
   PlayerChapter,
   PlayerSubtitleInfo,
   QualityOption,
+  VideoFitMode,
 } from "../types";
 import type { VersionInfo } from "./QualityMenu";
 import type { PlayerConfig } from "../context/PlayerConfigContext";
@@ -56,6 +58,8 @@ interface PlayerControlsProps {
   volume: number;
   muted: boolean;
   isFullscreen: boolean;
+  videoFit: VideoFitMode;
+  onVideoFitToggle: () => void;
   // Subtitles
   subtitleTracks: PlayerSubtitleInfo[];
   activeSubtitleIndex: number | null;
@@ -81,6 +85,7 @@ interface PlayerControlsProps {
   onQualitySelect: (id: string) => void;
   // Version switching
   versions?: VersionInfo[];
+  versionLocked?: boolean;
   onSwitchVersion?: (fileId: number) => void;
   // PiP
   onTogglePiP?: () => void;
@@ -101,7 +106,7 @@ interface PlayerControlsProps {
   onVolumeChange: (volume: number) => void;
   onMutedChange: (muted: boolean) => void;
   onFullscreenToggle: () => void;
-  onSurfaceTap?: () => void;
+  onSurfaceTap?: (event: MouseEvent<HTMLElement>) => void;
 }
 
 /** Skip amount for the ±seconds buttons, matching keyboard shortcuts. */
@@ -125,6 +130,8 @@ export function PlayerControls({
   volume,
   muted,
   isFullscreen,
+  videoFit,
+  onVideoFitToggle,
   subtitleTracks,
   activeSubtitleIndex,
   onSubtitleSelect,
@@ -146,6 +153,7 @@ export function PlayerControls({
   qualityError,
   onQualitySelect,
   versions,
+  versionLocked,
   onSwitchVersion,
   onTogglePiP,
   showPlaybackInfo,
@@ -335,6 +343,7 @@ export function PlayerControls({
               error={qualityError}
               onSelect={onQualitySelect}
               versions={versions}
+              versionLocked={versionLocked}
               onSwitchVersion={onSwitchVersion}
             />
             <button
@@ -510,6 +519,7 @@ export function PlayerControls({
                 error={qualityError}
                 onSelect={onQualitySelect}
                 versions={versions}
+                versionLocked={versionLocked}
                 onSwitchVersion={onSwitchVersion}
               />
 
@@ -548,6 +558,18 @@ export function PlayerControls({
                   <PictureInPicture2 className="h-[18px] w-[18px]" />
                 </button>
               )}
+
+              <button
+                type="button"
+                className="player-utility-btn"
+                onClick={onVideoFitToggle}
+                aria-label="Fill screen"
+                aria-pressed={videoFit === "cover"}
+                title="Fill screen"
+                data-active={videoFit === "cover" ? "true" : "false"}
+              >
+                <Scaling className="h-[18px] w-[18px]" />
+              </button>
 
               <button
                 type="button"
@@ -630,6 +652,15 @@ export function PlayerControls({
                 }}
               />
             )}
+            <OverflowAction
+              icon={<Scaling className="h-5 w-5" />}
+              label="Fill screen"
+              active={videoFit === "cover"}
+              onClick={() => {
+                onVideoFitToggle();
+                setOverflowOpen(false);
+              }}
+            />
             {markerEditAvailable && onToggleMarkerEdit && (
               <OverflowAction
                 icon={<Tags className="h-5 w-5" />}

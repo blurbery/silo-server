@@ -540,7 +540,7 @@ export interface AdminHistoryImportBulkRunResult {
 
 // Person
 export interface Person {
-  id: number;
+  id: string;
   name: string;
   bio?: string;
   birth_date?: string;
@@ -901,6 +901,7 @@ export interface FileVersion {
   credits?: TimeRange | null;
   recap?: TimeRange | null;
   preview?: TimeRange | null;
+  marker_segments?: MarkerOccurrence[];
 }
 
 export interface PlaybackVariantPart {
@@ -1013,6 +1014,12 @@ export interface TimeRange {
 /** The four editable marker kinds. "credits" is exposed as Jellyfin's "Outro". */
 export type MarkerKind = "intro" | "credits" | "recap" | "preview";
 
+export interface MarkerOccurrence {
+  kind: MarkerKind;
+  start_seconds: number;
+  end_seconds: number;
+}
+
 /** A marker segment with provenance, as returned by the markers API. */
 export interface MarkerSegment {
   start: number | null;
@@ -1031,6 +1038,7 @@ export interface FileMarkersResponse {
   credits: MarkerSegment;
   recap: MarkerSegment;
   preview: MarkerSegment;
+  marker_segments?: MarkerOccurrence[];
 }
 
 export interface MarkerEditAuditEntry {
@@ -2523,6 +2531,8 @@ export interface AdminSession {
   /** Resolved playback workload and route. Node IDs/names are omitted when
    * that phase runs on the integrated API process (or direct play has no
    * executor). */
+  /** Empty means default network; absent means unknown (older session). */
+  routing_network_provider?: string;
   routing_workload?: string;
   routing_execution?: string;
   routing_execution_node_id?: number;
@@ -3372,6 +3382,12 @@ export interface AdminJob {
   progress_total: number;
   artifact_size_bytes: number;
   public_url?: string;
+  /**
+   * Whether this server can mint a shareable seven-day link. False when exports
+   * are stored locally: only storage-side presigning produces a URL that works
+   * off this server. Undefined on responses that predate the field.
+   */
+  public_link_supported?: boolean;
   requested_at: string;
   started_at?: string;
   completed_at?: string;
@@ -3587,6 +3603,22 @@ export interface PluginCatalogEntry {
   metadata?: Record<string, unknown>;
 }
 
+export type PluginRuntimeState = "stopped" | "starting" | "running" | "backoff" | "failed";
+
+/**
+ * Process state of one installation. `resident` marks a plugin the server
+ * supervises (started at boot, restarted after a crash); `backoff` and
+ * `failed` only occur for those.
+ */
+export interface PluginRuntime {
+  resident: boolean;
+  state: PluginRuntimeState;
+  restart_count: number;
+  last_error?: string;
+  last_started_at?: string;
+  next_restart_at?: string;
+}
+
 export interface PluginInstallation {
   id: number;
   repository_id?: number | null;
@@ -3594,6 +3626,7 @@ export interface PluginInstallation {
   version: string;
   install_path: string;
   enabled: boolean;
+  runtime: PluginRuntime;
   capabilities: PluginCapability[];
   global_config_schema: PluginConfigSchema[];
   user_config_schema: PluginConfigSchema[];

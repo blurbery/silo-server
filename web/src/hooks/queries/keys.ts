@@ -165,7 +165,9 @@ export const compatKeys = {
 
 export const personKeys = {
   all: ["people"] as const,
-  search: (query: string, limit = 20) => ["people", "search", query, limit] as const,
+  searchCapabilities: () => ["people", "search-capabilities"] as const,
+  search: (query: string, limit = 20, mediaScope?: string) =>
+    ["people", "search", query, limit, mediaScope ?? "all"] as const,
   detail: (id: string) => ["people", "detail", id] as const,
   catalog: (
     id: string,
@@ -391,6 +393,10 @@ export const adminKeys = {
   restartKeys: () => ["admin", "restartKeys"] as const,
   catalogSearchStatus: () => ["admin", "catalogSearchStatus"] as const,
   jellyfinCompatStatus: () => ["admin", "jellyfinCompatStatus"] as const,
+  networkAccessCapabilities: () => ["admin", "networkAccess", "capabilities"] as const,
+  networkAccessStatusRoot: () => ["admin", "networkAccess", "status"] as const,
+  networkAccessStatus: (provider: string) =>
+    ["admin", "networkAccess", "status", provider] as const,
   requestsRoot: () => ["admin", "requests"] as const,
   requests: (params: Record<string, unknown>) => ["admin", "requests", params] as const,
   requestSettings: () => ["admin", "requests", "settings"] as const,

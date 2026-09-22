@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/Silo-Server/silo-server/internal/userstore"
 )
 
 func TestDefaultDisplayPreferencesIncludesRequiredImageDimensions(t *testing.T) {
@@ -29,6 +31,47 @@ func TestDefaultDisplayPreferencesIncludesRequiredImageDimensions(t *testing.T) 
 	}
 	if _, ok := raw["PrimaryImageWidth"]; !ok {
 		t.Fatal("PrimaryImageWidth missing from display preferences JSON")
+	}
+}
+
+func TestDisplayPreferencesPreserveLegacyPrimaryCustomization(t *testing.T) {
+	store := newJellycompatUserStore(t)
+	if err := store.CreateProfile(t.Context(), userstore.Profile{ID: "secondary", Name: "Secondary"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetJellycompatDisplayPrefs(t.Context(), "usersettings", "emby", `{"SortBy":"DateCreated","CustomPrefs":{"homesection0":"resume"}}`); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewDisplayPreferencesHandler(compatTestUserStoreProvider{store: store})
+	read := func(profileID string) displayPreferencesDTO {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/DisplayPreferences/usersettings?client=emby", nil)
+		route := chi.NewRouteContext()
+		route.URLParams.Add("displayPreferencesId", "usersettings")
+		ctx := context.WithValue(req.Context(), chi.RouteCtxKey, route)
+		ctx = context.WithValue(ctx, compatSessionKey, &Session{StreamAppUserID: 1, ProfileID: profileID})
+		rec := httptest.NewRecorder()
+		handler.HandleGetDisplayPreferences(rec, req.WithContext(ctx))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("read status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var dto displayPreferencesDTO
+		if err := json.Unmarshal(rec.Body.Bytes(), &dto); err != nil {
+			t.Fatal(err)
+		}
+		return dto
+	}
+	if got := read("profile-1"); got.SortBy != "DateCreated" || got.CustomPrefs["homesection0"] != "resume" {
+		t.Fatalf("legacy customization lost: %+v", got)
+	}
+	if got := read("secondary"); got.SortBy == "DateCreated" {
+		t.Fatal("legacy account preferences leaked to another profile")
+	}
+	if err := store.SetJellycompatDisplayPrefs(t.Context(), profilePreferencesID("profile-1", "usersettings"), "emby", `{"SortBy":"ProductionYear"}`); err != nil {
+		t.Fatal(err)
+	}
+	if got := read("profile-1"); got.SortBy != "ProductionYear" {
+		t.Fatalf("scoped customization overwritten: %+v", got)
 	}
 }
 
@@ -58,7 +101,7 @@ func TestDisplayPreferencesRoundTripUsesDedicatedTable(t *testing.T) {
 	}
 
 	// The blob lands in the dedicated table under (id, client)...
-	stored, err := store.GetJellycompatDisplayPrefs(context.Background(), "usersettings", "emby")
+	stored, err := store.GetJellycompatDisplayPrefs(t.Context(), profilePreferencesID("profile-1", "usersettings"), "emby")
 	if err != nil || stored == "" {
 		t.Fatalf("dedicated table holds (%q, %v), want the stored blob", stored, err)
 	}

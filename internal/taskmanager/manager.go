@@ -66,16 +66,17 @@ func (m *TaskManager) Start(ctx context.Context) {
 		}
 
 		configs, err := m.triggerRepo.GetTriggers(ctx, key)
+		if err == nil && configs == nil {
+			// Default providers may read settings. Resolve them only for new
+			// schedules, outside the repository transaction. Initialization
+			// rechecks saved state so a concurrent edit still takes precedence.
+			configs, err = m.triggerRepo.GetOrCreateTriggers(ctx, key, w.task.DefaultTriggers())
+		}
 		if err != nil {
 			m.logger.ErrorContext(ctx, "failed to load triggers", "task", key, "error", err)
-		}
-		if configs == nil {
-			configs = w.task.DefaultTriggers()
-			if len(configs) > 0 {
-				if err := m.triggerRepo.SetTriggers(ctx, key, configs); err != nil {
-					m.logger.ErrorContext(ctx, "failed to persist default triggers", "task", key, "error", err)
-				}
-			}
+			// Keep automatic runs idle on storage failure. The trigger loop
+			// still starts so a later administrator edit can recover the task.
+			configs = nil
 		}
 
 		w.setTriggers(configs, m.triggerFactory, w.lastResult, false)

@@ -24,6 +24,7 @@ import (
 	catalogsvc "github.com/Silo-Server/silo-server/internal/catalog"
 	"github.com/Silo-Server/silo-server/internal/downloads"
 	"github.com/Silo-Server/silo-server/internal/models"
+	"github.com/Silo-Server/silo-server/internal/netaccess"
 	"github.com/Silo-Server/silo-server/internal/routeinventory"
 	"github.com/Silo-Server/silo-server/internal/userstore"
 )
@@ -1641,6 +1642,7 @@ func fixtureCases() []fixtureCase {
 	cases = append(cases, notificationDestinationTestFixtureCases()...)
 	cases = append(cases, notificationDestinationCreateFixtureCases()...)
 	cases = append(cases, eventsCapabilityFixtureCases()...)
+	cases = append(cases, watchTogetherCapabilityFixtureCases()...)
 	cases = append(cases, eventsSocketFixtureCases()...)
 	cases = append(cases, notificationDiscordLinkFixtureCases()...)
 	cases = append(cases, notificationRelayFixtureCases()...)
@@ -1691,7 +1693,7 @@ func fixtureCases() []fixtureCase {
 	cases = append(cases, playbackFixtureCases()...)
 	cases = append(cases, playbackRouteEventFixtureCases()...)
 	cases = append(cases, playbackReplanFixtureCases()...)
-	return append(cases, []fixtureCase{
+	cases = append(cases, []fixtureCase{
 		{name: "get_image_capabilities_ok", operationID: "getImageCapabilities",
 			scenario: "Image discovery advertises the supported season-list artwork parameter.",
 			method:   http.MethodGet, path: "/api/v2/images/capabilities", headers: viewer,
@@ -1716,6 +1718,10 @@ func fixtureCases() []fixtureCase {
 			method:   http.MethodPost, path: Prefix + "/auth/device/start", body: `{"temporary":null}`,
 			status: http.StatusUnprocessableEntity, assertHeaders: []string{"Content-Type", "Cache-Control"}, schema: problem},
 	}...)
+	// Request ids are positional: new fixtures append here so committed
+	// fixtures keep their ids.
+	cases = append(cases, networkAccessFixtureCases()...)
+	return append(cases, serverIdentityFixtureCases()...)
 }
 
 // fixtureMultipartType is the multipart Content-Type of the avatar fixtures,
@@ -1740,6 +1746,11 @@ func profileOwner() map[string]string { return with(bearer(memberToken), "X-Prof
 // produced by the gate translation the production limiter goes through.
 func fixtureDeps() Dependencies {
 	deps := pilotDeps(&fakeProgress{entries: progressRows()}, nil)
+	deps.NetworkAccess = newFakeNetworkAccess()
+	deps.ServerIdentity = fakeServerIdentity{id: fixtureServerID}
+	fixtureProviders := netaccess.NewStatusCache()
+	fixtureProviders.Report(netaccess.Status{InstallationID: 7, Provider: "stub", State: netaccess.StateConnected, Origin: "https://silo.overlay.example.test"})
+	deps.ServerConnections = ServerConnections{PublicURL: func() string { return "https://silo.example.test" }, Providers: fixtureProviders}
 	deps.SubtitleAIReads = &fakeSubtitleAIReads{}
 	deps.Downloads = &fakeDownloadRegistry{}
 	deps.DownloadCreation = &fakeDownloadCreation{row: &downloads.Download{ID: "entry", ContentID: "movie", MediaFileID: 42, Revision: 1, CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), Status: downloads.StatusReady, Quality: downloads.QualityOriginal, EffectiveQuality: downloads.QualityOriginal, Format: downloads.FormatOriginal, DeviceID: "device-one"}, page: downloads.CreatePage{BatchID: "intent", Skipped: []downloads.SkippedDownload{{EpisodeID: "missing", Reason: "no_file"}}}}
@@ -1818,6 +1829,8 @@ func fixtureDeps() Dependencies {
 	deps.NotificationDestinationTests = new(fakeNotificationDestinationTests)
 	deps.NotificationDestinationCreate = new(fakeNotificationDestinationCreate)
 	deps.EventsCapability = &handlers.EventsHandler{}
+	deps.WatchTogetherCapability = &fakeWatchTogetherCapability{available: true}
+	wireWatchTogetherCapabilityFakes(&deps)
 	deps.EventsSocket = new(fakeEventsSocket)
 	deps.NotificationDiscordLinks = new(fakeNotificationDiscordLinks)
 	deps.NotificationRelay = new(fakeNotificationRelay)

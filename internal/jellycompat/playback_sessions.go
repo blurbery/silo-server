@@ -80,12 +80,24 @@ type PlaybackSession struct {
 
 // PlaybackMediaSource stores one negotiated stream source within a compat play session.
 type PlaybackMediaSource struct {
-	ID                   string
-	FileID               int
-	Version              catalog.FileVersion
-	SupportsDirectPlay   bool
-	SupportsDirectStream bool
-	SupportsTranscoding  bool
+	// SiloSeekReanchor opts into source-time copy-HLS startup for clients that
+	// renegotiate seeks outside the produced playlist window.
+	SiloSeekReanchor         bool
+	SubtitleBurnIn           bool
+	SubtitleExternalDelivery bool
+	SubtitleDeliveryFormat   string
+	SubtitleTrackIndex       int
+	SubtitleCodec            string
+	CanBurnSubtitle          bool
+	TargetBitrateKbps        int
+	TargetResolution         string
+	TargetAudioChannels      int
+	ID                       string
+	FileID                   int
+	Version                  catalog.FileVersion
+	SupportsDirectPlay       bool
+	SupportsDirectStream     bool
+	SupportsTranscoding      bool
 	// HLSRemux selects HLS with video copy. TranscodeAudio remains the
 	// independent audio-encode decision, so a compatible audio codec can stay
 	// bit-for-bit copied. HLSRemuxMPEGTS overrides the normal fMP4 packaging for
@@ -99,10 +111,21 @@ type PlaybackMediaSource struct {
 	DefaultSubtitleStreamIndex  *int
 	SelectedSubtitleStreamIndex *int
 	ETag                        string
+	// SubtitleDeliveries preserves client delivery capabilities for tracks that
+	// may be enabled later. The scalar fields above retain the selected track's
+	// delivery for sessions read by older binaries during a rolling update.
+	SubtitleDeliveries map[int]PlaybackSubtitleDelivery
 
 	// preservedJSON carries fields written by a newer binary through this
 	// binary's durable read-modify-write cycle. See playback_sessions_json.go.
 	preservedJSON map[string]json.RawMessage
+}
+
+// PlaybackSubtitleDelivery stores a text track's negotiated external format and
+// whether delivery must be external even when playing the original media file.
+type PlaybackSubtitleDelivery struct {
+	Format   string
+	External bool
 }
 
 // CompatPlaybackStore persists compat playback negotiation sessions (the

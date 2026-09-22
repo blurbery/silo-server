@@ -12,6 +12,7 @@ import (
 
 	"github.com/Silo-Server/silo-server/internal/api/handlers"
 	"github.com/Silo-Server/silo-server/internal/diagnostics"
+	"github.com/Silo-Server/silo-server/internal/httpstream"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 )
@@ -64,16 +65,20 @@ func registerAdminDiagnosticDownload(reg *Registry) {
 			writeProblem(w, r, NewProblem(TypeInternalError, "Diagnostic report download failed"))
 			return
 		}
-		defer func() { _ = download.Body.Close() }()
-		w.Header().Set("Content-Type", diagnostics.ReportDownloadContentType)
-		w.Header().Set(directDisposition, mime.FormatMediaType("attachment", map[string]string{filenameField: download.Filename}))
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set(directAcceptRanges, "none")
+		defer download.Body.Close()
+		// A bundle can outlast the API server's absolute WriteTimeout on a slow
+		// link, and Accept-Ranges: none means it cannot resume. Roll the write
+		// deadline forward while bytes keep flowing.
+		sw := httpstream.NewRollingDeadlineWriter(w)
+		sw.Header().Set("Content-Type", diagnostics.ReportDownloadContentType)
+		sw.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{dispositionFilenameParam: download.Filename}))
+		sw.Header().Set("Cache-Control", "no-store")
+		sw.Header().Set("Accept-Ranges", "none")
 		if download.Size != nil && *download.Size >= 0 {
-			w.Header().Set(adminSubtitleLengthHeader, strconv.FormatInt(*download.Size, 10))
+			sw.Header().Set("Content-Length", strconv.FormatInt(*download.Size, 10))
 		}
-		w.WriteHeader(http.StatusOK)
-		if _, err := io.Copy(w, download.Body); err != nil {
+		sw.WriteHeader(http.StatusOK)
+		if _, err := io.Copy(sw, download.Body); err != nil {
 			slog.WarnContext(r.Context(), "diagnostic report stream interrupted", "component", "diagnostics", "report_id", id)
 		}
 	}))

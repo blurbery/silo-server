@@ -5,13 +5,13 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Silo-Server/silo-server/internal/intromarkers"
 	"github.com/Silo-Server/silo-server/internal/markers"
 	"github.com/Silo-Server/silo-server/internal/models"
 	"github.com/Silo-Server/silo-server/internal/playback"
-	"github.com/Silo-Server/silo-server/internal/scanner"
 )
 
 type fakePlaybackMarkerProvider struct{}
@@ -20,34 +20,6 @@ func (fakePlaybackMarkerProvider) ID() string { return "fake-online" }
 
 func (fakePlaybackMarkerProvider) FetchMarkers(context.Context, markers.Request) (markers.Result, error) {
 	return markers.Result{}, nil
-}
-
-type recordingPlaybackMarkerProvider struct {
-	calls chan markers.Request
-}
-
-func (p recordingPlaybackMarkerProvider) ID() string { return "recording-online" }
-
-func (p recordingPlaybackMarkerProvider) FetchMarkers(_ context.Context, req markers.Request) (markers.Result, error) {
-	p.calls <- req
-	return markers.Result{}, nil
-}
-
-type fakePlaybackExternalIDResolver struct{}
-
-func (fakePlaybackExternalIDResolver) ResolveForFile(context.Context, *models.MediaFile) (markers.ExternalIDs, error) {
-	return markers.ExternalIDs{
-		Kind:          markers.ItemKindEpisode,
-		TmdbID:        "123",
-		SeasonNumber:  1,
-		EpisodeNumber: 2,
-	}, nil
-}
-
-type fakePlaybackMarkerUpserter struct{}
-
-func (fakePlaybackMarkerUpserter) UpsertMarkers(context.Context, int, scanner.MarkerUpdate) (bool, error) {
-	return false, nil
 }
 
 type fakePlaybackIntroAnalyzer struct {
@@ -293,6 +265,53 @@ func TestMaybeQueueLazyPlaybackMarkersBothModeFallsBackToLocalWithoutProviders(t
 	}
 }
 
+type playbackMarkerPopulationFunc func(context.Context, *models.MediaFile) (*models.MediaFile, bool, error)
+
+func (f playbackMarkerPopulationFunc) Populate(ctx context.Context, file *models.MediaFile) (*models.MediaFile, bool, error) {
+	return f(ctx, file)
+}
+
+func TestOnDemandPlaybackMarkersHonorsLocalAnalysisSetting(t *testing.T) {
+	for _, lazy := range []string{"false", "true"} {
+		t.Run(lazy, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				file := lazyMarkerTestFile()
+				analyzer := &fakePlaybackIntroAnalyzer{}
+				handler := newLazyMarkerTestHandler(file, analyzer, nil)
+				handler.MarkerLazyContext = t.Context()
+				handler.SettingsRepo = testPlaybackSettingsRepo{values: map[string]string{
+					markers.SettingLazyPlayback:  lazy,
+					markers.SettingMode:          "both",
+					markers.SettingOnlineStorage: "on_demand",
+				}}
+				handler.MarkerRegistry = markers.NewRegistry(slog.Default())
+				if err := handler.MarkerRegistry.Register(fakePlaybackMarkerProvider{}); err != nil {
+					t.Fatal(err)
+				}
+				lookups := 0
+				handler.MarkerPopulation = playbackMarkerPopulationFunc(func(_ context.Context, file *models.MediaFile) (*models.MediaFile, bool, error) {
+					lookups++
+					return file, false, nil
+				})
+
+				handler.maybeQueueLazyPlaybackMarkers(t.Context(), &playback.Session{ID: "session-1"}, file)
+				synctest.Wait()
+
+				if lookups != 1 {
+					t.Fatalf("online lookups = %d, want 1", lookups)
+				}
+				wantLocal := 0
+				if lazy == "true" {
+					wantLocal = 1
+				}
+				if got := analyzer.callCount(); got != wantLocal {
+					t.Fatalf("local analysis calls = %d, want %d", got, wantLocal)
+				}
+			})
+		})
+	}
+}
+
 func TestMaybeQueueLazyPlaybackMarkersDedupesInFlightFile(t *testing.T) {
 	analyzer := &fakePlaybackIntroAnalyzer{started: make(chan struct{}, 1), release: make(chan struct{})}
 	file := lazyMarkerTestFile()
@@ -342,9 +361,9 @@ func TestMaybeQueueLazyPlaybackMarkersOnlineRetriesPartialSkipMarkers(t *testing
 	file.IntroStart = &start
 	file.IntroEnd = &end
 
-	calls := make(chan markers.Request, 1)
+	calls := make(chan *models.MediaFile, 1)
 	registry := markers.NewRegistry(slog.Default())
-	if err := registry.Register(recordingPlaybackMarkerProvider{calls: calls}); err != nil {
+	if err := registry.Register(fakePlaybackMarkerProvider{}); err != nil {
 		t.Fatalf("register provider: %v", err)
 	}
 	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0), &fakePlaybackMarkerFileResolver{file: file})
@@ -354,16 +373,18 @@ func TestMaybeQueueLazyPlaybackMarkersOnlineRetriesPartialSkipMarkers(t *testing
 	}}
 	handler.IntroRepository = fakePlaybackIntroEligibility{eligible: true}
 	handler.MarkerRegistry = registry
-	handler.MarkerResolver = fakePlaybackExternalIDResolver{}
-	handler.MarkerUpserter = fakePlaybackMarkerUpserter{}
+	handler.MarkerPopulation = playbackMarkerPopulationFunc(func(_ context.Context, file *models.MediaFile) (*models.MediaFile, bool, error) {
+		calls <- file
+		return file, false, nil
+	})
 	handler.MarkerLazyContext = context.Background()
 
 	handler.maybeQueueLazyPlaybackMarkers(context.Background(), &playback.Session{ID: "session-1"}, file)
 
 	select {
-	case req := <-calls:
-		if req.ExternalIDs[markers.ExternalIDKeyTMDB] != "123" {
-			t.Fatalf("TMDB id = %q, want 123", req.ExternalIDs[markers.ExternalIDKeyTMDB])
+	case got := <-calls:
+		if got.ID != file.ID {
+			t.Fatalf("population file ID = %d, want %d", got.ID, file.ID)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("partial markers did not trigger online lookup")

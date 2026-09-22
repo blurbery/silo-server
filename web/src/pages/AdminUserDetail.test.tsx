@@ -593,9 +593,9 @@ it("does not install an impersonation session after the captured profile changes
       }),
   );
   renderUserDetail();
-  await user.click(screen.getByRole("button", { name: "Impersonate" }));
+  await user.click(screen.getByRole("button", { name: "View as user" }));
   await user.click(
-    within(screen.getByRole("alertdialog")).getByRole("button", { name: "Impersonate" }),
+    within(screen.getByRole("alertdialog")).getByRole("button", { name: "View as user" }),
   );
   const captured = mocks.impersonate.mock.calls[0]![0].profileContext;
   setProfileId("different-profile");
@@ -603,4 +603,13 @@ it("does not install an impersonation session after the captured profile changes
   await screen.findByText(/account or server changed/);
   expect(mocks.beginImpersonation).not.toHaveBeenCalled();
   expect(mocks.impersonate).toHaveBeenCalledTimes(1);
+});
+
+it.each([
+  { role: "admin" as const, enabled: true },
+  { role: "user" as const, enabled: false },
+])("keeps View as user disabled for an ineligible account: %o", (eligibility) => {
+  mocks.user = { ...adminUser, ...eligibility };
+  renderUserDetail();
+  expect(screen.getByRole("button", { name: "View as user" })).toBeDisabled();
 });

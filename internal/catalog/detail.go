@@ -108,6 +108,10 @@ type WorkSummaryProvider interface {
 	GetSummaryForContentID(ctx context.Context, contentID string, filter AccessFilter) (*WorkSummary, error)
 }
 
+type LiteraryWorkLinker interface {
+	AutoLinkContent(ctx context.Context, contentID string) (string, bool, error)
+}
+
 type WorkSummaryBatchProvider interface {
 	ListSummariesForContentIDs(ctx context.Context, contentIDs []string, filter AccessFilter) (map[string]*WorkSummary, error)
 }
@@ -396,6 +400,9 @@ type CastCredit struct {
 	PlexGUID       string `json:"plex_guid,omitempty"`
 	PhotoURL       string `json:"photo_url,omitempty"`
 	PhotoThumbhash string `json:"photo_thumbhash,omitempty"`
+	// PhotoPath is the stored photo key behind PhotoURL. It is internal: the
+	// Jellyfin compatibility layer signs person image tags over it.
+	PhotoPath string `json:"-"`
 }
 
 // CrewCredit is the item-detail API shape for a crew member.
@@ -409,6 +416,8 @@ type CrewCredit struct {
 	PlexGUID       string `json:"plex_guid,omitempty"`
 	PhotoURL       string `json:"photo_url,omitempty"`
 	PhotoThumbhash string `json:"photo_thumbhash,omitempty"`
+	// PhotoPath is internal; see CastCredit.PhotoPath.
+	PhotoPath string `json:"-"`
 }
 
 // PersonCredit represents a person's credit on a media item for API responses.
@@ -424,6 +433,8 @@ type PersonCredit struct {
 	PlexGUID       string            `json:"plex_guid,omitempty"`
 	PhotoURL       string            `json:"photo_url,omitempty"`
 	PhotoThumbhash string            `json:"photo_thumbhash,omitempty"`
+	// PhotoPath is internal; see CastCredit.PhotoPath.
+	PhotoPath string `json:"-"`
 }
 
 // FileVersion represents a single file version available for playback.
@@ -458,6 +469,33 @@ type FileVersion struct {
 	Credits                  *Marker                `json:"credits,omitempty"`
 	Recap                    *Marker                `json:"recap,omitempty"`
 	Preview                  *Marker                `json:"preview,omitempty"`
+	MarkerSegments           []models.MarkerSegment `json:"-"`
+}
+
+// SetMarkers refreshes the marker projection without rebuilding file metadata.
+func (v *FileVersion) SetMarkers(file *models.MediaFile) {
+	v.Intro = markerFromRange(file.IntroStart, file.IntroEnd)
+	v.Credits = markerFromRange(file.CreditsStart, file.CreditsEnd)
+	v.Recap = markerFromRange(file.RecapStart, file.RecapEnd)
+	v.Preview = markerFromRange(file.PreviewStart, file.PreviewEnd)
+	v.MarkerSegments = models.EffectiveMarkerSegments(file)
+}
+
+func (v FileVersion) EffectiveMarkerSegments() []models.MarkerSegment {
+	file := models.MediaFile{MarkerSegments: v.MarkerSegments}
+	if v.Intro != nil {
+		file.IntroStart, file.IntroEnd = &v.Intro.Start, &v.Intro.End
+	}
+	if v.Credits != nil {
+		file.CreditsStart, file.CreditsEnd = &v.Credits.Start, &v.Credits.End
+	}
+	if v.Recap != nil {
+		file.RecapStart, file.RecapEnd = &v.Recap.Start, &v.Recap.End
+	}
+	if v.Preview != nil {
+		file.PreviewStart, file.PreviewEnd = &v.Preview.Start, &v.Preview.End
+	}
+	return models.EffectiveMarkerSegments(&file)
 }
 
 // PlaybackVariant is one logical watch choice, optionally spanning multiple ordered parts.
@@ -682,6 +720,7 @@ type DetailService struct {
 	imageResolver     ImageResolver
 	userStoreProvider userstore.UserStoreProvider
 	workSummary       WorkSummaryProvider
+	workLinker        LiteraryWorkLinker
 	originalLangFn    func(context.Context, string) string
 	probeEnsurer      PlaybackProbeEnsurer
 	copySafetyRacer   CopySafetyRacer
@@ -729,6 +768,10 @@ func (s *DetailService) SetWorkSummaryProvider(provider WorkSummaryProvider) {
 	if s != nil {
 		s.workSummary = provider
 	}
+}
+
+func (s *DetailService) SetLiteraryWorkLinker(linker LiteraryWorkLinker) {
+	s.workLinker = linker
 }
 
 func (s *DetailService) SetProbeEnsurer(ensurer PlaybackProbeEnsurer) {
@@ -2110,6 +2153,7 @@ func (s *DetailService) personCredits(ctx context.Context, people []models.ItemP
 			ImdbID:    p.ImdbID,
 			TvdbID:    p.TvdbID,
 			PlexGUID:  p.PlexGUID,
+			PhotoPath: p.PhotoPath,
 		}
 		if strings.HasPrefix(p.PhotoPath, "http://") || strings.HasPrefix(p.PhotoPath, "https://") {
 			pc.PhotoURL = p.PhotoPath
@@ -2143,6 +2187,7 @@ func splitCastCrew(credits []PersonCredit) ([]CastCredit, []CrewCredit) {
 				PlexGUID:       pc.PlexGUID,
 				PhotoURL:       pc.PhotoURL,
 				PhotoThumbhash: pc.PhotoThumbhash,
+				PhotoPath:      pc.PhotoPath,
 			})
 		default:
 			crew = append(crew, CrewCredit{
@@ -2155,6 +2200,7 @@ func splitCastCrew(credits []PersonCredit) ([]CastCredit, []CrewCredit) {
 				PlexGUID:       pc.PlexGUID,
 				PhotoURL:       pc.PhotoURL,
 				PhotoThumbhash: pc.PhotoThumbhash,
+				PhotoPath:      pc.PhotoPath,
 			})
 		}
 	}
@@ -3594,6 +3640,7 @@ func (s *DetailService) buildPlaybackInfo(
 			Credits:                  versionCredits,
 			Recap:                    versionRecap,
 			Preview:                  versionPreview,
+			MarkerSegments:           models.EffectiveMarkerSegments(f),
 		})
 
 		for _, sub := range f.SubtitleTracks {

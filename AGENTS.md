@@ -27,6 +27,14 @@ audiobooks, ebooks, podcasts) are core; plugins are for interfaces where many im
 will plausibly exist (metadata, subtitle, and watch providers). Plugins are never a loophole
 for the non-goals below.
 
+For 1.0, supported library scope is Movies and Series. Audiobooks, ebooks,
+and Audiobookshelf compatibility stay available as labeled **beta** features
+in their current state, outside the 1.0 support promise, until a consolidated
+Books effort replaces them (no assigned release date). Do not gate, remove, or
+rework them for 1.0. Existing code and protocol documentation describe beta
+behavior, not release acceptance promises. See
+[scope](docs/architecture/v1-scope.md#library-scope-books-deferred).
+
 Taste: KISS and YAGNI win — the simple design beats the clever one, provided it survives both
 the single-node and the multi-node deployment. Current posture: the 1.0 feature set is
 essentially complete; the present era is QA, UX polish, and verifying everything does what it
@@ -157,6 +165,11 @@ Before opening a pull request, run the full gate listed once in
 `golangci-lint` over the whole tree while CI runs it with `--new-from-merge-base`, so only the
 lines a branch touched have to be clean. The repo does not pass a full run today; expect local
 output to include findings that are not yours and that CI will not fail on. Do not add to them.
+
+Lint Go with `make lint-changed`, not `golangci-lint run ... ./...`: it reports the same
+changed-line findings as CI while analyzing only the packages the branch touched. A cold run over
+`./...` saturates every core for minutes, and parallel agents make that worse. Never pass
+`--allow-parallel-runners`; concurrent runs queue behind one another on purpose.
 
 Go stays `gofmt`/`goimports` clean; the frontend follows `web/.prettierrc`.
 

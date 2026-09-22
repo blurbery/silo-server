@@ -2,7 +2,7 @@
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { createElement } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildVersionStatusLabels, QualityMenu, type VersionInfo } from "./QualityMenu";
 
 function makeVersionInfo(overrides: Partial<VersionInfo> = {}): VersionInfo {
@@ -47,6 +47,38 @@ describe("buildVersionStatusLabels", () => {
 });
 
 describe("QualityMenu", () => {
+  it("keeps quality adjustments available while the room locks version switching", () => {
+    const select = vi.fn();
+    const switchVersion = vi.fn();
+    render(
+      createElement(QualityMenu, {
+        options: [
+          {
+            id: "original",
+            label: "Original",
+            sublabel: "",
+            resolution: "1080p",
+            bitrateKbps: 8000,
+            isOriginal: true,
+          },
+        ],
+        activeId: "original",
+        isTranscoding: false,
+        error: null,
+        onSelect: select,
+        onSwitchVersion: switchVersion,
+        versionLocked: true,
+        versions: [makeVersionInfo(), makeVersionInfo({ fileId: 2, label: "1080p H264" })],
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Quality" }));
+    expect(screen.getByText(/Watch Party keeps everyone on the same version/)).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /2160p HEVC HDR/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Original/ }));
+    expect(select).toHaveBeenCalledWith("original");
+    expect(switchVersion).not.toHaveBeenCalled();
+  });
+
   it("shows the stored resolution preference as the selected bitrate rung", () => {
     render(
       createElement(QualityMenu, {

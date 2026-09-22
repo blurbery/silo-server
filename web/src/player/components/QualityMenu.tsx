@@ -18,6 +18,7 @@ interface QualityMenuProps {
   error: string | null;
   onSelect: (id: string) => void;
   versions?: VersionInfo[];
+  versionLocked?: boolean;
   onSwitchVersion?: (fileId: number) => void;
 }
 
@@ -28,6 +29,7 @@ export function QualityMenu({
   error,
   onSelect,
   versions,
+  versionLocked,
   onSwitchVersion,
 }: QualityMenuProps) {
   const [open, setOpen] = useState(false);
@@ -120,8 +122,14 @@ export function QualityMenu({
           onKeyDown={handleMenuKeyDown}
         >
           {error && <div className="px-3 py-1 text-xs text-red-400">{error}</div>}
+          {versionLocked && (
+            <p className="max-w-64 px-3 py-2 text-xs text-white/60">
+              Watch Party keeps everyone on the same version. You can adjust your streaming quality
+              below.
+            </p>
+          )}
           {/* Version switching (multiple file versions) */}
-          {versions && versions.length > 1 && onSwitchVersion && (
+          {!versionLocked && versions && versions.length > 1 && onSwitchVersion && (
             <>
               <div className="px-3 py-1 text-xs tracking-wider text-white/40 uppercase">
                 Version

@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, RefreshCw } from "lucide-react";
 
 import { getPerson } from "@/api/v2/people";
-import { createEmptyQueryDefinition, type Person } from "@/api/types";
+import { createEmptyQueryDefinition } from "@/api/types";
 import type { CatalogSearchState } from "@/pages/catalogSearchParams";
 import EditPersonDialog from "@/components/EditPersonDialog";
 import ItemGrid from "@/components/ItemGrid";
@@ -12,7 +12,11 @@ import PageBack from "@/components/PageBack";
 import { Button } from "@/components/ui/button";
 import { useCatalogWindow } from "@/hooks/queries/catalog";
 import { personKeys } from "@/hooks/queries/keys";
-import { useRefreshPerson } from "@/hooks/queries/people";
+import {
+  invalidatePersonItemDetails,
+  observePersonRefresh,
+  useRefreshPerson,
+} from "@/hooks/queries/people";
 import { useAuth } from "@/hooks/useAuth";
 import { useIsActingAdmin } from "@/hooks/useIsActingAdmin";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
@@ -24,9 +28,9 @@ type TypeFilter = "all" | "movie" | "series";
 
 export default function PersonDetail() {
   const { id } = useParams<{ id: string }>();
+  const queryClient = useQueryClient();
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [editOpen, setEditOpen] = useState(false);
-  const autoRefreshWindowRef = useRef<{ personId: number; until: number } | null>(null);
   const { user } = useAuth();
   const isAdmin = useIsActingAdmin();
   const refreshMutation = useRefreshPerson(id, isAdmin);
@@ -35,27 +39,22 @@ export default function PersonDetail() {
     queryKey: personKeys.detail(id!),
     queryFn: ({ signal }) => getPerson(id!, { signal }),
     enabled: !!id,
-    refetchInterval: (query) => {
-      const data = query.state.data;
-      if (!data || !isPersonMetadataIncomplete(data)) {
-        autoRefreshWindowRef.current = null;
-        return false;
-      }
-
-      const current = autoRefreshWindowRef.current;
-      if (!current || current.personId !== data.id) {
-        autoRefreshWindowRef.current = { personId: data.id, until: Date.now() + 30_000 };
-        return 3_000;
-      }
-
-      return Date.now() < current.until ? 3_000 : false;
-    },
+    // Render a prefetched person at once, but still read it as a view so the
+    // server can queue a refresh the prefetch skipped.
+    refetchOnMount: "always",
   });
 
   useDocumentTitle(person?.name ?? "Person");
 
   // Reading the person queues enrichment on the server when it is due.
   // Automatic POSTs here would bypass that cooldown, especially for admins.
+  const hasPerson = !!person;
+  useEffect(() => {
+    if (id && hasPerson) {
+      void invalidatePersonItemDetails(queryClient, id);
+      observePersonRefresh(queryClient, id);
+    }
+  }, [id, hasPerson, queryClient]);
 
   const catalogState: CatalogSearchState = useMemo(
     () => ({
@@ -230,10 +229,6 @@ export default function PersonDetail() {
       ) : null}
     </div>
   );
-}
-
-function isPersonMetadataIncomplete(person: Person) {
-  return !person.bio || !person.photo_url || !person.birth_date;
 }
 
 function PersonDetailSkeleton() {
