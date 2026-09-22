@@ -12,6 +12,8 @@ const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("@/api/v2/people", () => ({ getPerson: vi.fn() }));
 vi.mock("@/hooks/queries/people", () => ({
   useRefreshPerson: () => ({ mutate: refresh, isPending: false }),
+  invalidatePersonItemDetails: vi.fn(),
+  observePersonRefresh: vi.fn(),
 }));
 vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: { id: 1 } }) }));
 vi.mock("@/hooks/useIsActingAdmin", () => ({ useIsActingAdmin: () => true }));

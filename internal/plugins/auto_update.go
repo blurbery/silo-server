@@ -55,9 +55,12 @@ func compareVersions(a, b string) int {
 	return 0
 }
 
-const pluginIDTMDB = "silo.tmdb"
+const (
+	pluginIDTMDB       = "silo.tmdb"
+	pluginIDTheIntroDB = "silo.theintrodb"
+)
 
-var defaultPluginIDs = []string{pluginIDTMDB, "silo.tvdb", "silo.theintrodb"}
+var defaultPluginIDs = []string{pluginIDTMDB, "silo.tvdb", pluginIDTheIntroDB}
 
 type autoUpdateRepositoryStore interface {
 	List(ctx context.Context) ([]*Repository, error)

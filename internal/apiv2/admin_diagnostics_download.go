@@ -65,7 +65,7 @@ func registerAdminDiagnosticDownload(reg *Registry) {
 			writeProblem(w, r, NewProblem(TypeInternalError, "Diagnostic report download failed"))
 			return
 		}
-		defer download.Body.Close()
+		defer func() { _ = download.Body.Close() }()
 		// A bundle can outlast the API server's absolute WriteTimeout on a slow
 		// link, and Accept-Ranges: none means it cannot resume. Roll the write
 		// deadline forward while bytes keep flowing.
