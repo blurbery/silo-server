@@ -13213,6 +13213,7 @@ export interface components {
       client_user_agent?: string;
       client_version?: string;
       content_id?: string;
+      /** @description Whole-session method: direct, remux, direct_stream (copied video, converted audio) or transcode; absent when unknown */
       effective_play_method?: string;
       episode_name?: string;
       /** Format: int64 */
@@ -13230,6 +13231,10 @@ export interface components {
       media_title: string;
       media_type: string;
       node_display_name?: string;
+      /** @description Container the serving transport produces: fmp4, mpegts, or the source container for direct play. Absent when the node did not report it; clients must not infer it from play_method or the source. */
+      output_container?: string;
+      /** @description Delivery protocol, hls or http, independent of the container. Absent when the node did not report it. */
+      output_protocol?: string;
       play_method: string;
       /** Format: double */
       position_seconds: number;
@@ -13318,6 +13323,8 @@ export interface components {
       network_access_route: boolean;
       node_observations: boolean;
       node_routing: boolean;
+      /** @description Rows may carry output_container and output_protocol */
+      output_format: boolean;
       /** @description Opaque revision of this document */
       revision: string;
       /**
@@ -21582,7 +21589,7 @@ export interface components {
        */
       content_id: string;
       /**
-       * @description Bucketed method: direct, remux, transcode or audio; empty when unknown
+       * @description Bucketed method: direct, remux, direct_stream or transcode; empty when unknown
        * @example direct
        */
       effective_play_method: string;
@@ -24066,6 +24073,12 @@ export interface components {
       items: components["schemas"]["SkippedRoot"][];
       /** @description Cursor state; absent for bounded unpaginated collections */
       page?: components["schemas"]["PageInfo"];
+      /**
+       * Format: int64
+       * @description Skipped roots matching the filter across every page
+       * @example 1
+       */
+      total: number;
     };
     StaleMediaID: {
       /** @example movie:heat-1995 */
@@ -24108,6 +24121,12 @@ export interface components {
       items: components["schemas"]["StaleMediaID"][];
       /** @description Cursor state; absent for bounded unpaginated collections */
       page?: components["schemas"]["PageInfo"];
+      /**
+       * Format: int64
+       * @description Stale identifiers matching the filter across every page
+       * @example 1
+       */
+      total: number;
     };
     StartDeviceLoginInputBody: {
       /**

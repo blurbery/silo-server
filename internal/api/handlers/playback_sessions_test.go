@@ -13,6 +13,30 @@ import (
 	"github.com/Silo-Server/silo-server/internal/playback"
 )
 
+// BenchmarkActivitySessionEnrichment measures reporting work only. It does not
+// include transport startup, media I/O, database latency, or client rendering.
+func BenchmarkActivitySessionEnrichment(b *testing.B) {
+	for _, method := range []string{"direct", "remux", "direct_stream", "transcode"} {
+		b.Run(method, func(b *testing.B) {
+			input := playbackSessionRow{PlayMethod: method, SourceContainer: "mkv", SourceVideoCodec: "hevc", SourceVideoResolution: "2160p", SourceAudioCodec: "truehd"}
+			if method == "direct_stream" {
+				input.PlayMethod, input.TranscodeAudio, input.TargetAudioCodec = "remux", true, "aac"
+			}
+			if method == "transcode" {
+				input.TargetVideoCodec = "h264"
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				row := input
+				enrichPlaybackSessionRow(&row, nil)
+				if row.EffectivePlayMethod == "" {
+					b.Fatal("known route became unknown")
+				}
+			}
+		})
+	}
+}
+
 func TestSessionComponentDecisionLabelsCopiedAudioDuringHLSAsRemux(t *testing.T) {
 	videoDecision, audioDecision := sessionComponentDecision("transcode", false, "copy")
 
@@ -21,6 +45,28 @@ func TestSessionComponentDecisionLabelsCopiedAudioDuringHLSAsRemux(t *testing.T)
 	}
 	if audioDecision != "remux" {
 		t.Fatalf("audioDecision = %q, want remux", audioDecision)
+	}
+}
+
+func TestActivityOutputFormatIsIndependentOfSessionScope(t *testing.T) {
+	row := playbackSessionRow{PlayMethod: "remux", TranscodeAudio: true, SourceContainer: "mkv", OutputContainer: "fmp4", OutputProtocol: "hls"}
+	enrichPlaybackSessionRow(&row, nil)
+	if row.EffectivePlayMethod != "audio" || row.OutputContainer != "fmp4" || row.OutputProtocol != "hls" {
+		t.Fatal("output format changed the session classification")
+	}
+	// The frozen bridge payload keeps its alpha shape; only the native API
+	// exposes the output format.
+	body, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "output_container") || strings.Contains(string(body), "output_protocol") {
+		t.Fatalf("bridge payload gained output fields: %s", body)
+	}
+	row.PlayMethod = "direct"
+	enrichPlaybackSessionRow(&row, nil)
+	if row.OutputContainer != "mkv" || row.OutputProtocol != "http" {
+		t.Fatal("direct play must report the original file's container")
 	}
 }
 

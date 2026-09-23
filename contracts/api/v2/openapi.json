@@ -8515,6 +8515,7 @@
             "type": "string"
           },
           "effective_play_method": {
+            "description": "Whole-session method: direct, remux, direct_stream (copied video, converted audio) or transcode; absent when unknown",
             "type": "string"
           },
           "episode_name": {
@@ -8555,6 +8556,14 @@
             "type": "string"
           },
           "node_display_name": {
+            "type": "string"
+          },
+          "output_container": {
+            "description": "Container the serving transport produces: fmp4, mpegts, or the source container for direct play. Absent when the node did not report it; clients must not infer it from play_method or the source.",
+            "type": "string"
+          },
+          "output_protocol": {
+            "description": "Delivery protocol, hls or http, independent of the container. Absent when the node did not report it.",
             "type": "string"
           },
           "play_method": {
@@ -8798,6 +8807,10 @@
           "node_routing": {
             "type": "boolean"
           },
+          "output_format": {
+            "description": "Rows may carry output_container and output_protocol",
+            "type": "boolean"
+          },
           "revision": {
             "description": "Opaque revision of this document",
             "type": "string"
@@ -8850,6 +8863,7 @@
           "target_audio_channels",
           "network_access_route",
           "node_routing",
+          "output_format",
           "revision",
           "state",
           "allowed"
@@ -30865,7 +30879,7 @@
             "type": "string"
           },
           "effective_play_method": {
-            "description": "Bucketed method: direct, remux, transcode or audio; empty when unknown",
+            "description": "Bucketed method: direct, remux, direct_stream or transcode; empty when unknown",
             "examples": [
               "direct"
             ],
@@ -36448,9 +36462,18 @@
           "page": {
             "$ref": "#/components/schemas/PageInfo",
             "description": "Cursor state; absent for bounded unpaginated collections"
+          },
+          "total": {
+            "description": "Skipped roots matching the filter across every page",
+            "examples": [
+              1
+            ],
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
+          "total",
           "items"
         ],
         "type": "object"
@@ -36557,9 +36580,18 @@
           "page": {
             "$ref": "#/components/schemas/PageInfo",
             "description": "Cursor state; absent for bounded unpaginated collections"
+          },
+          "total": {
+            "description": "Stale identifiers matching the filter across every page",
+            "examples": [
+              1
+            ],
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
+          "total",
           "items"
         ],
         "type": "object"

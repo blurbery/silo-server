@@ -190,6 +190,23 @@ tooltip. Native and Jellyfin-compatible playback both populate the route, includ
 session recovery. This additive admin observation does not change Apple, Android,
 or Jellyfin playback contracts; those clients need no changes to report it.
 
+`effective_play_method` is the server's whole-session classification:
+`direct` (Direct Play), `remux` (copied audio and video in a streaming
+container), `direct_stream` (copied video with converted audio), or `transcode`
+(converted video). Unknown decisions omit the field, and the capability's
+`effective_play_method_values` lists the vocabulary. The frozen `/api/v1`
+bridge keeps reporting its alpha `audio` value instead of `direct_stream`.
+Per-stream Copy means no re-encoding; it does not promise byte-identical packets
+after a permitted bitstream transformation.
+
+`output_format: true` on the same capability response advertises optional
+`output_container` and `output_protocol` fields on v2 session rows. The serving
+transport reports the container (`fmp4`, `mpegts`, or the source container for
+Direct Play) separately from the protocol (`hls` or `http`). An older node can
+omit both; clients then show the output as unknown rather than inferring it
+from `play_method`, the source container, or the video codec. The frozen
+`/api/v1` bridge does not carry these fields.
+
 `silo_playback_routing_decisions_total` counts routing outcomes with bounded
 `workload`, `execution`, `egress`, `outcome`, and `reason` labels. It never
 labels observations with playback-session or node identity.

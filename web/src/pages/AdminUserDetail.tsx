@@ -94,6 +94,8 @@ import {
   formatDateTime as formatDateTimePreferred,
 } from "@/lib/datetime";
 
+import { formatDecisionLabel } from "./adminActivityPresentation";
+
 export default function AdminUserDetail() {
   useAuth();
   const { id } = useParams<{ id: string }>();
@@ -515,7 +517,7 @@ function WatchHistoryTab({ userId }: { userId: number }) {
                   </Link>
                 </TableCell>
                 <TableCell>
-                  <Badge variant="secondary">{row.play_method}</Badge>
+                  <Badge variant="secondary">{formatDecisionLabel(row.play_method)}</Badge>
                 </TableCell>
                 <TableCell>
                   <div>{formatDuration(row.watched_seconds)}</div>

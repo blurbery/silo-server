@@ -194,3 +194,31 @@ func TestAdminSessionNetworkProviderProjection(t *testing.T) {
 		}
 	}
 }
+
+// The native API names copied video with converted audio Direct Stream and
+// carries the transport's output format; the frozen bridge keeps its alpha shape.
+func TestAdminSessionOutputFormatProjection(t *testing.T) {
+	view := handlers.AdminPlaybackSessionView{EffectivePlayMethod: "audio", OutputContainer: "fmp4", OutputProtocol: "hls", StartedAt: time.Now(), UpdatedAt: time.Now()}
+	if row := adminPlaybackSessionOf(view); row.EffectivePlayMethod != directStreamPlayMethod || row.OutputContainer != "fmp4" || row.OutputProtocol != "hls" {
+		t.Fatalf("admin projection = %+v", row)
+	}
+	if got := playbackSessionOf(view).EffectivePlayMethod; got != directStreamPlayMethod {
+		t.Fatalf("household effective_play_method = %q", got)
+	}
+	legacy, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(legacy), `"effective_play_method":"audio"`) || strings.Contains(string(legacy), "output_") {
+		t.Fatalf("bridge payload changed: %s", legacy)
+	}
+
+	rec := do(t, NewHandler(pilotDeps(nil, nil)), "GET", Prefix+"/admin/sessions/capabilities", "", bearer(adminToken))
+	var caps AdminPlaybackSessionCapabilitiesOutputBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &caps); err != nil || rec.Code != 200 {
+		t.Fatal(rec.Code, rec.Body.String())
+	}
+	if !caps.OutputFormat || !slices.Contains(caps.EffectivePlayMethodValues, directStreamPlayMethod) || slices.Contains(caps.EffectivePlayMethodValues, "audio") {
+		t.Fatalf("capabilities = %+v", caps)
+	}
+}
