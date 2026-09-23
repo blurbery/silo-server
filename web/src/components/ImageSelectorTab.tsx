@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { Check, Loader2, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -21,9 +21,16 @@ const SEASON_TABS = IMAGE_TABS.filter((tab) => tab.key === "poster");
 interface ImageSelectorTabProps {
   item: ItemDetail;
   enabled: boolean;
+  onImageApplied?: () => void;
+  onApplyPendingChange?: (pending: boolean) => void;
 }
 
-export default function ImageSelectorTab({ item, enabled }: ImageSelectorTabProps) {
+export default function ImageSelectorTab({
+  item,
+  enabled,
+  onImageApplied,
+  onApplyPendingChange,
+}: ImageSelectorTabProps) {
   const availableTabs = item.type === "season" ? SEASON_TABS : IMAGE_TABS;
   const [activeTab, setActiveTab] = useState<ImageTab>("poster");
   const [textlessOnly, setTextlessOnly] = useState(false);
@@ -33,6 +40,11 @@ export default function ImageSelectorTab({ item, enabled }: ImageSelectorTabProp
 
   const { data, isLoading, isError } = useItemImages(item.content_id, enabled);
   const applyMutation = useApplyItemImage();
+
+  useEffect(() => {
+    onApplyPendingChange?.(applyMutation.isPending);
+    return () => onApplyPendingChange?.(false);
+  }, [applyMutation.isPending, onApplyPendingChange]);
 
   const current = data?.current;
   const providerErrors = data?.provider_errors;
@@ -76,6 +88,7 @@ export default function ImageSelectorTab({ item, enabled }: ImageSelectorTabProp
       },
       {
         onSuccess: () => {
+          onImageApplied?.();
           setAppliedImages((prev) => ({
             ...prev,
             [selectedImage.type]: selectedImage.original_url,
@@ -84,7 +97,7 @@ export default function ImageSelectorTab({ item, enabled }: ImageSelectorTabProp
         },
       },
     );
-  }, [selectedImage, applyMutation, item]);
+  }, [selectedImage, applyMutation, item, onImageApplied]);
 
   return (
     <div className="flex h-full flex-col gap-3">
