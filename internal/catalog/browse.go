@@ -816,7 +816,7 @@ func listDistinctScalarColumnWithSource(
 	}
 
 	expression := "mi." + column
-	if column == "content_rating" {
+	if column == querySortContentRating {
 		index := len(args) + 1
 		expression = browseCertificationSQL(filters, &args, &index)
 	}
@@ -1132,7 +1132,7 @@ func searchDistinctScalarColumnWithSource(
 		return []string{}, false, nil
 	}
 	expression := "mi." + column
-	if column == "content_rating" {
+	if column == querySortContentRating {
 		index := len(args) + 1
 		expression = browseCertificationSQL(filters, &args, &index)
 	}
