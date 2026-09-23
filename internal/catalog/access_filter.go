@@ -84,16 +84,7 @@ func CanAccessLibraryCollection(collection *models.LibraryCollection, filter Acc
 }
 
 func applyAccessFilter(alias string, filter AccessFilter, conditions *[]string, args *[]any, argIdx *int) {
-	if filter.MaxContentRating != "" {
-		allowedRatings := access.AllowedRatingsUpTo(filter.MaxContentRating)
-		if len(allowedRatings) == 0 {
-			*conditions = append(*conditions, "1 = 0")
-		} else {
-			*conditions = append(*conditions, fmt.Sprintf("%s.content_rating = ANY($%d)", alias, *argIdx))
-			*args = append(*args, allowedRatings)
-			*argIdx = *argIdx + 1
-		}
-	}
+	applyContentRatingFilter(alias, alias+".content_id", filter, conditions, args, argIdx)
 	if len(filter.ExcludedMediaTypes) > 0 {
 		*conditions = append(*conditions, fmt.Sprintf("NOT (%s.type = ANY($%d))", alias, *argIdx))
 		*args = append(*args, filter.ExcludedMediaTypes)
@@ -291,4 +282,18 @@ func MediaFileAccessSQL(alias string, filter AccessFilter, args []any) ([]string
 	}
 
 	return conditions, args
+}
+
+func applyContentRatingFilter(alias, contentIDExpression string, filter AccessFilter, conditions *[]string, args *[]any, argIdx *int) {
+	if filter.MaxContentRating != "" {
+		allowedRatings := access.AllowedRatingsUpTo(filter.MaxContentRating)
+		if len(allowedRatings) == 0 {
+			*conditions = append(*conditions, "1 = 0")
+		} else {
+			ratingSQL := effectiveCertificationSQL(alias, contentIDExpression, filter, args, argIdx)
+			*conditions = append(*conditions, fmt.Sprintf("%s = ANY($%d)", ratingSQL, *argIdx))
+			*args = append(*args, allowedRatings)
+			*argIdx = *argIdx + 1
+		}
+	}
 }

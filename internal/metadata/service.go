@@ -400,6 +400,7 @@ func handleScopedProvider404(
 
 // MetadataService is the unified pipeline orchestrator.
 type MetadataService struct {
+	certificationProvider   CertificationProvider
 	chainRepo               *ChainRepository
 	pluginResolver          pluginMetadataResolver
 	enabledChecker          InstallationEnabledChecker
@@ -2395,6 +2396,9 @@ func (s *MetadataService) mergeAndPersist(
 	item.ContentID = contentID
 	unlockProviderDedup()
 	providerDedupReleased = true
+	if err := s.refreshCertifications(ctx, item, parseProcessFolderID(req.FolderID), locked); err != nil {
+		return nil, err
+	}
 	if isCanonicalWrite {
 		s.enqueueItemImages(ctx, item, accumulator.ProviderIDs, images)
 	}

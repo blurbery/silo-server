@@ -724,7 +724,7 @@ func (r *ItemRepository) buildGetByIDsWithAccessSQL(contentIDs []string, access 
 
 	var conditions []string
 	appendLibraryAccessConditions("mi.content_id", access, &conditions, &args, &argIdx)
-	applyAccessFilter("mi", AccessFilter{MaxContentRating: access.MaxContentRating, ExcludedMediaTypes: access.ExcludedMediaTypes}, &conditions, &args, &argIdx)
+	applyAccessFilter("mi", access, &conditions, &args, &argIdx)
 	for _, c := range conditions {
 		sql += "\n            AND " + c
 	}
@@ -1592,7 +1592,7 @@ func appendSearchScopeFilters(itemTypes []string, filter AccessFilter, condition
 	// needs no JOIN.
 	appendLibraryAccessConditions("mi.content_id", filter, conditions, args, argIdx)
 
-	applyAccessFilter("mi", AccessFilter{MaxContentRating: filter.MaxContentRating, ExcludedMediaTypes: filter.ExcludedMediaTypes}, conditions, args, argIdx)
+	applyAccessFilter("mi", filter, conditions, args, argIdx)
 
 	// Manga chapters (type='ebook' rows linked into a manga series) are internal
 	// sub-units and must never surface as standalone search results.
@@ -1846,7 +1846,7 @@ func buildEnsureAccessibleSQL(contentID string, filter AccessFilter) (string, []
 	argIdx++
 
 	appendLibraryAccessConditions("mi.content_id", filter, &conditions, &args, &argIdx)
-	applyAccessFilter("mi", AccessFilter{MaxContentRating: filter.MaxContentRating, ExcludedMediaTypes: filter.ExcludedMediaTypes}, &conditions, &args, &argIdx)
+	applyAccessFilter("mi", filter, &conditions, &args, &argIdx)
 
 	return fmt.Sprintf("SELECT 1 FROM media_items mi WHERE %s LIMIT 1", strings.Join(conditions, " AND ")), args
 }
@@ -1895,7 +1895,7 @@ func buildEnsureAccessibleIDsSQL(contentIDs []string, filter AccessFilter) (stri
 	argIdx++
 
 	appendLibraryAccessConditions("mi.content_id", filter, &conditions, &args, &argIdx)
-	applyAccessFilter("mi", AccessFilter{MaxContentRating: filter.MaxContentRating, ExcludedMediaTypes: filter.ExcludedMediaTypes}, &conditions, &args, &argIdx)
+	applyAccessFilter("mi", filter, &conditions, &args, &argIdx)
 
 	return fmt.Sprintf("SELECT mi.content_id FROM media_items mi WHERE %s", strings.Join(conditions, " AND ")), args
 }
