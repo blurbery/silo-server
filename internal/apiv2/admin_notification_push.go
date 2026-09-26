@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	adminApplePushPath            = "apple"
 	testAdminApplePushOperation   = "testAdminApplePushNotification"
 	testAdminAndroidPushOperation = "testAdminAndroidPushNotification"
 )
@@ -46,7 +47,7 @@ func registerAdminNotificationPush(reg *Registry) {
 		path, operation string
 		apple           bool
 	}{
-		{"apple", testAdminApplePushOperation, true},
+		{adminApplePushPath, testAdminApplePushOperation, true},
 		{"fcm", testAdminAndroidPushOperation, false},
 	} {
 		op := Operation{Operation: humaOp(http.MethodPost, Prefix+"/admin/notifications/push/"+platform.path+"/test", platform.operation, "admin", "Dispatch one test push notification and report its current delivery outcome."), Class: ClassActingAdmin, DemoRestricted: true, ServiceBacked: true, RetrySafety: RetrySafetyNonRetryable}

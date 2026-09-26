@@ -12,6 +12,8 @@ import (
 	"github.com/Silo-Server/silo-server/internal/catalog"
 )
 
+const browseOrderAscending = "asc"
+
 type itemsQuery struct {
 	limit                  int
 	startIndex             int
@@ -697,11 +699,11 @@ func sortKey(raw string) (string, bool) {
 func mapSortOrder(raw string, explicitSort bool) string {
 	switch raw = strings.TrimSpace(raw); {
 	case strings.EqualFold(raw, "Ascending"):
-		return "asc"
+		return browseOrderAscending
 	case strings.EqualFold(raw, "Descending"):
 		return catalog.BrowseOrderDescending
 	case explicitSort:
-		return "asc"
+		return browseOrderAscending
 	default:
 		return catalog.BrowseOrderDescending
 	}
