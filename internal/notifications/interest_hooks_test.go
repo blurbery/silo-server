@@ -307,8 +307,10 @@ type rollupCapableStore struct {
 type postgresCatalogCapableStore struct {
 	userstore.UserStore
 	userstore.DeviceRegistry
-	rollupCalled     bool
-	supersededCalled bool
+	rollupCalled        bool
+	seriesSeasonCalled  bool
+	seasonEpisodeCalled bool
+	supersededCalled    bool
 }
 
 func (s *postgresCatalogCapableStore) SeriesEpisodeWatchCounts(_ context.Context, _ string, seriesIDs []string) (map[string]userstore.SeriesWatchCounts, error) {
@@ -316,6 +318,22 @@ func (s *postgresCatalogCapableStore) SeriesEpisodeWatchCounts(_ context.Context
 	counts := make(map[string]userstore.SeriesWatchCounts, len(seriesIDs))
 	for _, seriesID := range seriesIDs {
 		counts[seriesID] = userstore.SeriesWatchCounts{TotalEpisodes: 2, WatchedCount: 1}
+	}
+	return counts, nil
+}
+
+var _ userstore.SeriesEpisodeRollupStore = (*postgresCatalogCapableStore)(nil)
+
+func (s *postgresCatalogCapableStore) SeriesSeasonWatchCounts(context.Context, string, string) (map[int]userstore.SeriesWatchCounts, error) {
+	s.seriesSeasonCalled = true
+	return map[int]userstore.SeriesWatchCounts{1: {TotalEpisodes: 2, WatchedCount: 1}}, nil
+}
+
+func (s *postgresCatalogCapableStore) SeasonEpisodeWatchCounts(_ context.Context, _ string, seasonIDs []string) (map[string]userstore.SeriesWatchCounts, error) {
+	s.seasonEpisodeCalled = true
+	counts := make(map[string]userstore.SeriesWatchCounts, len(seasonIDs))
+	for _, seasonID := range seasonIDs {
+		counts[seasonID] = userstore.SeriesWatchCounts{TotalEpisodes: 2, WatchedCount: 1}
 	}
 	return counts, nil
 }
@@ -431,6 +449,14 @@ func TestInterestTrackingStorePreservesCombinedPostgresCatalogCapabilities(t *te
 	}
 	if _, err := rollup.SeriesEpisodeWatchCounts(context.Background(), "p1", []string{"series-1"}); err != nil {
 		t.Fatalf("SeriesEpisodeWatchCounts: %v", err)
+	}
+	seasonCounts, err := rollup.SeriesSeasonWatchCounts(context.Background(), "p1", "series-1")
+	if err != nil || !catalogStore.seriesSeasonCalled || seasonCounts[1].WatchedCount != 1 {
+		t.Fatalf("series season forwarding failed: %v, %v", seasonCounts, err)
+	}
+	episodeCounts, err := rollup.SeasonEpisodeWatchCounts(context.Background(), "p1", []string{"season-1"})
+	if err != nil || !catalogStore.seasonEpisodeCalled || episodeCounts["season-1"].WatchedCount != 1 {
+		t.Fatalf("season episode forwarding failed: %v, %v", episodeCounts, err)
 	}
 	exact, ok := wrapped.(userstore.SupersededEpisodeProgressStore)
 	if !ok {
