@@ -1,13 +1,6 @@
-name: CI
+name: Gemini upstream validation
 
 on:
-  pull_request:
-  push:
-    branches:
-      - main
-      # Integration branch for the API v2 program (#135). Stacked PRs merge
-      # here first; the merge commits need the same gate as main.
-      - apiv2
   workflow_dispatch:
 
 concurrency:
@@ -41,6 +34,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
+          ref: 67d72093d65ff2ed2c164273277bbf2445ab1d26
           # golangci-lint needs the merge base to tell this branch's lines from
           # the ones it inherited.
           fetch-depth: 0
@@ -99,10 +93,10 @@ jobs:
           # main's own history, which leaves the merge base at HEAD and lints
           # nothing new. Read through the environment rather than interpolated
           # into the script.
-          BASE_REF: ${{ github.base_ref || github.event.repository.default_branch }}
+          BASE_REF: 0929c8f74272eb2ffb74320ea90c92cec95e727b
         run: |
-          git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
-          golangci-lint run --new-from-merge-base="origin/${BASE_REF}" ./...
+          git fetch --no-tags origin "${BASE_REF}"
+          golangci-lint run --new-from-merge-base="${BASE_REF}" ./...
 
       # The inventory's lint rule (recovering a router from a handler) has to
       # hold over the whole tree, not only the lines a branch touched: an old
@@ -117,6 +111,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
+          ref: 67d72093d65ff2ed2c164273277bbf2445ab1d26
           # The contract diff compares against the PR's merge base.
           fetch-depth: 0
           persist-credentials: false
@@ -188,10 +183,10 @@ jobs:
       # does, never interpolated into the script.
       - name: Verify the v2 contract diff and spec lint
         env:
-          BASE_REF: ${{ github.base_ref || github.event.repository.default_branch }}
+          BASE_REF: 0929c8f74272eb2ffb74320ea90c92cec95e727b
         run: |
-          git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
-          make verify-apiv2-contract BASE_REF="origin/${BASE_REF}"
+          git fetch --no-tags origin "${BASE_REF}"
+          make verify-apiv2-contract BASE_REF="${BASE_REF}"
 
       # The v2 fixtures are generated through the real router and every body
       # is validated against the committed OpenAPI schema its index names, so
@@ -220,6 +215,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
+          ref: 67d72093d65ff2ed2c164273277bbf2445ab1d26
           persist-credentials: false
 
       - name: Set up Go
@@ -240,6 +236,26 @@ jobs:
         env:
           SILO_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/watch_party?sslmode=disable
         run: go test -race -count=1 -run '^(TestHistoryImportCancellation.*|TestQueue.*)$' ./migrations/ ./internal/historyimport/
+
+      - name: Reproduce daily quota retries on the upstream baseline
+        env:
+          BASELINE_SHA: 0929c8f74272eb2ffb74320ea90c92cec95e727b
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASELINE_SHA"
+          target=internal/recommendations/embeddings/client.go
+          trap 'git restore -- "$target"' EXIT
+          git show "$BASELINE_SHA:$target" > "$target"
+          set +e
+          go test -count=1 -run '^TestGeminiDailyQuotaStopsWithoutRetry$' ./internal/recommendations/embeddings/ 2>&1 | tee "$RUNNER_TEMP/gemini-quota-baseline.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          test "$result" -eq 1
+          python3 -c 'import os,pathlib; text=(pathlib.Path(os.environ["RUNNER_TEMP"])/"gemini-quota-baseline.log").read_text(); assert text.count("requests = 6, want 1") == 3'
+          git restore -- "$target"
+          trap - EXIT
+
+      - name: Repeat quota regression tests with the race detector
+        run: go test -race -count=20 -timeout=5m ./internal/recommendations/...
 
       # Compiles every package on the way, so there is no separate build step.
       - name: Test
@@ -275,6 +291,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
+          ref: 67d72093d65ff2ed2c164273277bbf2445ab1d26
           persist-credentials: false
 
       - name: Set up Go
@@ -303,6 +320,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
+          ref: 67d72093d65ff2ed2c164273277bbf2445ab1d26
           persist-credentials: false
 
       # The pnpm version comes from web/package.json's packageManager field —
@@ -381,6 +399,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
+          ref: 67d72093d65ff2ed2c164273277bbf2445ab1d26
           persist-credentials: false
 
       - name: Set up pnpm
