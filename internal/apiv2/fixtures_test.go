@@ -1721,7 +1721,9 @@ func fixtureCases() []fixtureCase {
 	// Request ids are positional: new fixtures append here so committed
 	// fixtures keep their ids.
 	cases = append(cases, networkAccessFixtureCases()...)
-	return append(cases, serverIdentityFixtureCases()...)
+	cases = append(cases, serverIdentityFixtureCases()...)
+	cases = append(cases, themeSongsFixtureCases()...)
+	return append(cases, passwordResetFixtureCases()...)
 }
 
 // fixtureMultipartType is the multipart Content-Type of the avatar fixtures,
@@ -1819,10 +1821,12 @@ func fixtureDeps() Dependencies {
 	deps.AdminHistoryImports = fixtureAdminHistoryImports()
 	deps.AdminAPIKeys = fixtureAdminAPIKeys()
 	deps.ThemeCatalog = fixtureThemeCatalog()
+	deps.ThemeSongs = &fakeThemeSongs{}
 	deps.UserLibraries = new(fakeUserLibraries)
 	deps.AdminPlaybackSessions = new(fakeAdminPlaybackSessions)
 	deps.AdminDevices = new(fakeAdminDevices)
 	deps.Invitations = fixtureInvitations()
+	deps.PasswordResets = fixturePasswordResets()
 	deps.NotificationInbox = fixtureNotificationInbox()
 	deps.AdminNotificationPush = new(fakeAdminNotificationPush)
 	deps.AdminNotificationDiscord = new(fakeAdminNotificationDiscord)

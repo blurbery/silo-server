@@ -108,6 +108,8 @@ export interface User {
   role: string;
   permissions: string[];
   download_allowed: boolean;
+  /** The account holds a temporary password: until it is changed, the session may only change it. */
+  password_change_required?: boolean;
   impersonation?: ImpersonationInfo | null;
 }
 
@@ -228,6 +230,16 @@ export interface Profile {
   is_child: boolean;
   is_primary: boolean;
   max_content_rating: string;
+  /**
+   * Advisory-age limit: titles whose advisory age (e.g. Common Sense Media's
+   * "13+") is above it are hidden. Null or absent means no limit.
+   */
+  max_advisory_age?: number | null;
+  /**
+   * Hide titles with no advisory age as well, so only titles rated at or under
+   * max_advisory_age are shown. No effect without a limit.
+   */
+  require_advisory_age?: boolean;
   quality_preference: string;
   language: string;
   preferred_metadata_language?: string;
@@ -1101,6 +1113,10 @@ export interface ItemExtra {
 }
 
 export interface ItemDetail {
+  themes?: {
+    owner_id: string;
+    items: { id: string; title: string; duration_seconds: number; container: string }[];
+  };
   content_id: string;
   play_content_id?: string;
   type: "movie" | "series" | "season" | "episode" | "audiobook" | "ebook" | "manga" | "podcast";
@@ -1121,6 +1137,15 @@ export interface ItemDetail {
   pending_translation_language?: string;
   runtime: number;
   content_rating: string;
+  /**
+   * Recommended minimum viewer age from an advisory service, with
+   * advisory_source naming who recommended it. It is not the certification:
+   * content_rating still drives the content-rating ceiling, and a profile's
+   * separate max_advisory_age limit compares against this age. Absent means
+   * "no advisory fetched", never "suitable for everyone".
+   */
+  advisory_age?: number | null;
+  advisory_source?: string;
   genres: string[];
   rating_imdb: number | null;
   rating_tmdb: number | null;
@@ -2315,6 +2340,8 @@ export interface AccessGroup {
   audio_transcode_allowed: boolean;
   max_streams: number;
   max_transcodes: number;
+  max_remote_stream_bitrate_kbps: number;
+  max_local_stream_bitrate_kbps: number;
   allowed_permissions: string[] | null;
   requests_allowed: boolean;
   is_default: boolean;
@@ -2334,6 +2361,8 @@ export interface AccessGroupInput {
   audio_transcode_allowed?: boolean;
   max_streams?: number;
   max_transcodes?: number;
+  max_remote_stream_bitrate_kbps?: number;
+  max_local_stream_bitrate_kbps?: number;
   allowed_permissions?: string[] | null;
   requests_allowed?: boolean;
   is_default?: boolean;
@@ -2347,6 +2376,8 @@ export interface AdminUserEffectivePolicy {
   max_playback_quality: string;
   max_streams: number;
   max_transcodes: number;
+  max_remote_stream_bitrate_kbps: number;
+  max_local_stream_bitrate_kbps: number;
   transcode_allowed: boolean;
   audio_transcode_allowed: boolean;
   download_allowed: boolean;
@@ -2367,12 +2398,20 @@ export interface AdminUser {
   max_playback_quality: string | null;
   max_streams: number | null;
   max_transcodes: number | null;
+  max_remote_stream_bitrate_kbps: number | null;
+  max_local_stream_bitrate_kbps: number | null;
   transcode_allowed: boolean | null;
   audio_transcode_allowed: boolean | null;
   max_profiles: number;
   download_allowed: boolean | null;
   download_transcode_allowed: boolean | null;
   requests_allowed: boolean | null;
+  /** Signs in with a local password; false when an external provider manages sign-in. */
+  password_login: boolean;
+  /** Holds a temporary password it must replace at its next sign-in. */
+  password_change_required: boolean;
+  /** The server Owner: only the Owner may change this account. */
+  is_owner: boolean;
   effective_policy: AdminUserEffectivePolicy;
   created_at: string;
   updated_at: string;
@@ -2384,14 +2423,20 @@ export interface CreateUserRequest {
   username: string;
   email: string;
   password: string;
+  /** The password is temporary: the account must replace it at its first sign-in. */
+  require_password_change?: boolean;
   role: string;
   permissions?: string[];
   create_default_profile?: boolean;
   default_profile_name?: string;
+  /** The account's access group; omitted, a regular account joins the default group. */
+  access_group_id?: number | null;
   library_ids?: number[] | null;
   max_playback_quality?: string;
   max_streams?: number;
   max_transcodes?: number;
+  max_remote_stream_bitrate_kbps?: number;
+  max_local_stream_bitrate_kbps?: number;
   transcode_allowed?: boolean;
   audio_transcode_allowed?: boolean;
   max_profiles?: number;
@@ -2407,6 +2452,8 @@ export interface UpdateUserRequest {
   username?: string;
   email?: string;
   password?: string;
+  /** Only with password: make it temporary, replaced at the next sign-in. */
+  require_password_change?: boolean;
   role?: string;
   permissions?: string[];
   enabled?: boolean;
@@ -2415,6 +2462,8 @@ export interface UpdateUserRequest {
   max_playback_quality?: string | null;
   max_streams?: number | null;
   max_transcodes?: number | null;
+  max_remote_stream_bitrate_kbps?: number | null;
+  max_local_stream_bitrate_kbps?: number | null;
   transcode_allowed?: boolean | null;
   audio_transcode_allowed?: boolean | null;
   max_profiles?: number;
@@ -2431,6 +2480,8 @@ export interface AdminStats {
   total_movie_files?: number;
   total_shows: number;
   total_show_files?: number;
+  /** Movies and series that carry an advisory age. */
+  advisory_titles?: number;
   active_streams: number;
   total_storage_bytes: number;
   /**
@@ -2490,6 +2541,8 @@ export interface AdminSession {
   is_paused: boolean;
   has_playback_control?: boolean;
   client_ip?: string;
+  /** Server classification used to select the local or remote stream bitrate policy. */
+  stream_location?: "local" | "remote";
   client_name?: string;
   client_version?: string;
   client_build?: string;
@@ -3354,6 +3407,32 @@ export interface CatalogSeedImportResponse {
 
 export type AdminJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
+export type StorageTransitionPhase =
+  | "queued"
+  | "checking_target"
+  | "copying"
+  | "verifying"
+  | "committing"
+  | "restart_pending"
+  | "completed"
+  | "failed"
+  | "canceled";
+
+export type StorageTransitionFailureCategory =
+  | "preparation_failed"
+  | "target_check_failed"
+  | "copy_failed"
+  | "verification_failed"
+  | "commit_failed"
+  | "unknown";
+
+export interface StorageTransitionJobResult {
+  manual_restart_required?: boolean;
+  phase?: StorageTransitionPhase;
+  verified_objects?: number;
+  failure_category?: StorageTransitionFailureCategory;
+}
+
 export interface LibraryRefreshJobRequest {
   library_id: number;
   library_name?: string;
@@ -3377,7 +3456,11 @@ export interface AdminJob {
   status: AdminJobStatus;
   created_by_user_id: number;
   request_payload: CatalogSeedExportRequest | LibraryRefreshJobRequest | Record<string, unknown>;
-  result_payload: CatalogSeedExportResult | LibraryRefreshJobResult | Record<string, unknown>;
+  result_payload:
+    | CatalogSeedExportResult
+    | LibraryRefreshJobResult
+    | StorageTransitionJobResult
+    | Record<string, unknown>;
   message: string;
   error_message?: string;
   progress_current: number;
@@ -4541,6 +4624,7 @@ export interface AdminServerStatus {
 export interface AdminArtworkStorageStatus {
   backend?: string;
   locked: boolean;
+  private_locked?: boolean;
 }
 
 // GET /admin/stats/playback-activity. `buckets` carries only hours that saw a

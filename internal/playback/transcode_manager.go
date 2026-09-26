@@ -81,6 +81,7 @@ type TranscodeManager struct {
 	// falls through to ResolveToneMapExecutor and StartTranscode.
 	resolveToneMapExecutor func(context.Context, TranscodeOpts) (TranscodeOpts, error)
 	startTranscode         func(context.Context, TranscodeOpts) (*TranscodeSession, error)
+	autoTranscodePipeline  func(context.Context, TranscodeOpts) *AutoTranscodePipeline
 
 	transcodeMu sync.RWMutex
 	transcodes  map[string]*TranscodeSession
@@ -698,6 +699,7 @@ func (m *TranscodeManager) reconstructSession(ctx context.Context, sessionID str
 		TargetBitrateKbps:          card.TargetBitrateKbps,
 		TranscodeHWAccel:           card.HWAccel,
 		ToneMapMode:                toneMapMode,
+		StreamLocation:             card.StreamLocation,
 		// Client metadata survives the restart so the admin views keep the
 		// client label and Jellyfin identification for the session's lifetime.
 		ClientName:       normalizeClientMetadataValue(card.ClientName, 128),
@@ -925,7 +927,15 @@ func (m *TranscodeManager) doReconstructTranscode(ctx context.Context, sessionID
 	if startTranscode == nil {
 		startTranscode = StartTranscode
 	}
-	transcodeSession, err := startTranscode(ctx, opts)
+	newPipeline := m.autoTranscodePipeline
+	if newPipeline == nil {
+		newPipeline = NewAutoTranscodePipeline
+	}
+	// Under hw_accel=auto a reconstruct walks the same safer paths as a fresh
+	// start, keeping a slow process rather than duplicating it. Every other
+	// recipe starts once without waiting, as segment requests already wait for
+	// a reconstructed process.
+	transcodeSession, err := StartReconstructTranscode(ctx, newPipeline(ctx, opts), TranscodeStartup{Start: startTranscode})
 	if err != nil {
 		slog.ErrorContext(ctx, "reconstruct transcode start failed", "component", "playback", "error", err, "session", sessionID, "playback_session_id", sessionID)
 		return nil, err

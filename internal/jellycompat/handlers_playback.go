@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Silo-Server/silo-server/internal/clientip"
 	"github.com/Silo-Server/silo-server/internal/telemetry"
 
 	"github.com/go-chi/chi/v5"
@@ -33,6 +34,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/nodepool"
 	"github.com/Silo-Server/silo-server/internal/noderouting"
 	"github.com/Silo-Server/silo-server/internal/playback"
+	"github.com/Silo-Server/silo-server/internal/streamlocation"
 	"github.com/Silo-Server/silo-server/internal/streamtoken"
 	"github.com/Silo-Server/silo-server/internal/subtitles"
 	"github.com/Silo-Server/silo-server/internal/tonemap"
@@ -53,6 +55,8 @@ const (
 )
 
 type playbackInfoRequest struct {
+	serverBitrateCapKbps                int
+	streamLocation                      string
 	SiloSeekReanchor                    bool            `json:"SiloSeekReanchor"`
 	UserID                              string          `json:"UserId"`
 	MediaSourceID                       string          `json:"MediaSourceId"`
@@ -305,6 +309,7 @@ type PlaybackHandler struct {
 	sessionMgr              SessionManagerInterface
 	fileResolver            FilePathResolver
 	storeProvider           userstore.UserStoreProvider
+	ScopeResolver           ScopeResolver
 	NodePlanner             nodepool.SessionPlanner
 	JWTSecret               string
 	profileStaler           profileStaler
@@ -344,6 +349,24 @@ type PlaybackHandler struct {
 	// compatLocalTranscodeReady is a test seam invoked after manifest readiness
 	// and before lifecycle-locked publication. Production leaves it nil.
 	compatLocalTranscodeReady func(*playback.TranscodeSession)
+	// compatAutoTranscodePipeline is a test seam for the hw_accel=auto
+	// fallback pipeline; nil uses playback.NewAutoTranscodePipeline.
+	compatAutoTranscodePipeline func(context.Context, playback.TranscodeOpts) *playback.AutoTranscodePipeline
+}
+
+func (h *PlaybackHandler) serverBitrateCap(ctx context.Context, session *Session) (int, error) {
+	if h.ScopeResolver == nil {
+		return 0, nil
+	}
+	scope, err := h.ScopeResolver.Resolve(ctx, access.ResolveInput{
+		UserID:              session.StreamAppUserID,
+		ProfileID:           session.ProfileID,
+		SkipPINVerification: true,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return streamlocation.BitrateCap(ctx, scope.MaxLocalStreamBitrateKbps, scope.MaxRemoteStreamBitrateKbps), nil
 }
 
 // recipeNodePutter persists and removes a remote transcode's reconstruction
@@ -754,7 +777,13 @@ func (h *PlaybackHandler) remoteTranscodeStartTimeout(request transcodenode.Tran
 		return compatRemoteTranscodeStartTimeout
 	}
 	if request.ToneMapMode == "" {
-		return 20 * time.Second
+		timeout := 20 * time.Second
+		if request.RequireReady || request.AutoFallbackReady {
+			// The node answers only after its first manifest, which under
+			// hw_accel=auto can follow an early exit on each safer path.
+			timeout += transcodenode.TranscodeStartReadyMaxDuration
+		}
+		return timeout
 	}
 	timeout := playback.NormalizeProbeRequestTimeout(nodeProbeTimeoutMillis, h.toneMapCapabilityTimeout()) + playback.ManifestStartupTimeout
 	if request.ToneMapPreflightRequired {
@@ -1427,6 +1456,16 @@ func (h *PlaybackHandler) remoteDispatchHWAccel(nodeURL string) string {
 	return node.EffectiveHWAccel(h.HWAccel)
 }
 
+// compatRemoteAutoFallbackEligible reports a video transcode dispatched with
+// hw_accel=auto and no tone map. The node can fall back to a safer path for
+// it, but only while it waits for the first manifest, and only the node knows
+// whether its live hardware enables that fallback.
+func compatRemoteAutoFallbackEligible(request transcodenode.TranscodeStartRequest) bool {
+	return request.ToneMapMode == "" &&
+		!strings.EqualFold(strings.TrimSpace(request.TargetCodecVideo), compatCopyCodec) &&
+		strings.EqualFold(strings.TrimSpace(request.HWAccel), "auto")
+}
+
 // startRemoteTranscode submits a frozen compatibility recipe to a selected node.
 func (h *PlaybackHandler) startRemoteTranscode(
 	ctx context.Context,
@@ -1633,6 +1672,9 @@ func (h *PlaybackHandler) startRemoteTranscodeWithToneMapMode(
 	if !compatHLSTranscodesAudio(source) {
 		reqBody.TargetCodecAudio = compatCopyCodec
 	}
+	// Jellyfin-compat remote starts are not otherwise waited on. Let the node
+	// wait only when its live auto pipeline can fall back.
+	reqBody.AutoFallbackReady = compatRemoteAutoFallbackEligible(reqBody)
 
 	dispatch := func(request transcodenode.TranscodeStartRequest) (transcodenode.TranscodeStartResponse, int, bool, error) {
 		body, err := json.Marshal(request)
@@ -1836,6 +1878,9 @@ func (h *PlaybackHandler) startRemoteTranscodeWithToneMapMode(
 		TargetAudioChannels:    reqBody.TargetAudioChannels,
 		TotalDuration:          reqBody.TotalDuration,
 		ThrottleSeconds:        reqBody.ThrottleSeconds,
+		// Record the decode path the node executed so a reconstruct keeps
+		// it; an older node omits the field.
+		SoftwareVideoDecode: reqBody.SoftwareVideoDecode || nodeResponse.SoftwareVideoDecode,
 	}
 	toneMapRecipe.apply(&opts)
 	opts.HWAccel = strings.TrimSpace(nodeResponse.HWAccel)
@@ -2046,10 +2091,16 @@ func (h *PlaybackHandler) HandlePlaybackInfo(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	contentID, err := decodeItemID(h.codec, chi.URLParam(r, "id"))
+	contentID, pathFileID, err := decodeItemOrMediaSourceID(r.Context(), h.codec, chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "NotFound", "Item not found")
+		writeItemIDError(w, r, err)
 		return
+	}
+	// pathMediaSourceID is set when the route named a media source rather than
+	// an item. That version is the one the client asked for.
+	var pathMediaSourceID string
+	if pathFileID > 0 {
+		pathMediaSourceID = h.codec.EncodeIntID(EncodedIDMediaSource, pathFileID)
 	}
 
 	req, profile, err := h.parsePlaybackRequest(r, session.Token)
@@ -2057,6 +2108,15 @@ func (h *PlaybackHandler) HandlePlaybackInfo(w http.ResponseWriter, r *http.Requ
 		writeDeviceProfileRequestError(w, err, "Invalid playback request")
 		return
 	}
+	if req.MediaSourceID == "" {
+		req.MediaSourceID = pathMediaSourceID
+	}
+	req.serverBitrateCapKbps, err = h.serverBitrateCap(r.Context(), session)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "PlaybackUnavailable", "The server could not resolve the stream bitrate limit")
+		return
+	}
+	req.streamLocation = string(streamlocation.FromContext(r.Context()))
 	// PlaybackInfo is authorized by the token-derived session. Some clients
 	// retain a previous UserId in their request body while moving to the next
 	// item; that advisory value must not turn an otherwise authorized playback
@@ -2073,9 +2133,18 @@ func (h *PlaybackHandler) HandlePlaybackInfo(w http.ResponseWriter, r *http.Requ
 	}
 
 	routeItemID := h.codec.EncodeStringID(EncodedIDItem, detail.ContentID)
+	if pathMediaSourceID != "" {
+		// A client that sent a media-source id as the item id keeps using it as
+		// the item id in stream URLs and session reports, so key the session and
+		// the URLs it hands out on that id.
+		routeItemID = pathMediaSourceID
+	}
 	playSessionID := h.codec.EncodeStringID(EncodedIDPlaySession, uuidNewString())
+	savedSubtitleMode := savedCompatSubtitleMode(r.Context(), h.storeProvider, session)
+	subtitleMode := compatJellyfinSubtitleMode(detail.SubtitleMode, detail.SubtitleModeSet, detail.ShowForcedSubtitles, savedSubtitleMode)
 	sources := make([]PlaybackMediaSource, 0, len(detail.Versions))
 	sourceDTOs := make([]mediaSourceDTO, 0, len(detail.Versions))
+	warmSubtitles := make([]bool, 0, len(detail.Versions))
 	attachmentContext, cancelAttachmentProbe := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancelAttachmentProbe()
 
@@ -2086,21 +2155,25 @@ func (h *PlaybackHandler) HandlePlaybackInfo(w http.ResponseWriter, r *http.Requ
 	var toneMapCapabilityErr error
 	toneMapCapabilitiesLoaded := false
 	if req.MediaSourceID != "" {
-		matched := false
-		for _, version := range detail.Versions {
-			candidate := h.buildPlaybackSource(routeItemID, playSessionID, version, profile, req, allow4KTranscode)
-			if mediaSourceIDsEqual(candidate.ID, req.MediaSourceID) {
-				matched = true
-				break
-			}
+		hasSource := func(mediaSourceID string) bool {
+			return slices.ContainsFunc(detail.Versions, func(version catalog.FileVersion) bool {
+				return mediaSourceIDsEqual(h.codec.EncodeIntID(EncodedIDMediaSource, int64(version.FileID)), mediaSourceID)
+			})
 		}
-		if !matched {
+		if !hasSource(req.MediaSourceID) {
+			if pathMediaSourceID != "" && !hasSource(pathMediaSourceID) {
+				// The route named a version the item no longer has. Answer 404
+				// rather than substituting a different version.
+				writeError(w, http.StatusNotFound, "NotFound", "Media source not found")
+				return
+			}
 			// Continue Watching and autoplay clients can carry the previous
 			// episode's MediaSourceId into the next PlaybackInfo request. The
-			// authenticated item route remains authoritative; fall back to its
-			// available versions instead of returning a misleading 404.
+			// authenticated route remains authoritative; fall back to the version
+			// it names, or to all of the item's versions, instead of returning a
+			// misleading 404.
 			slog.InfoContext(r.Context(), "jellycompat ignored stale playback media source", "component", "jellycompat")
-			req.MediaSourceID = ""
+			req.MediaSourceID = pathMediaSourceID
 		}
 	}
 	for _, version := range detail.Versions {
@@ -2130,6 +2203,7 @@ func (h *PlaybackHandler) HandlePlaybackInfo(w http.ResponseWriter, r *http.Requ
 				)
 			}
 		}
+		source.DefaultSubtitleStreamIndex = compatDetailSubtitleStreamIndex(detail, source.Version, downloaded, savedSubtitleMode, effectiveCompatAudioStreamIndex(source))
 		var requestedSubtitleIndex *int
 		if req.SubtitleStreamIndex != nil {
 			requestedSubtitleIndex = intPtr(int(*req.SubtitleStreamIndex))
@@ -2178,6 +2252,7 @@ func (h *PlaybackHandler) HandlePlaybackInfo(w http.ResponseWriter, r *http.Requ
 		source.SiloSeekReanchor = req.SiloSeekReanchor && compatHLSCopiesVideo(source) && source.SupportsTranscoding
 		sources = append(sources, source)
 		dto := h.mediaSourceDTO(routeItemID, playSessionID, session.Token, source)
+		warmSubtitles = append(warmSubtitles, compatWarmsTextSubtitles(subtitleMode, dto.MediaStreams))
 		dto.MediaAttachments = h.mediaAttachments(attachmentContext, routeItemID, playSessionID, source)
 
 		// Append downloaded subtitles to the media streams, honoring the selection.
@@ -2196,6 +2271,7 @@ func (h *PlaybackHandler) HandlePlaybackInfo(w http.ResponseWriter, r *http.Requ
 					Type:                   "Subtitle",
 					Codec:                  string(dl.Format),
 					Language:               dl.Language,
+					LocalizedLanguage:      compatLocalizedLanguage(dl.Language),
 					DisplayTitle:           displayTitle,
 					Title:                  displayTitle,
 					IsDefault:              selectedSubtitleStreamIndex != nil && streamIndex == *selectedSubtitleStreamIndex,
@@ -2222,7 +2298,11 @@ func (h *PlaybackHandler) HandlePlaybackInfo(w http.ResponseWriter, r *http.Requ
 	if !slices.ContainsFunc(sources, func(source PlaybackMediaSource) bool {
 		return source.SupportsDirectPlay || source.SupportsDirectStream || source.SupportsTranscoding
 	}) {
-		writeError(w, http.StatusBadRequest, "PlaybackUnavailable", "No media source supports the requested playback constraints")
+		message := "No media source supports the requested playback constraints"
+		if req.serverBitrateCapKbps > 0 {
+			message = "This stream exceeds the server bitrate limit, and no compliant transcoding route is available"
+		}
+		writeError(w, http.StatusBadRequest, "PlaybackUnavailable", message)
 		return
 	}
 
@@ -2235,6 +2315,8 @@ func (h *PlaybackHandler) HandlePlaybackInfo(w http.ResponseWriter, r *http.Requ
 		ID:                 playSessionID,
 		CompatToken:        session.Token,
 		ClientDeviceID:     clientDeviceID,
+		ClientIP:           clientip.FromContext(r.Context()),
+		ClientPeer:         requestPeerHost(r),
 		ItemID:             detail.ContentID,
 		RouteItemID:        routeItemID,
 		NegotiationVariant: compatNegotiationVariant(sources),
@@ -2247,6 +2329,29 @@ func (h *PlaybackHandler) HandlePlaybackInfo(w http.ResponseWriter, r *http.Requ
 		PlaySessionID: playSessionID,
 		MediaSources:  sourceDTOs,
 	})
+	if played := compatLikelyPlayedSource(sources); played >= 0 && warmSubtitles[played] {
+		h.warmCompatTextSubtitles(sources[played].FileID)
+	}
+}
+
+// compatLikelyPlayedSource returns the index of the source Jellyfin Web plays
+// from a PlaybackInfo response (getOptimalMediaSource): the first that direct
+// plays, then the first that direct streams, then the first that transcodes,
+// and otherwise the first source. It returns -1 for no sources.
+func compatLikelyPlayedSource(sources []PlaybackMediaSource) int {
+	for _, playable := range []func(PlaybackMediaSource) bool{
+		func(s PlaybackMediaSource) bool { return s.SupportsDirectPlay },
+		func(s PlaybackMediaSource) bool { return s.SupportsDirectStream },
+		func(s PlaybackMediaSource) bool { return s.SupportsTranscoding },
+	} {
+		if index := slices.IndexFunc(sources, playable); index >= 0 {
+			return index
+		}
+	}
+	if len(sources) == 0 {
+		return -1
+	}
+	return 0
 }
 
 // stripCompatNUL removes the only code point PostgreSQL rejects in JSONB text.
@@ -2318,6 +2423,12 @@ func (h *PlaybackHandler) buildPlaybackSource(
 
 	supportsDirectPlay := enableDirectPlay && profile.SupportsDirectPlayForAudioStream(version, selectedAudioIndex)
 	maxBitrate := req.MaxStreamingBitrate
+	if req.serverBitrateCapKbps > 0 {
+		serverMax := int64(req.serverBitrateCapKbps) * 1000
+		if maxBitrate <= 0 || serverMax < maxBitrate {
+			maxBitrate = serverMax
+		}
+	}
 	if profile.MaxStreamingBitrate > 0 && (maxBitrate <= 0 || profile.MaxStreamingBitrate < maxBitrate) {
 		maxBitrate = profile.MaxStreamingBitrate
 	}
@@ -2339,7 +2450,7 @@ func (h *PlaybackHandler) buildPlaybackSource(
 		allowAudioCopy &&
 		!supportsDirectPlay &&
 		profile.SupportsHLSRemuxForAudioStream(version, selectedAudioIndex)
-	hlsAudioTranscode := !bitrateRequiresEncode && !hlsAudioCopy &&
+	hlsAudioTranscode := req.serverBitrateCapKbps == 0 && !bitrateRequiresEncode && !hlsAudioCopy &&
 		enableTranscoding &&
 		!supportsDirectPlay &&
 		(!allowAudioCopy || !audioSupported) &&
@@ -2397,6 +2508,8 @@ func (h *PlaybackHandler) buildPlaybackSource(
 		supportsTranscoding = false
 	}
 	return PlaybackMediaSource{
+		ServerBitrateCapKbps:       req.serverBitrateCapKbps,
+		StreamLocation:             req.streamLocation,
 		CanBurnSubtitle:            enableTranscoding && (maxBitrate <= 0 || targetBitrateKbps >= 64) && (allow4KTranscode || !is4KResolution(version.Resolution)) && canEncodeOutput,
 		TargetBitrateKbps:          max(targetBitrateKbps, 0),
 		TargetResolution:           targetResolution,
@@ -2408,6 +2521,7 @@ func (h *PlaybackHandler) buildPlaybackSource(
 		SupportsDirectStream:       supportsDirectStream,
 		SupportsTranscoding:        supportsTranscoding,
 		HLSRemux:                   hlsRemux,
+		DOVIVariant:                hlsRemux && compatDOVIVariantEligible(version) && profile.declaresVideoRangeType(compatPrimaryVideoTrack(version).Codec, compatRangeDOVI),
 		HLSRemuxAudioStreamIndexes: hlsRemuxAudioStreamIndexes,
 		TranscodeAudio:             transcodeAudio,
 		DefaultAudioStreamIndex:    audioIndex,
@@ -2472,7 +2586,7 @@ func (h *PlaybackHandler) mediaSourceDTO(routeItemID, playSessionID, compatToken
 		Bitrate:                             source.Version.Bitrate * 1000,
 		DefaultAudioStreamIndex:             selectedAudioStreamIndex,
 		DefaultSubtitleStreamIndex:          effectiveCompatSubtitleStreamIndex(source),
-		MediaStreams:                        buildMediaStreamsWithSelection(routeItemID, source.ID, source.Version, selectedAudioStreamIndex, source.SelectedSubtitleStreamIndex, compatToken, playSessionID),
+		MediaStreams:                        buildMediaStreamsWithSelection(routeItemID, source.ID, source.Version, selectedAudioStreamIndex, compatStreamSubtitleSelection(source), compatToken, playSessionID),
 	}
 	for i := range dto.MediaStreams {
 		stream := &dto.MediaStreams[i]
@@ -2605,6 +2719,8 @@ func buildMediaStreamsWithSelection(routeItemID, mediaSourceID string, version c
 			Type:                   "Audio",
 			Codec:                  strings.ToLower(track.Codec),
 			Language:               track.Language,
+			LocalizedLanguage:      compatLocalizedLanguage(track.Language),
+			LocalizedOriginal:      compatLocalizedOriginal,
 			TimeBase:               "1/1000",
 			DisplayTitle:           audioTrackDisplayTitle(track),
 			Title:                  firstNonEmpty(track.Title, track.EmbeddedTitle),
@@ -2637,6 +2753,7 @@ func buildMediaStreamsWithSelection(routeItemID, mediaSourceID string, version c
 			Type:                   "Subtitle",
 			Codec:                  strings.ToLower(track.Codec),
 			Language:               track.Language,
+			LocalizedLanguage:      compatLocalizedLanguage(track.Language),
 			TimeBase:               "1/1000",
 			DisplayTitle:           displayTitle,
 			Title:                  displayTitle,
@@ -2694,9 +2811,18 @@ func mediaSourceETag(version catalog.FileVersion) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// defaultAudioStreamIndex is the stream the client should start with: the
+// catalog's per-viewer choice (audio language preference, including the
+// original-language preference, and the series' remembered track) when the
+// detail carries one, otherwise the file's default track. Jellyfin likewise
+// applies the user's audio preferences to DefaultAudioStreamIndex.
 func defaultAudioStreamIndex(version catalog.FileVersion) *int {
 	if len(version.AudioTracks) == 0 {
 		return nil
+	}
+	if effective := version.EffectiveAudioTrackIndex; effective != nil && *effective >= 0 && *effective < len(version.AudioTracks) {
+		value := len(version.VideoTracks) + *effective
+		return &value
 	}
 	for index, track := range version.AudioTracks {
 		if track.Default {
@@ -2953,6 +3079,18 @@ func resolveSelectedSubtitleStreamIndex(version catalog.FileVersion, downloadedC
 // effectiveCompatSubtitleStreamIndex returns the subtitle stream index to
 // advertise as the default for a source: the explicit selection when present
 // (collapsing "subtitles off" to none), otherwise the media default.
+// compatStreamSubtitleSelection is the subtitle selection PlaybackInfo's
+// stream list reflects. With no requested or default subtitle, because the
+// viewer's subtitle mode chose none, no subtitle stream is marked IsDefault;
+// clients that start the IsDefault stream would otherwise play a subtitle
+// the viewer turned off.
+func compatStreamSubtitleSelection(source PlaybackMediaSource) *int {
+	if source.SelectedSubtitleStreamIndex == nil {
+		return intPtr(-1)
+	}
+	return source.SelectedSubtitleStreamIndex
+}
+
 func effectiveCompatSubtitleStreamIndex(source PlaybackMediaSource) *int {
 	if source.SelectedSubtitleStreamIndex != nil {
 		if *source.SelectedSubtitleStreamIndex < 0 {
@@ -3118,6 +3256,19 @@ func downloadedSubtitleDisplayTitle(sub subtitles.DownloadedSubtitle) string {
 		tags = append(tags, provider)
 	}
 	return formatSubtitleLabel(base, tags...)
+}
+
+// compatLocalizedOriginal is Jellyfin 12's MediaStream.LocalizedOriginal
+// label, which it sets on every audio stream.
+const compatLocalizedOriginal = "Original"
+
+// compatLocalizedLanguage is Jellyfin 12's MediaStream.LocalizedLanguage: the
+// display name of a stream's language, empty when the stream has none.
+func compatLocalizedLanguage(code string) string {
+	if strings.TrimSpace(code) == "" {
+		return ""
+	}
+	return compatLanguageName(code)
 }
 
 func compatLanguageName(code string) string {

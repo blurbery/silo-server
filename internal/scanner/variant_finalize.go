@@ -49,7 +49,7 @@ func (s *Scanner) FinalizeVariantsByPathPrefix(
 		if ownerKey == "" {
 			continue
 		}
-		hints := naming.ParseVariantHints(file.FilePath, folder.Type)
+		hints := naming.ParseVariantHints(file.FilePath, folder.Type, folder.Paths...)
 		if file.EditionSource == "import" && file.EditionKey != "" {
 			hints = &naming.VariantHints{
 				EditionRaw:            file.EditionRaw,
@@ -90,7 +90,7 @@ func (s *Scanner) FinalizeVariantsByPathPrefix(
 			continue
 		}
 
-		hints := naming.ParseVariantHints(file.FilePath, folder.Type)
+		hints := naming.ParseVariantHints(file.FilePath, folder.Type, folder.Paths...)
 		if file.EditionSource == "import" && file.EditionKey != "" {
 			hints = &naming.VariantHints{
 				EditionRaw:            file.EditionRaw,

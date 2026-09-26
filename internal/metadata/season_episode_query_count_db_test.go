@@ -222,7 +222,6 @@ func TestPersistSeasonsAndEpisodes_QueryCountIsBounded(t *testing.T) {
 					seasons,
 					episodes,
 					MergeFillEmpty,
-					false,
 				)
 				queryCount := tracer.count()
 				queryCounts = append(queryCounts, queryCount)
@@ -380,7 +379,6 @@ func TestPersistSeasonsAndEpisodes_NonCanonicalRefreshPreservesBaseAndLocalizati
 			Overview:      "Nouveau resume episode fournisseur",
 		}},
 		MergeReplaceUnlocked,
-		false,
 	)
 
 	storedSeason, err := seasonRepo.GetBySeriesAndNumber(ctx, seriesID, 1)

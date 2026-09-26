@@ -13,6 +13,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/Silo-Server/silo-server/internal/clientip"
+	"github.com/Silo-Server/silo-server/internal/netaccess"
+	"github.com/Silo-Server/silo-server/internal/streamlocation"
 	"github.com/Silo-Server/silo-server/internal/tonemap"
 )
 
@@ -43,6 +46,7 @@ type Session struct {
 	ClientChannel              string // opaque reported client distribution channel, when available
 	ClientUserAgent            string // trimmed request user agent for the playback session
 	IsJellyfinCompat           bool   // immutable origin identity for Jellyfin compatibility sessions
+	StreamLocation             string // local/remote policy classification fixed at playback negotiation
 	// RequireMediaAuthorization distinguishes v3 transports whose session ID is
 	// only a route identifier from legacy HLS transports where that UUID also
 	// acts as the bearer capability. It is live-session state by design: secure
@@ -629,25 +633,28 @@ func newSession(
 	// build a ClientInfo from their own header vocabularies.
 	clientInfo := ClientInfoFromContext(ctx).Normalized()
 	return &Session{
-		ID:                   uuid.New().String(),
-		UserID:               userID,
-		ProfileID:            profileID,
-		MediaFileID:          effectiveFileID,
-		RequestedMediaFileID: requestedFileID,
-		PlayMethod:           method,
-		BasePlayMethod:       method,
-		TranscodeAudio:       transcodeAudio,
-		Position:             0,
-		IsPaused:             false,
-		ClientName:           clientInfo.Name,
-		ClientVersion:        clientInfo.Version,
-		ClientBuild:          clientInfo.Build,
-		ClientChannel:        clientInfo.Channel,
-		ClientUserAgent:      clientInfo.UserAgent,
-		IsJellyfinCompat:     clientInfo.IsCompat,
-		StartedAt:            now,
-		UpdatedAt:            now,
-		LastActivityAt:       now,
+		ID:                     uuid.New().String(),
+		UserID:                 userID,
+		ProfileID:              profileID,
+		MediaFileID:            effectiveFileID,
+		RequestedMediaFileID:   requestedFileID,
+		PlayMethod:             method,
+		BasePlayMethod:         method,
+		TranscodeAudio:         transcodeAudio,
+		ClientIP:               clientip.FromContext(ctx),
+		StreamLocation:         string(streamlocation.FromContext(ctx)),
+		RoutingNetworkProvider: new(netaccess.PathFromContext(ctx).Provider),
+		Position:               0,
+		IsPaused:               false,
+		ClientName:             clientInfo.Name,
+		ClientVersion:          clientInfo.Version,
+		ClientBuild:            clientInfo.Build,
+		ClientChannel:          clientInfo.Channel,
+		ClientUserAgent:        clientInfo.UserAgent,
+		IsJellyfinCompat:       clientInfo.IsCompat,
+		StartedAt:              now,
+		UpdatedAt:              now,
+		LastActivityAt:         now,
 	}
 }
 
@@ -975,6 +982,23 @@ func (m *SessionManager) UpdateStreamState(sessionID string, state SessionStream
 
 	applySessionStreamStateLocked(s, state)
 	s.streamRevision++
+	m.touchSessionLocked(s)
+	return nil
+}
+
+// SetStreamLocation preserves the negotiated bitrate-policy classification
+// when a compatible client starts its media request on another network path.
+func (m *SessionManager) SetStreamLocation(sessionID, location string) error {
+	if location != string(streamlocation.Local) && location != string(streamlocation.Remote) {
+		return fmt.Errorf("invalid stream location %q", location)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[sessionID]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	s.StreamLocation = location
 	m.touchSessionLocked(s)
 	return nil
 }

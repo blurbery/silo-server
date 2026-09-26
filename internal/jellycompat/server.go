@@ -78,6 +78,11 @@ type Dependencies struct {
 	// completes a watch, so fully-watched items leave the watchlist. Optional.
 	WatchCompletionObserver watchstate.CompletionObserver
 
+	// UserStateEvents, when set, carries watched-state changes between the
+	// compatibility layer, first-party clients and API replicas, and feeds the
+	// socket's UserDataChanged notifications.
+	UserStateEvents UserStateEvents
+
 	// Autoscan / admin compatibility support.
 	APIKeyValidator  apiKeyValidator
 	APIKeyUserLoader apiKeyUserLoader
@@ -109,10 +114,12 @@ type Dependencies struct {
 	SessionSyncer          PlaybackSessionSyncer
 	MarkerPopulation       MarkerPopulationService
 	FileResolver           FilePathResolver
+	MediaSourceOwners      MediaSourceOwnerLookup // optional; resolves media-source ids sent as item ids
 	UserStoreProvider      userstore.UserStoreProvider
 	WatchScrobbler         PlaybackWatchScrobbler
 	StableIdentityResolver watchsync.ScrobbleIdentityResolver
 	AccessFilterFn         AccessFilterResolver
+	PlaybackScopeResolver  ScopeResolver
 	NodePlanner            nodepool.SessionPlanner
 	JWTSecret              string
 	Recommender            recommendations.Recommender

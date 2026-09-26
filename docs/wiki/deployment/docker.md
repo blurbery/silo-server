@@ -351,6 +351,12 @@ Settings that change the index format, including enabling meaning-based search,
 also trigger an automatic background rebuild after restart. A compatible older
 Meilisearch index keeps serving keyword results while its replacement is built.
 
+The Compose file pins the Meilisearch version because Meilisearch will not open
+data written by a different version. To move to a new version, change
+`MEILISEARCH_IMAGE` and set `MEILI_UPGRADE_DB=true` in `.env` for one start,
+then remove it. Alternatively, empty `${SILO_DATA_ROOT}/meilisearch` and let
+Silo rebuild the index.
+
 ## External PostgreSQL and Redis
 
 > [!IMPORTANT]
