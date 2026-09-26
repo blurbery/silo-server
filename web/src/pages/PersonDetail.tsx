@@ -5,7 +5,7 @@ import { Pencil, RefreshCw } from "lucide-react";
 
 import { getPerson } from "@/api/v2/people";
 import { isNotFoundProblem } from "@/api/v2/request";
-import { createEmptyQueryDefinition, type Person } from "@/api/types";
+import { createEmptyQueryDefinition } from "@/api/types";
 import type { CatalogSearchState } from "@/pages/catalogSearchParams";
 import EditPersonDialog from "@/components/EditPersonDialog";
 import ItemGrid from "@/components/ItemGrid";
