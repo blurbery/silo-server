@@ -25,8 +25,9 @@ env:
 jobs:
   build:
     # A PR cannot turn this publisher into a privileged PR-code build.
+    # Fork: also publish from blurbery/silo-server.
     if: >-
-      github.repository == 'Silo-Server/silo-server' &&
+      contains(fromJSON('["Silo-Server/silo-server","blurbery/silo-server"]'), github.repository) &&
       contains(fromJSON('["linux/amd64","linux/arm64"]'), inputs.platform) &&
       ((github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["refs/heads/main","refs/heads/apiv2"]'), github.ref)) ||
@@ -35,7 +36,8 @@ jobs:
         github.event.workflow_run.event == 'push' &&
         github.event.workflow_run.head_repository.full_name == github.repository &&
         contains(fromJSON('["main","apiv2"]'), github.event.workflow_run.head_branch)))
-    runs-on: ${{ inputs.platform == 'linux/amd64' && fromJSON(format('["self-hosted","linux","x64","silo-linux","silo-run-{0}-{1}","silo-job-docker-amd64"]', github.run_id, github.run_attempt)) || 'ubuntu-24.04-arm' }}
+    # Fork: upstream's private amd64 runner is unavailable, so use GitHub's.
+    runs-on: ${{ inputs.platform == 'linux/amd64' && (github.repository == 'Silo-Server/silo-server' && fromJSON(format('["self-hosted","linux","x64","silo-linux","silo-run-{0}-{1}","silo-job-docker-amd64"]', github.run_id, github.run_attempt)) || 'ubuntu-latest') || 'ubuntu-24.04-arm' }}
     timeout-minutes: 90
     permissions:
       contents: read
