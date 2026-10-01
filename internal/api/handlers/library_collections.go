@@ -3296,8 +3296,8 @@ func (h *LibraryCollectionHandler) cleanUpReplacedCollectionImage(ctx context.Co
 
 func (h *LibraryCollectionHandler) processArtworkInputs(r *http.Request, collectionID, posterSourceURL, backdropSourceURL string) error {
 	sourceByType := map[string]string{
-		"poster":   strings.TrimSpace(posterSourceURL),
-		"backdrop": strings.TrimSpace(backdropSourceURL),
+		collectionImagePoster:   strings.TrimSpace(posterSourceURL),
+		adminCollectionBackdrop: strings.TrimSpace(backdropSourceURL),
 	}
 	isMultipart := strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/")
 

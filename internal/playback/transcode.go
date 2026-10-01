@@ -390,7 +390,7 @@ func StartTranscode(ctx context.Context, opts TranscodeOpts) (*TranscodeSession,
 		// Legacy recipes let FFmpeg choose its existing default.
 	case VideoSampleEntryHEV1V3, VideoSampleEntryHVC1V3, VideoSampleEntryDVH1V3:
 		hevcCopy := strings.EqualFold(opts.TargetCodecVideo, "copy") && strings.EqualFold(opts.SourceVideoCodec, "hevc")
-		// An HEVC encode may also be labelled hvc1, which native HLS players
+		// An HEVC encode may also be tagged hvc1, which native HLS players
 		// such as Android Media3 require (upstream #841).
 		hevcEncodeHVC1 := sampleEntry == VideoSampleEntryHVC1V3 && strings.EqualFold(opts.TargetCodecVideo, transcodeCodecHEVC)
 		if !hevcCopy && !hevcEncodeHVC1 {

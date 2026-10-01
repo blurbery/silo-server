@@ -125,8 +125,12 @@ func creditsFingerprintKey() ArtifactKey {
 // CreditsBehaviorVersion. A group settled without tail passes, while ffmpeg
 // lacked what they need, is analyzed again once they can run. It never
 // equals an intro analysis hash, so the two kinds keep separate season state.
+// creditsTailDisabledHash names the tail component of a credits config hash
+// when tail analysis is off.
+const creditsTailDisabledHash = "none"
+
 func CreditsAnalysisConfigHash(creditsTail bool) string {
-	tailHash := "none"
+	tailHash := creditsTailDisabledHash
 	if creditsTail {
 		tailHash = creditsTailKey().ConfigHash
 	}
