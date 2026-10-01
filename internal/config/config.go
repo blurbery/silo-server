@@ -140,6 +140,10 @@ type ScannerConfig struct {
 	MaxConcurrentScoped    int           `yaml:"max_concurrent_scoped"`
 	EmptyTrashAfterScan    bool          `yaml:"-"`
 	FileRemovalGrace       time.Duration `yaml:"-"`
+	// RealtimeMonitoring is the server-wide real-time monitoring switch
+	// (scanner.realtime_monitoring). It hot-reloads; each library also has
+	// its own switch.
+	RealtimeMonitoring bool `yaml:"-"`
 }
 
 // scannerConfigRaw is the raw YAML representation with duration strings.
@@ -149,6 +153,7 @@ type scannerConfigRaw struct {
 	MaxConcurrentLibraries int    `yaml:"max_concurrent_libraries"`
 	MaxConcurrentScoped    int    `yaml:"max_concurrent_scoped"`
 	EmptyTrashAfterScan    bool   `yaml:"empty_trash_after_scan"`
+	RealtimeMonitoring     bool   `yaml:"realtime_monitoring"`
 }
 
 // MatcherConfig holds metadata matching settings.
@@ -337,6 +342,11 @@ type DownloadConfig struct {
 	ArtifactDir           string `yaml:"-"` // prepared-artifact output volume ("" = default under the transcode dir)
 	MaxConcurrentPrepares int    `yaml:"-"` // encode/remux worker-pool size (default 2)
 	ArtifactMaxBytes      int64  `yaml:"-"` // LRU eviction budget for prepared artifacts (0 = unlimited)
+
+	// Playback transcode switches that also govern converted downloads, read
+	// from their playback setting keys so both surfaces follow one toggle.
+	Allow4KTranscode  bool `yaml:"-"` // allow_4k_transcode: 4K sources may be converted
+	AllowHEVCEncoding bool `yaml:"-"` // playback.allow_hevc_encoding: HEVC output when the device decodes it
 }
 
 // PolicyConfig holds embedded policy engine settings.
@@ -518,6 +528,7 @@ func setDefaults() *configRaw {
 			Workers:                8,
 			MaxConcurrentLibraries: 1,
 			MaxConcurrentScoped:    2,
+			RealtimeMonitoring:     true,
 		},
 		Artwork: ArtworkConfig{StorageBackend: artworkBackendAuto, LocalPath: "/var/lib/silo/artwork"},
 		Matcher: MatcherConfig{

@@ -75,13 +75,7 @@ func TestLibraryCollectionAggregateTransactionLockOrderDB(t *testing.T) {
 			go func() { firstDone <- run(firstRepo, first, second.libraryID, firstRevision) }()
 			waitLibraryCollectionBlocked(t, ctx, first.pool, firstName, "advisory")
 			go func() { secondDone <- run(secondRepo, second, first.libraryID, secondRevision) }()
-			event := "transactionid"
-			if operation != "create-opposite-order" {
-				// Scope swaps wait on the shared lifecycle advisory lock
-				// before either writer can retain opposing order counters.
-				event = "advisory"
-			}
-			waitLibraryCollectionBlocked(t, ctx, first.pool, secondName, event)
+			waitLibraryCollectionBlocked(t, ctx, first.pool, secondName, "transactionid")
 			if err := gate.Commit(ctx); err != nil {
 				t.Fatal(err)
 			}

@@ -1306,6 +1306,13 @@ func (h *SectionHandler) buildSectionsResponse(r *http.Request, withItems []sect
 // buildSections renders sections for a viewer described by its context,
 // access filter and artwork size; it is what v1 and v2 share.
 func (h *SectionHandler) buildSections(ctx context.Context, withItems []sections.SectionWithItems, libraryID *int, viewerAccess catalog.AccessFilter, size imagesize.Size) homeSectionsResponse {
+	return h.buildSectionsWithUserStates(ctx, withItems, libraryID, viewerAccess, size, nil)
+}
+
+// buildSectionsWithUserStates is buildSections reusing user states the caller
+// already loaded for these items (the Home hide-watched filter does); nil
+// loads them as buildSections does.
+func (h *SectionHandler) buildSectionsWithUserStates(ctx context.Context, withItems []sections.SectionWithItems, libraryID *int, viewerAccess catalog.AccessFilter, size imagesize.Size, knownUserStates map[string]*itemUserStateResponse) homeSectionsResponse {
 	deduplicateSectionItems(ctx, withItems)
 
 	contentIDs := make([]string, 0)
@@ -1384,7 +1391,11 @@ func (h *SectionHandler) buildSections(ctx context.Context, withItems []sections
 		playTargets = resolvedTargets
 	})
 
-	wg.Go(func() { userStates = h.listSectionItemUserStates(ctx, allItems) })
+	if knownUserStates != nil {
+		userStates = knownUserStates
+	} else {
+		wg.Go(func() { userStates = h.listSectionItemUserStates(ctx, allItems) })
+	}
 	wg.Go(func() { imageURLs = h.resolveSectionItemImageURLs(ctx, withItems, size) })
 	wg.Go(func() { episodeMeta = h.listSectionEpisodeItemMeta(ctx, withItems, viewerAccess) })
 	wg.Go(func() { mangaChapterMeta = h.listSectionMangaChapterItemMeta(ctx, allItems) })
@@ -1753,6 +1764,8 @@ func (h *SectionHandler) maybeInjectNextUp(ctx context.Context, resolved []secti
 
 // injectNextUpSection inserts a synthetic SectionNextUp entry after the
 // contiguous continue rows that start with the video Continue Watching row.
+// The row has no override of its own, so it shows as many items as that
+// Continue Watching row.
 func injectNextUpSection(resolved []sections.ResolvedSection) []sections.ResolvedSection {
 	nextUp := sections.ResolvedSection{
 		ID:          "system-next-up",
@@ -1763,6 +1776,9 @@ func injectNextUpSection(resolved []sections.ResolvedSection) []sections.Resolve
 
 	for i, s := range resolved {
 		if s.SectionType == sections.SectionContinueWatching && sections.ContinueTypeFromConfig(s.Config) == sections.ContinueTypeWatching {
+			if s.ItemLimit > 0 {
+				nextUp.ItemLimit = s.ItemLimit
+			}
 			insertAt := i + 1
 			for insertAt < len(resolved) && resolved[insertAt].SectionType == sections.SectionContinueWatching {
 				insertAt++
@@ -1856,121 +1872,4 @@ func shouldLogOverlaySummaryError(err error) bool {
 	return err != nil &&
 		!errors.Is(err, context.Canceled) &&
 		!errors.Is(err, context.DeadlineExceeded)
-}
-
-type sectionResponseOptions struct {
-	hideWatchedHomeItems bool
-}
-
-const (
-	homeWatchedCandidateMultiplier = 5
-	// Series and season watched state requires episode lookups, so keep the
-	// refill window bounded rather than scanning the whole section.
-	homeWatchedMaxExpandedCandidates = 200
-)
-
-func homeSectionsForFetch(
-	resolved []sections.ResolvedSection,
-	options sectionResponseOptions,
-) []sections.ResolvedSection {
-	if !options.hideWatchedHomeItems {
-		return resolved
-	}
-
-	fetchSections := make([]sections.ResolvedSection, len(resolved))
-	copy(fetchSections, resolved)
-	for i := range fetchSections {
-		section := &fetchSections[i]
-		if section.Featured || sections.PreserveWatchedItemsOnHome(section.SectionType) {
-			continue
-		}
-		section.ItemLimit = homeWatchedCandidateLimit(section.ItemLimit)
-	}
-	return fetchSections
-}
-
-func homeWatchedCandidateLimit(displayLimit int) int {
-	if displayLimit <= 0 || displayLimit >= homeWatchedMaxExpandedCandidates {
-		return displayLimit
-	}
-	if displayLimit > homeWatchedMaxExpandedCandidates/homeWatchedCandidateMultiplier {
-		return homeWatchedMaxExpandedCandidates
-	}
-	return displayLimit * homeWatchedCandidateMultiplier
-}
-
-func restoreHomeSectionDisplayLimits(
-	withItems []sections.SectionWithItems,
-	resolved []sections.ResolvedSection,
-) []sections.SectionWithItems {
-	displayLimits := make(map[string]int, len(resolved))
-	for _, section := range resolved {
-		displayLimits[section.ID] = section.ItemLimit
-	}
-	for i := range withItems {
-		if displayLimit, ok := displayLimits[withItems[i].ID]; ok {
-			withItems[i].ItemLimit = displayLimit
-		}
-	}
-	return withItems
-}
-
-func filterWatchedHomeSectionItems(
-	withItems []sections.SectionWithItems,
-	userStates map[string]*itemUserStateResponse,
-) []sections.SectionWithItems {
-	filtered := make([]sections.SectionWithItems, len(withItems))
-	copy(filtered, withItems)
-	for i := range filtered {
-		section := &filtered[i]
-		if section.Featured || sections.PreserveWatchedItemsOnHome(section.SectionType) {
-			continue
-		}
-
-		items := make([]*models.MediaItem, 0, len(section.Items))
-		for _, item := range section.Items {
-			if item != nil && userStates[item.ContentID] != nil && userStates[item.ContentID].Played {
-				continue
-			}
-			items = append(items, item)
-			if section.ItemLimit > 0 && len(items) == section.ItemLimit {
-				break
-			}
-		}
-		section.Items = items
-	}
-	return filtered
-}
-
-// deduplicateSectionItems enforces the wire-level invariant that a non-empty
-// content ID appears at most once within one section. Invalid cards are dropped
-// because downstream enrichment and keyed client layouts require a usable
-// content ID. The first occurrence wins so query ordering and per-card fields
-// such as PlayContentID stay intact. Each section has its own seen set because
-// overlap between different rows is controlled separately by
-// applyDiversityFilter.
-
-func sectionMediaItems(withItems []sections.SectionWithItems) []*models.MediaItem {
-	items := make([]*models.MediaItem, 0)
-	for _, section := range withItems {
-		items = append(items, section.Items...)
-	}
-	return items
-}
-
-func (h *SectionHandler) prepareHomeSections(ctx context.Context, withItems []sections.SectionWithItems, options sectionResponseOptions) []sections.SectionWithItems {
-	if !options.hideWatchedHomeItems {
-		return withItems
-	}
-	return filterWatchedHomeSectionItems(withItems, h.listSectionItemUserStates(ctx, sectionMediaItems(withItems)))
-}
-func (h *SectionHandler) homeOptions(ctx context.Context) sectionResponseOptions {
-	options := sectionResponseOptions{}
-	userID, profileID := apimw.GetUserID(ctx), apimw.GetProfileID(ctx)
-	if h.StoreProvider != nil && userID > 0 && profileID != "" {
-		if store, err := h.StoreProvider.ForUser(ctx, userID); err == nil {
-			options.hideWatchedHomeItems = sections.HideWatchedItemsFromHome(ctx, store, profileID)
-		}
-	}
-	return options
 }

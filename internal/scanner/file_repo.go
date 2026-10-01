@@ -1495,6 +1495,62 @@ func (r *FileRepository) ClearMarkers(ctx context.Context, fileID int, segments 
 	return r.upsertAndClearMarkers(ctx, fileID, nil, segments)
 }
 
+// WithdrawScannerMarker clears a file's intro or credits segment while it
+// still holds the scanner result algorithm wrote, and reports whether it
+// cleared it. Local analysis uses it to take back a result its current rules
+// no longer produce. A marker another source or detector has written since
+// stays. expected, when set, guards the file identity like
+// MarkerUpdate.ExpectedFile.
+func (r *FileRepository) WithdrawScannerMarker(ctx context.Context, fileID int, segment, algorithm string, expected *models.MediaFile) (bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("begin marker withdrawal transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	state, err := loadMarkerMutationState(ctx, tx, fileID)
+	if err != nil {
+		return false, err
+	}
+	if expected != nil && models.MarkerFileIdentity(expected) != models.MarkerFileIdentity(&state.file) {
+		return false, ErrStaleMarkerUpdate
+	}
+	flags, err := markerClearFlags([]string{segment})
+	if err != nil {
+		return false, err
+	}
+	var target *segmentState
+	switch {
+	case flags.intro:
+		target = &state.intro
+	case flags.credits:
+		target = &state.credits
+	default:
+		return false, fmt.Errorf("marker segment %q cannot be withdrawn", segment)
+	}
+	// A segment written before per-segment provenance carries only the
+	// file's shared source.
+	source := target.source
+	if source == nil || strings.TrimSpace(*source) == "" {
+		source = state.existingSource
+	}
+	if source == nil || strings.TrimSpace(*source) != models.MarkerSourceScanner ||
+		target.algorithm == nil || *target.algorithm != algorithm || !clearSegmentState(target) {
+		if err := tx.Commit(ctx); err != nil {
+			return false, fmt.Errorf("commit marker withdrawal transaction: %w", err)
+		}
+		return false, nil
+	}
+	wrote, err := writeMarkerMutationState(ctx, tx, fileID, state)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit marker withdrawal transaction: %w", err)
+	}
+	return wrote, nil
+}
+
 // UpsertAndClearMarkers applies manual marker sets and clears in one row-locking
 // transaction so mixed PUT bodies cannot partially persist.
 func (r *FileRepository) UpsertAndClearMarkers(ctx context.Context, fileID int, update MarkerUpdate, clearSegments []string) (bool, error) {
@@ -3541,21 +3597,41 @@ func (r *FileRepository) UpdateContentIDByPathPrefix(ctx context.Context, folder
 }
 
 // UpdateContentIDByObservedRootPath assigns one content item to all present
-// files under the same observed root path in a media folder.
-func (r *FileRepository) UpdateContentIDByObservedRootPath(ctx context.Context, folderID int, observedRootPath, contentID string) (int, error) {
-	tag, err := r.pool.Exec(ctx, `
-		UPDATE media_files
-		SET content_id = $1, updated_at = NOW()
-		WHERE media_folder_id = $2
-		  AND observed_root_path = $3
-		  AND missing_since IS NULL
-		  AND extra_id IS NULL
-		  AND (content_id IS NULL OR content_id <> $1)
-	`, contentID, folderID, observedRootPath)
-	if err != nil {
-		return 0, fmt.Errorf("updating content_id by observed root path: %w", err)
+// files under the same observed root path in a media folder. Files an admin
+// split pinned with a file-scope identity override keep their item. It returns
+// the number of files relinked and the distinct content IDs they were linked
+// to before, so the caller can reconcile memberships those items may have lost.
+func (r *FileRepository) UpdateContentIDByObservedRootPath(ctx context.Context, folderID int, observedRootPath, contentID string) (int, []string, error) {
+	// The self-join reads each row as it was before the update.
+	var updated int
+	var replaced []string
+	if err := r.pool.QueryRow(ctx, `
+		WITH relinked AS (
+			UPDATE media_files mf
+			SET content_id = $1, updated_at = NOW()
+			FROM media_files previous
+			WHERE previous.id = mf.id
+			  AND mf.media_folder_id = $2
+			  AND mf.observed_root_path = $3
+			  AND mf.missing_since IS NULL
+			  AND mf.extra_id IS NULL
+			  AND (mf.content_id IS NULL OR mf.content_id <> $1)
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM media_identity_overrides o
+				WHERE o.media_folder_id = mf.media_folder_id
+				  AND o.scope = 'file'
+				  AND o.file_path = mf.file_path
+			  )
+			RETURNING previous.content_id
+		)
+		SELECT COUNT(*)::int,
+		       COALESCE(array_agg(DISTINCT content_id) FILTER (WHERE content_id IS NOT NULL AND content_id <> ''), ARRAY[]::text[])
+		FROM relinked
+	`, contentID, folderID, observedRootPath).Scan(&updated, &replaced); err != nil {
+		return 0, nil, fmt.Errorf("updating content_id by observed root path: %w", err)
 	}
-	return int(tag.RowsAffected()), nil
+	return updated, replaced, nil
 }
 
 // ClearContentID removes any matched media item linkage from a file row.

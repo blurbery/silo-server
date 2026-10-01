@@ -1253,7 +1253,9 @@ compute rungs.
 The source rung is always present, labelled `original`, with
 `preserves_source: true`. Transcode rungs are added below the source resolution
 class, plus at the same class when they reduce bitrate, and only when HLS is
-available to the client, transcoding is enabled, and 4K transcoding is permitted
+available to the client, transcoding is enabled, the viewer's account may
+transcode video (`transcode_allowed`; admission still enforces it), and 4K
+transcoding is permitted
 for a 4K-or-higher source. A source falls under that policy when its catalog
 resolution label reads `2160p`, `4k`, `uhd`, `4320p`, or `8k` (case- and
 whitespace-insensitive), its probed width is at least 3840, or its probed height
@@ -1286,14 +1288,36 @@ remux without video encoding.
 A rung below the source resolution class is always useful. At the source's own
 class, a rung is published only when it undercuts the source bitrate; a 25.2
 Mbps 4K file therefore offers 4K Medium and 4K Low but not a pointless 40 Mbps
-4K High encode. Resolution classification also considers width, so cinema-crop
-UHD sources such as 3840x1540 retain their native dimensions on a 4K bitrate
-step instead of being upscaled to 2160 lines.
+4K High encode. A source's class is the smallest one whose bounds hold both
+dimensions: 480p up to 854x480, 720p up to 1280x962, 1080p up to 2560x1440,
+2160p up to 4096x3072, and 4320p up to 8192x6144. These are the scanner's
+buckets for the catalog's resolution label. Cropped and cinema-aspect encodes
+therefore keep their labelled class: a 1918x872 file is 1080p, and a 3840x1540
+UHD source retains its native dimensions on a 4K bitrate step instead of being
+upscaled to 2160 lines. An 8K source sits above every rung, so its 4K rungs
+scale it down to 2160 lines.
 
 Compound rungs are strict resolution/bitrate selections. A bandwidth cap can
 clamp their bitrate but does not silently demote their resolution. Plain labels
-remain accepted for stored/default preferences and retain their existing
-height-only behavior.
+remain accepted for stored/default preferences and size their output like
+`auto` below.
+
+`auto` picks its resolution from the shared bitrate ladder
+([quality-ladder.md](quality-ladder.md)): 80% of the bandwidth estimate or cap
+earns a class for the source's frame rate. A source whose height already fits
+the class is sent as-is when its bitrate allows, even when it is wider than the
+16:9 box (a 2560x1080 film at the 1080p class). Otherwise automatic and
+plain-label targets fit the source into that class's 16:9 box, so a 3840x1600
+film at the 1080p class streams at 1920x800, and encode at the class bitrate: 20000 kbps for 2160p, 6000
+for 1080p, 2000 for 720p, 1800 for 540p and 1500 for 480p, never above that 80%
+budget. A source that already fits the class but whose bitrate exceeds 80% of the
+bandwidth estimate is re-encoded at its own size within that budget rather than
+sent as-is; a source of unknown bitrate counts as needing its class's full
+bitrate. Under a cap, a source over the cap itself is re-encoded, and so is a
+video source of unknown bitrate, since it cannot be shown to fit. A transcode
+also never targets more than the source's own bitrate, counted in the output
+codec (H.264 for a scaled encode, or HEVC for any encode when the planner
+chooses HEVC).
 
 Registry availability is deliberately *not* consulted when building the menu: a
 capability check there could trigger lazy node fetches that a source-preserving
@@ -1354,6 +1378,13 @@ do not declare; a binary that predates that envelope can still erase
 newer-generation fields (such as the remux flags) during the single rolling
 deploy that introduces them.
 
+A Jellyfin HLS remux that strips Dolby Vision to its HDR10 base layer uses the
+literal `remux-dv-v1` segment for every audio mode, taking precedence over
+`remux-v1` and `audio-v2`. An older binary would keep the strip flag without
+acting on it and copy Dolby Vision to a client that rejected it; its router has
+no handler for this segment, so the request fails instead. Current handlers
+reject a strip session on any other path and any other session on this one.
+
 A remote start carrying source-channel facts is valid only for the exact AAC
 stereo shape and must echo recipe version 2 after FFmpeg reaches readiness. The
 caller stops a job that omits or contradicts that receipt. Shared reconstruction
@@ -1362,7 +1393,14 @@ session updates preserve codec, source/target channels, bitrate, and the
 transcode decision as one recipe. A failed Jellyfin audio switch restores the
 prior durable selection and executor facts so the same client report can retry.
 Prepared downloads persist the audio recipe version and use `audio_v2_*` queue
-states that pre-v2 API workers cannot claim or publish as ready.
+states that pre-v2 API workers cannot claim or publish as ready. The multi-track
+prepared layout (every audio track, plain-text subtitles as MP4 timed text,
+ASS/SSA and PGS as manifest sidecars) is a
+separate `track_recipe_version` with `tracks_v1_*` queue states that outrank the
+audio and tone-map families. Its per-track plan travels in the prepare request
+and execution fingerprint; only transcode nodes advertising the
+`prepared_tracks_v1` transport feature receive it, and an older node's legacy
+receipt is rejected.
 
 They are advertised only if an eligible executor actually has the required
 capability. The ordinary FFmpeg feature probe is cached; the more expensive

@@ -16,12 +16,14 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/Silo-Server/silo-server/internal/access"
 	"github.com/Silo-Server/silo-server/internal/activitylog"
 	"github.com/Silo-Server/silo-server/internal/adminjob"
 	"github.com/Silo-Server/silo-server/internal/ai/jobrunner"
 	"github.com/Silo-Server/silo-server/internal/ai/llm"
+	"github.com/Silo-Server/silo-server/internal/animeids"
 	"github.com/Silo-Server/silo-server/internal/api/handlers"
 	apimw "github.com/Silo-Server/silo-server/internal/api/middleware"
 	"github.com/Silo-Server/silo-server/internal/apiv2"
@@ -88,8 +90,8 @@ import (
 	"github.com/Silo-Server/silo-server/internal/themesongs"
 	"github.com/Silo-Server/silo-server/internal/usercollections"
 	"github.com/Silo-Server/silo-server/internal/userstore"
+	"github.com/Silo-Server/silo-server/internal/watchlist"
 	"github.com/Silo-Server/silo-server/internal/watchstate"
-	watchtrakt "github.com/Silo-Server/silo-server/internal/watchsync/providers/trakt"
 	"github.com/Silo-Server/silo-server/internal/watchtogether"
 	"github.com/Silo-Server/silo-server/internal/webhooksync"
 )
@@ -189,6 +191,8 @@ type Dependencies struct {
 	EventsHub                 *evt.Hub
 	ScanRegistry              *evt.ScanRegistry
 	LibraryScanQueue          *scanqueue.Service
+	LibraryMonitor            interface{ Poke() }            // real-time library monitor, reconciled after library mutations (nil when this node runs none)
+	LibraryMonitoring         apiv2.LibraryMonitoringService // real-time monitoring status for the v2 admin read (may be nil)
 	ActivityLogWriter         activitylog.Writer
 	ActivityLogRepo           *activitylog.Repo
 	OpsLogRepo                *opslog.Repo
@@ -654,6 +658,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 		libraryHandler.EventsHub = deps.EventsHub
 		libraryHandler.ScanRegistry = deps.ScanRegistry
 		libraryHandler.ScanQueue = deps.LibraryScanQueue
+		libraryHandler.RealtimeMonitor = deps.LibraryMonitor
 		libraryHandler.MovieMatchQueueRepo = deps.MovieMatchQueueRepo
 		libraryHandler.SeriesMatchQueueRepo = deps.SeriesRootMatchQueueRepo
 		libraryHandler.RawMatchBacklogRepo = deps.FileRepo
@@ -717,6 +722,10 @@ func newChiRouter(deps Dependencies) chi.Router {
 	var catalogSearchService *catalog.CatalogSearchService
 	var webhookSyncHandler *handlers.WebhookSyncHandler
 	var requestHandler *handlers.RequestsHandler
+	// watchlistTitles is the one watchlist.Titles every surface shares: the
+	// v2 title operations, promotion on library watchlist reads, the title
+	// detail's repair observer and the profile purge.
+	var watchlistTitles *watchlist.Titles
 	var onboardingHandler *handlers.OnboardingHandler
 	// Declared here (assigned in the playback block below) so the onboarding
 	// gates closure can reference it before that block runs.
@@ -726,6 +735,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 	var ebookProgressStore *handlers.PGEbookReaderProgressStore
 	var ebookConfigStore *handlers.PGEbookReaderConfigStore
 	var ebookAnnotationStore *handlers.PGEbookReaderAnnotationStore
+	var watchlistRequestWithdrawer *mediarequests.Service
 	if deps.DB != nil {
 		ebookProgressStore = handlers.NewPGEbookReaderProgressStore(deps.DB)
 		ebookConfigStore = handlers.NewPGEbookReaderConfigStore(deps.DB)
@@ -854,32 +864,47 @@ func newChiRouter(deps Dependencies) chi.Router {
 				ebookReaderHandler.Conversion = conv
 			}
 		}
-		catalogResourceHandler = handlers.NewCatalogResourceHandler(itemsHandler)
-		catalogHandler = handlers.NewCatalogHandler(
-			catalog.NewCatalogResolver(browseRepo, itemRepo).
-				WithEpisodeRepository(episodeRepo).
-				WithUserStoreProvider(deps.UserStoreProvider).
-				WithSearchProvider(catalogSearchService.Provider()),
-			itemsHandler,
-		)
-		catalogHandler.SetWorkSummaryProvider(literaryRepo)
-
 		tmdbAPIKey := ""
 		if deps.Config != nil {
 			tmdbAPIKey = deps.Config.TMDBAPIKey
 		}
+		requestsTMDB := tmdb.NewClient(tmdbAPIKey, 40)
+		// deps.UserStoreProvider is the notification-wrapped provider, so a
+		// promoted series queues an interest recompute. The promotion effects
+		// are the personal data handler, wired once it exists.
+		watchlistTitles = watchlist.NewTitles(deps.DB, itemRepo, deps.UserStoreProvider, requestsTMDB, nil)
+
+		catalogResourceHandler = handlers.NewCatalogResourceHandler(itemsHandler)
+		catalogResourceHandler.SetWatchlistPromoter(watchlistTitles)
+		catalogHandler = handlers.NewCatalogHandler(
+			catalog.NewCatalogResolver(browseRepo, itemRepo).
+				WithEpisodeRepository(episodeRepo).
+				WithUserStoreProvider(deps.UserStoreProvider).
+				WithSearchProvider(catalogSearchService.Provider()).
+				WithWatchlistPromoter(watchlistTitles),
+			itemsHandler,
+		)
+		catalogHandler.SetWorkSummaryProvider(literaryRepo)
+
 		requestsRepo := mediarequests.NewRepository(deps.DB, deps.SecretCipher)
 		requestSvc := mediarequests.NewService(
 			requestsRepo,
-			tmdb.NewClient(tmdbAPIKey, 40),
+			requestsTMDB,
 			mediarequests.NewCatalogPresence(itemRepo, providerIDRepo),
 		)
+		requestSvc.SetTitleObserver(watchlistTitles)
+		watchlistRequestWithdrawer = requestSvc
+		requestSvc.SetWatchlistPreference(mediarequests.StoreWatchlistPreference{Stores: deps.UserStoreProvider})
 		AttachRequestRouter(requestSvc, deps.PluginService)
+		requestSvc.SetAnimeIndex(animeids.NewStore(deps.DB))
 		requestSvc.SetGroupPolicyProvider(accessGroupStore)
 		if userRepo != nil {
 			requestSvc.SetUserRepository(userRepo)
 		}
 		requestSvc.SetRequesterIdentityResolver(plugins.RequesterIdentityFromLookup(plugins.NewPgUserIdentityLookup(deps.DB)))
+		if tvdbResolver, ok := deps.MetadataService.(mediarequests.TVDBIDResolver); ok {
+			requestSvc.SetTVDBIDResolver(tvdbResolver)
+		}
 		if viewerResolver != nil {
 			requestSvc.SetEntitlementResolver(scopeEntitlementResolver{resolver: viewerResolver})
 		}
@@ -992,6 +1017,14 @@ func newChiRouter(deps Dependencies) chi.Router {
 		profileHandler = handlers.NewProfileHandler(deps.UserStoreProvider)
 		profileHandler.UserRepo = userRepo
 		profileHandler.EventsHub = deps.EventsHub
+		if deps.DB != nil {
+			// Drops live in Postgres whichever store holds the profile.
+			profileHandler.DroppedSeriesPurger = catalog.NewDroppedSeriesRepo(deps.DB)
+			profileHandler.WatchlistTitlesPurger = watchlistTitles
+		}
+		if watchlistRequestWithdrawer != nil {
+			profileHandler.WatchlistRequestWithdrawer = watchlistRequestWithdrawer
+		}
 		profileHandler.ProfileTokens = profileTokenService
 		// Private S3 preserves existing avatar keys and presigned delivery. Local
 		// avatars use the signed artwork endpoint. Never use public S3 here.
@@ -1007,6 +1040,10 @@ func newChiRouter(deps Dependencies) chi.Router {
 		}
 		personalDataHandler.SetEpisodeRepo(episodeRepo)
 		personalDataHandler.SetSeasonRepo(seasonRepo)
+		if watchlistTitles != nil {
+			personalDataHandler.SetWatchlistTitles(watchlistTitles)
+			watchlistTitles.SetEffects(personalDataHandler)
+		}
 		personalDataHandler.EventsHub = deps.EventsHub
 		if dispatcher, ok := deps.WatchProviderService.(handlers.LocalListEventDispatcher); ok {
 			personalDataHandler.SetLocalListEventDispatcher(dispatcher)
@@ -1076,6 +1113,12 @@ func newChiRouter(deps Dependencies) chi.Router {
 		deviceHandler.ProfileTokens = profileTokenService
 		homeDismissalHandler = handlers.NewHomeDismissalHandler(deps.UserStoreProvider)
 		homeDismissalHandler.EventsHub = deps.EventsHub
+		if deps.DB != nil {
+			homeDismissalHandler.SetSeriesDrops(notifications.TrackDroppedSeries(catalog.NewDroppedSeriesRepo(deps.DB), deps.Notifications), itemRepo)
+		}
+		if dispatcher, ok := deps.WatchProviderService.(handlers.LocalDroppedEventDispatcher); ok {
+			homeDismissalHandler.SetLocalDroppedEventDispatcher(dispatcher)
+		}
 		subtitlePrefHandler = handlers.NewSubtitlePrefHandler(deps.UserStoreProvider)
 		subtitlePrefHandler.EventsHub = deps.EventsHub
 		audioPrefHandler = handlers.NewAudioPrefHandler(deps.UserStoreProvider)
@@ -1418,6 +1461,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 		adminHandler.RestartStatus = restartStatus
 		adminHandler.CatalogSearchStatus = catalogSearchService
 		adminHandler.DiagnosticsStore = diagnosticsStore
+		if watchlistTitles != nil && deps.DB != nil {
+			adminHandler.WatchlistTitlesSweeper = watchlistTitles
+		}
 		if settingsRepo != nil {
 			adminHandler.SettingsRepo = settingsRepo
 		}
@@ -1432,6 +1478,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 	}
 	if accessGroupStore != nil {
 		accessGroupHandler = handlers.NewAccessGroupHandler(accessGroupStore)
+		accessGroupHandler.OnUserSessionsRevoked = deps.OnUserSessionsRevoked
 	}
 	if deps.DB != nil {
 		jobRepo := adminjob.NewRepository(deps.DB)
@@ -1713,6 +1760,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 		sectionBulkHandler = &handlers.SectionBulkHandler{Repo: sectionRepo}
 		sectionFetcher := sections.NewFetcher(deps.DB)
 		sectionFetcher.StoreProvider = deps.UserStoreProvider
+		if watchlistTitles != nil {
+			sectionFetcher.WatchlistPromoter = watchlistTitles
+		}
 		sectionFetcher.CollectionRepo = catalog.NewLibraryCollectionRepository(deps.DB)
 		sectionFetcher.NextUpRepo = catalog.NewNextUpRepository(deps.DB, deps.UserStoreProvider)
 		sectionFetcher.AudiobookNextRepo = catalog.NewAudiobookNextRepository(deps.DB)
@@ -1792,6 +1842,15 @@ func newChiRouter(deps Dependencies) chi.Router {
 				client: tmdb.NewClient(apiKey, 40),
 			}
 		}
+		if libraryCollectionService.TMDBLists == nil {
+			apiKey := ""
+			if deps.Config != nil {
+				apiKey = deps.Config.TMDBAPIKey
+			}
+			libraryCollectionService.TMDBLists = &tmdbListAdapter{
+				client: tmdb.NewClient(apiKey, 40),
+			}
+		}
 		if libraryCollectionService.TraktCollections == nil {
 			// The client ID is resolved per call rather than captured here, so
 			// saving new Trakt credentials applies without a server restart.
@@ -1800,12 +1859,10 @@ func newChiRouter(deps Dependencies) chi.Router {
 				settings: settingsRepo,
 			}
 		}
-		if libraryCollectionService.TraktTokenResolver == nil && deps.DB != nil && settingsRepo != nil {
+		if tokens, ok := deps.WatchProviderService.(watchProviderAccessTokens); ok && libraryCollectionService.TraktTokenResolver == nil && deps.DB != nil {
 			libraryCollectionService.TraktTokenResolver = &traktCollectionTokenResolver{
-				pool:     deps.DB,
-				settings: settingsRepo,
-				cipher:   deps.SecretCipher,
-				provider: watchtrakt.NewProvider(nil, ""),
+				pool:   deps.DB,
+				tokens: tokens,
 			}
 		}
 
@@ -1821,6 +1878,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 			}
 			if deps.UserCollectionSync.TMDBCollections == nil {
 				deps.UserCollectionSync.TMDBCollections = libraryCollectionService.TMDBCollections
+			}
+			if deps.UserCollectionSync.TMDBLists == nil {
+				deps.UserCollectionSync.TMDBLists = libraryCollectionService.TMDBLists
 			}
 		}
 
@@ -1914,6 +1974,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 		if deps.DB != nil {
 			recsFetcher := sections.NewFetcher(deps.DB)
 			recsFetcher.StoreProvider = deps.UserStoreProvider
+			if watchlistTitles != nil {
+				recsFetcher.WatchlistPromoter = watchlistTitles
+			}
 			recsFetcher.NextUpRepo = catalog.NewNextUpRepository(deps.DB, deps.UserStoreProvider)
 			recsFetcher.AudiobookNextRepo = catalog.NewAudiobookNextRepository(deps.DB)
 			recsHandler.Fetcher = recsFetcher
@@ -1975,6 +2038,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 				subtitleSource = subtitleManager
 			}
 			downloadSvc.SetOfflineDeps(detailSvc, subtitleSource, nil)
+		}
+		if streamHandler != nil {
+			downloadSvc.SetSubtitleCache(streamHandler.SubtitleCache)
 		}
 		if deps.MarkerPopulation != nil {
 			downloadSvc.SetMarkerPopulation(deps.MarkerPopulation)
@@ -2228,7 +2294,6 @@ func newChiRouter(deps Dependencies) chi.Router {
 	if settingsRepo != nil {
 		themeHandler = handlers.NewThemeHandler(settingsRepo)
 		v2deps.ThemeOverrides = themeHandler
-		v2deps.ThemeCatalog = themeHandler
 	}
 	if deps.BrandingService != nil {
 		v2deps.Branding = deps.BrandingService
@@ -2449,6 +2514,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 	if subtitlePrefHandler != nil {
 		v2deps.SubtitlePreferences = subtitlePrefHandler
 	}
+	v2deps.LibraryMonitoring = deps.LibraryMonitoring
 	if libraryHandler != nil {
 		v2deps.LibraryAdmin = libraryHandler
 		v2deps.UserLibraries = libraryHandler
@@ -2665,6 +2731,10 @@ func newChiRouter(deps Dependencies) chi.Router {
 		v2deps.Requests = requestHandler.Service()
 		v2deps.RequestLifecycle = requestHandler.Service()
 		v2deps.AdminRequests = requestHandler.Service()
+		if watchlistRequests, ok := requestHandler.Service().(apiv2.WatchlistRequestService); ok && personalDataHandler != nil && watchlistTitles != nil {
+			v2deps.WatchlistTitles = personalDataHandler
+			v2deps.WatchlistRequests = watchlistRequests
+		}
 	}
 	if collectionHandler != nil {
 		v2deps.PersonalCollections = collectionHandler
@@ -4646,6 +4716,50 @@ func (a *tmdbDiscoverAdapter) Discover(ctx context.Context, mediaType string, pa
 			entry.TVDBID = externalIDs.TVDBID
 		}
 		entries[i] = entry
+	}
+	return entries, nil
+}
+
+// tmdbListAdapter adapts tmdb.Client to catalog.TMDBListFetcher for the
+// `tmdb_list` sync mode. Like the other TMDB adapters, it enriches each entry
+// with external IDs so the matcher can fall back to IMDb/TVDB when a local
+// item lacks a TMDB ID.
+type tmdbListAdapter struct {
+	client *tmdb.Client
+}
+
+// tmdbListExternalIDLookups bounds the concurrent external-ID lookups for one
+// list. A list can hold up to 500 entries and the import runs its first sync
+// inside the request, so sequential lookups (one round trip each) would take
+// far longer than the client's shared rate limit requires.
+const tmdbListExternalIDLookups = 8
+
+func (a *tmdbListAdapter) GetList(ctx context.Context, id, limit int) ([]catalog.TMDBCollectionEntry, error) {
+	results, err := a.client.GetList(ctx, id, limit)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]catalog.TMDBCollectionEntry, len(results))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(tmdbListExternalIDLookups)
+	for i, r := range results {
+		entries[i] = catalog.TMDBCollectionEntry{
+			ID:        r.ID,
+			MediaType: r.MediaType,
+			Title:     r.Title,
+		}
+		g.Go(func() error {
+			// A failed lookup leaves the entry matchable by TMDB ID alone; only
+			// cancellation ends the sync.
+			if externalIDs, err := a.client.GetExternalIDs(gctx, r.MediaType, r.ID); err == nil && externalIDs != nil {
+				entries[i].IMDbID = externalIDs.IMDbID
+				entries[i].TVDBID = externalIDs.TVDBID
+			}
+			return gctx.Err()
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 	return entries, nil
 }

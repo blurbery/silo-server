@@ -46,7 +46,7 @@ vi.mock("@/hooks/queries/catalog", () => ({
   useCatalogMetadataFilters: (...args: unknown[]) => mockUseCatalogFilters(...args),
 }));
 
-vi.mock("@/hooks/queries/people", () => ({
+vi.mock("@/hooks/queries/personSearch", () => ({
   usePersonSearch: (...args: unknown[]) => mockUsePersonSearch(...args),
 }));
 
@@ -56,6 +56,11 @@ vi.mock("@/hooks/useCanRequest", () => ({
 
 vi.mock("@/hooks/queries/useRequests", () => ({
   useRequestSearch: (...args: unknown[]) => mockUseRequestSearch(...args),
+  useRequestFeatureStatus: () => ({ data: undefined }),
+}));
+
+vi.mock("@/hooks/queries/watchlistTitles", () => ({
+  useWatchlistTitles: () => ({ data: undefined, isLoading: false, isError: false }),
 }));
 
 vi.mock("@/components/RequestToAddSection", () => ({

@@ -9,7 +9,7 @@
  */
 
 export const SETTINGS_API_VERSION = 1;
-export const SETTINGS_REVISION = 11;
+export const SETTINGS_REVISION = 15;
 
 export interface SettingSuggestedOption {
   value: string;
@@ -264,6 +264,8 @@ export const SETTING_KEYS = {
   PLAYER_VIDEO_SKIP_BACK_SECONDS: "player.video_skip_back_seconds",
   /** Video fast-forward interval */
   PLAYER_VIDEO_SKIP_FORWARD_SECONDS: "player.video_skip_forward_seconds",
+  /** Request titles I add to my watchlist */
+  REQUESTS_WATCHLIST_AUTO_REQUEST: "requests.watchlist_auto_request",
   /** Search scope */
   SEARCH_MEDIA_SCOPE: "search.media_scope",
   /** Match device caption settings */
@@ -474,9 +476,9 @@ export const SETTING_DEFINITIONS: Record<SettingKey, SettingDefinition> = {
     type: "boolean",
     nullable: false,
     persistence: "remote",
-    introducedIn: 8,
+    introducedIn: 12,
     scopes: ["profile"],
-    scopeIntroducedIn: [8],
+    scopeIntroducedIn: [12],
     resolutionOrder: ["profile", "default"],
     defaultValue: false,
     label: "Hide watched items from Home",
@@ -739,6 +741,7 @@ export const SETTING_DEFINITIONS: Record<SettingKey, SettingDefinition> = {
       backgroundColor: "#000000",
       backgroundStyle: "box",
       backgroundOpacity: 75,
+      textOpacity: 100,
       textOutline: false,
       textOutlineColor: "#000000",
       position: "bottom",
@@ -1141,6 +1144,22 @@ export const SETTING_DEFINITIONS: Record<SettingKey, SettingDefinition> = {
       { value: 90, label: "90 seconds", introducedIn: 9 },
     ],
   },
+  "requests.watchlist_auto_request": {
+    key: "requests.watchlist_auto_request",
+    type: "boolean",
+    nullable: false,
+    persistence: "remote",
+    introducedIn: 15,
+    scopes: ["profile"],
+    scopeIntroducedIn: [15],
+    resolutionOrder: ["profile", "default"],
+    defaultValue: true,
+    label: "Request titles I add to my watchlist",
+    description:
+      "When you add a title that is not in the library to your watchlist, also request it.",
+    category: "requests",
+    control: "switch",
+  },
   "search.media_scope": {
     key: "search.media_scope",
     type: "enum",
@@ -1267,6 +1286,7 @@ export const SETTING_DEFINITIONS: Record<SettingKey, SettingDefinition> = {
     nullable: true,
     persistence: "remote",
     introducedIn: 1,
+    deprecated: true,
     scopes: ["profile"],
     scopeIntroducedIn: [1],
     resolutionOrder: ["profile", "default"],
@@ -1283,6 +1303,7 @@ export const SETTING_DEFINITIONS: Record<SettingKey, SettingDefinition> = {
     nullable: true,
     persistence: "remote",
     introducedIn: 1,
+    deprecated: true,
     scopes: ["profile"],
     scopeIntroducedIn: [1],
     resolutionOrder: ["profile", "default"],
@@ -1471,6 +1492,7 @@ export const SETTING_DEFINITIONS: Record<SettingKey, SettingDefinition> = {
     nullable: false,
     persistence: "remote",
     introducedIn: 1,
+    deprecated: true,
     scopes: ["profile", "profile_device"],
     scopeIntroducedIn: [1, 1],
     resolutionOrder: ["profile_device", "profile", "default"],

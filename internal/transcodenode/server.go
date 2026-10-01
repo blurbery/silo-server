@@ -94,10 +94,13 @@ type TranscodeStartRequest struct {
 
 // TranscodeStartResponse is the JSON response for POST /transcode/start.
 type TranscodeStartResponse struct {
-	SessionID   string       `json:"session_id"`
-	Status      string       `json:"status"`
-	HWAccel     string       `json:"hw_accel,omitempty"`
-	ToneMapMode tonemap.Mode `json:"tone_map_mode,omitempty"`
+	SessionID string `json:"session_id"`
+	Status    string `json:"status"`
+	HWAccel   string `json:"hw_accel,omitempty"`
+	// EncoderHWAccel may differ from HWAccel when the GPU tone-maps frames
+	// that libx265 encodes on CPU. Older nodes omit it.
+	EncoderHWAccel string       `json:"encoder_hw_accel,omitempty"`
+	ToneMapMode    tonemap.Mode `json:"tone_map_mode,omitempty"`
 	// AudioRecipeVersion attests the exact byte-affecting audio recipe the node
 	// understood. An old node omits it, allowing current callers to stop the job
 	// before publishing bytes from a silently ignored SourceAudioChannels field.
@@ -922,6 +925,10 @@ func (s *Server) handleDownloadPrepare(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid audio recipe", http.StatusBadRequest)
 		return
 	}
+	if req.PreparedTracksRequested() && !req.ValidPreparedTracks() {
+		http.Error(w, "invalid track recipe", http.StatusBadRequest)
+		return
+	}
 
 	cfg := s.watcher.Config()
 	if cfg == nil {
@@ -1040,6 +1047,9 @@ func expectedDownloadPrepareResult(req downloadprepare.Request, fileSize int64) 
 		result.ToneMapSourceRevisionFingerprint = req.ToneMapSourceRevision.Fingerprint()
 	}
 	if req.AudioRecipeRequested() && !req.StereoDownmixBoostRequested() {
+		return downloadprepare.Result{}, false
+	}
+	if req.PreparedTracksRequested() && !req.ValidPreparedTracks() {
 		return downloadprepare.Result{}, false
 	}
 	result.ExecutionFingerprint = req.ExecutionFingerprint()
@@ -1353,6 +1363,7 @@ func (s *Server) buildCapabilitySnapshotLocked(ctx context.Context) (playback.HW
 			}
 		}
 	}
+	info.TransportFeatures = append(info.TransportFeatures, playback.TransportFeaturePreparedTracksV1)
 	info.CapabilityHash = playback.ComputeCapabilityHash(info)
 	return info, nil
 }
@@ -1718,6 +1729,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	// behind it the playback client) is blocked on this 202, and the
 	// tracking write is monitoring-only.
 	effectiveHWAccel := session.Opts().HWAccel
+	encoderHWAccel := session.Opts().EffectiveEncoderHWAccel()
 	trackCtx := context.WithoutCancel(r.Context())
 	go s.tracker.Track(trackCtx, nodesessions.SessionInfo{
 		SessionID:   req.SessionID,
@@ -1727,7 +1739,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		CodecVideo:  req.TargetCodecVideo,
 		CodecAudio:  req.TargetCodecAudio,
 		Resolution:  req.TargetResolution,
-		HWAccel:     effectiveHWAccel,
+		HWAccel:     encoderHWAccel,
 		ToneMapMode: string(session.Opts().ToneMapMode),
 		StartedAt:   time.Now().UTC().Format(time.RFC3339),
 	})
@@ -1737,6 +1749,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		SessionID:             req.SessionID,
 		Status:                "started",
 		HWAccel:               effectiveHWAccel,
+		EncoderHWAccel:        encoderHWAccel,
 		ToneMapMode:           session.Opts().ToneMapMode,
 		AudioRecipeVersion:    req.AudioRecipeVersion,
 		CopyFMP4RecipeVersion: req.CopyFMP4RecipeVersion,
@@ -2053,7 +2066,7 @@ func (s *Server) spawnReconstruct(r *http.Request, sessionID string, requestedSe
 		CodecVideo:  card.TargetCodecVideo,
 		CodecAudio:  card.TargetCodecAudio,
 		Resolution:  card.TargetResolution,
-		HWAccel:     session.Opts().HWAccel,
+		HWAccel:     session.Opts().EffectiveEncoderHWAccel(),
 		ToneMapMode: string(session.Opts().ToneMapMode),
 		StartedAt:   time.Now().UTC().Format(time.RFC3339),
 		AuthUserID:  card.UserID,

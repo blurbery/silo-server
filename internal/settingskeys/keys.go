@@ -9,7 +9,7 @@
 package settingskeys
 
 // Revision is the manifest revision these bindings were generated from.
-const Revision = 11
+const Revision = 15
 
 // Setting keys, one constant per definition.
 const (
@@ -97,6 +97,8 @@ const (
 	PlayerVideoSkipBackSeconds = "player.video_skip_back_seconds"
 	// Video fast-forward interval
 	PlayerVideoSkipForwardSeconds = "player.video_skip_forward_seconds"
+	// Request titles I add to my watchlist
+	RequestsWatchlistAutoRequest = "requests.watchlist_auto_request"
 	// Search scope
 	SearchMediaScope = "search.media_scope"
 	// Match device caption settings
@@ -182,6 +184,7 @@ var Remote = []string{
 	PlayerVideoGravity,
 	PlayerVideoSkipBackSeconds,
 	PlayerVideoSkipForwardSeconds,
+	RequestsWatchlistAutoRequest,
 	SearchMediaScope,
 	UiCardOverlays,
 	UiCardOverlaysEnabled,
@@ -225,4 +228,7 @@ var ClientLocal = []string{
 // other.
 var Deprecated = []string{
 	PlaybackAutoSkipIntro,
+	UiCustomCss,
+	UiCustomThemeVars,
+	UiTheme,
 }

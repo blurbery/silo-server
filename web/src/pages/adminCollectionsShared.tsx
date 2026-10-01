@@ -1,11 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ComponentProps, FormEvent, ReactNode } from "react";
-import type {
-  CreateLibraryCollectionRequest,
-  Library,
-  LibraryCollection,
-  UpdateLibraryCollectionRequest,
-} from "@/api/types";
+import type { CreateLibraryCollectionRequest, Library, LibraryCollection } from "@/api/types";
 import { normalizeQueryDefinition } from "@/api/types";
 import {
   COLLECTION_MAX_ITEMS,
@@ -17,6 +12,7 @@ import {
   useCreateAdminCollection,
   useImportMDBListCollection,
   useImportTMDBCollection,
+  useImportTMDBListCollection,
   useImportTraktCollection,
   useUpdateAdminCollection,
 } from "@/hooks/queries/admin/collections";
@@ -25,7 +21,6 @@ import { ImageUploadField } from "@/components/ImageUploadField";
 import { CollectionDefaultSortField } from "@/components/collections/CollectionDefaultSortField";
 import {
   COLLECTION_SOURCE_ORDER,
-  changedSortConfig,
   selectValueToSortConfig,
   sortConfigToSelectValue,
 } from "@/lib/collectionSortConfig";
@@ -48,6 +43,8 @@ import {
 } from "@/components/ui/select";
 import { Download, ListPlus, Sparkles, TrendingUp } from "lucide-react";
 import { SyncScheduleField } from "@/components/collections/SyncScheduleField";
+import { TMDBListURLField } from "@/components/collections/TMDBListURLField";
+import { isValidTMDBListURL, parseTMDBListID } from "@/lib/tmdbList";
 
 export type CollectionSourceType = "manual" | "mdblist" | "tmdb" | "trakt";
 export type TMDBPreset =
@@ -60,6 +57,9 @@ export type TMDBPreset =
   | "on_the_air";
 type TMDBMediaType = "movie" | "tv" | "all";
 type TMDBTimeWindow = "day" | "week";
+// "other" covers TMDB modes the editor cannot change (template franchise and
+// discover sources); their stored source is kept as-is.
+type TMDBSourceKind = "preset" | "list" | "other";
 type TraktSourceKind = "preset" | "list";
 type TraktPreset = "trending" | "popular" | "recommended";
 type TraktMediaType = "movie" | "tv";
@@ -174,76 +174,6 @@ function getMDBListLimitValue(collection: LibraryCollection | null): string {
   return typeof limit === "number" && Number.isFinite(limit) && limit > 0 ? String(limit) : "";
 }
 
-export function changedCollectionLibraryIDs(
-  initialLibraryIDs: number[],
-  currentLibraryIDs: number[],
-): number[] | undefined {
-  if (initialLibraryIDs.length !== currentLibraryIDs.length) {
-    return currentLibraryIDs;
-  }
-  const initial = [...initialLibraryIDs].sort((a, b) => a - b);
-  const current = [...currentLibraryIDs].sort((a, b) => a - b);
-  return initial.every((libraryID, index) => libraryID === current[index])
-    ? undefined
-    : currentLibraryIDs;
-}
-
-export function buildAdminCollectionPartialUpdate({
-  collection,
-  initialLibraryIds,
-  libraryIds,
-  title,
-  description,
-  featured,
-  visibility,
-  sourceDirty,
-  sourceUrl,
-  sourceConfig,
-  syncSchedule,
-  initialDefaultSort,
-  defaultSort,
-  posterSourceUrl,
-  backdropSourceUrl,
-}: {
-  collection: LibraryCollection;
-  initialLibraryIds: number[];
-  libraryIds: number[];
-  title: string;
-  description: string;
-  featured: boolean;
-  visibility: "visible" | "hidden";
-  sourceDirty: boolean;
-  sourceUrl?: string;
-  sourceConfig?: Record<string, unknown>;
-  syncSchedule: string;
-  initialDefaultSort: string;
-  defaultSort: string;
-  posterSourceUrl: string;
-  backdropSourceUrl: string;
-}): UpdateLibraryCollectionRequest {
-  const body: UpdateLibraryCollectionRequest = {};
-  const nextLibraryIDs = changedCollectionLibraryIDs(initialLibraryIds, libraryIds);
-  if (nextLibraryIDs !== undefined) body.library_ids = nextLibraryIDs;
-  if (title !== collection.title) body.title = title;
-  if (description !== (collection.description ?? "")) body.description = description;
-  if (featured !== collection.featured) body.featured = featured;
-  if (visibility !== collection.visibility) body.visibility = visibility;
-  if (sourceDirty) {
-    body.source_url = sourceUrl;
-    body.source_config = sourceConfig;
-  }
-  if (syncSchedule.trim() !== (collection.sync_schedule ?? "")) {
-    body.sync_schedule = syncSchedule.trim();
-  }
-  const nextSortConfig = changedSortConfig(initialDefaultSort, defaultSort);
-  if (nextSortConfig !== undefined) body.sort_config = nextSortConfig;
-  const nextPosterSourceURL = posterSourceUrl.trim();
-  if (nextPosterSourceURL) body.poster_source_url = nextPosterSourceURL;
-  const nextBackdropSourceURL = backdropSourceUrl.trim();
-  if (nextBackdropSourceURL) body.backdrop_source_url = nextBackdropSourceURL;
-  return body;
-}
-
 function getTMDBPresetLabel(preset: TMDBPreset): string {
   switch (preset) {
     case "trending":
@@ -345,6 +275,36 @@ export function parseTMDBPresetSourceConfig(
       : "";
 
   return { preset, mediaType, timeWindow, limit };
+}
+
+function tmdbSourceKindOf(collection: LibraryCollection | null): TMDBSourceKind {
+  const mode = collection?.source_config?.mode;
+  if (mode === "tmdb_list") return "list";
+  if (mode === undefined || mode === "" || mode === "tmdb_preset") return "preset";
+  return "other";
+}
+
+// Only a list collection has a list URL; a preset's source_url is an internal
+// tmdb:// identifier that must not seed the list field when switching modes.
+function parseTMDBListSourceURL(collection: LibraryCollection | null): string {
+  if (tmdbSourceKindOf(collection) !== "list") return "";
+  const url = collection?.source_config?.url;
+  if (typeof url === "string" && url.trim().length > 0) return url;
+  return collection?.source_url ?? "";
+}
+
+function buildTMDBListSourceInput({ listUrl, limit }: { listUrl: string; limit: string }): {
+  source_url: string;
+  source_config: Record<string, unknown>;
+} {
+  const id = parseTMDBListID(listUrl);
+  const url = id === null ? listUrl.trim() : `https://www.themoviedb.org/list/${id}`;
+  const parsedLimit = parseOptionalPositiveInteger(limit);
+  const source_config: Record<string, unknown> = { mode: "tmdb_list", url };
+  if (parsedLimit !== undefined) {
+    source_config.limit = parsedLimit;
+  }
+  return { source_url: url, source_config };
 }
 
 export function parseTraktPresetSourceConfig(
@@ -740,7 +700,12 @@ export function SourceTypeSelector({
   options.push(
     { type: "manual", icon: ListPlus, label: "Manual", subtitle: "Curate items by hand" },
     { type: "mdblist", icon: Download, label: "MDBList", subtitle: "Sync from an MDBList URL" },
-    { type: "tmdb", icon: TrendingUp, label: "TMDB", subtitle: "Auto-populate from TMDB presets" },
+    {
+      type: "tmdb",
+      icon: TrendingUp,
+      label: "TMDB",
+      subtitle: "Auto-populate from TMDB presets or a public list",
+    },
   );
 
   return (
@@ -807,11 +772,14 @@ export function TMDBPresetForm({
   onClose: () => void;
 }) {
   const mutation = useImportTMDBCollection();
+  const listMutation = useImportTMDBListCollection();
   const [libraryIds, setLibraryIds] = useState<number[]>(() =>
     initialLibraryId ? [initialLibraryId] : libraries[0]?.id ? [libraries[0].id] : [],
   );
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [sourceKind, setSourceKind] = useState<Exclude<TMDBSourceKind, "other">>("preset");
+  const [listUrl, setListUrl] = useState("");
   const [preset, setPreset] = useState<TMDBPreset>("trending");
   const [timeWindow, setTimeWindow] = useState<TMDBTimeWindow>("day");
   const [mediaType, setMediaType] = useState<TMDBMediaType>("all");
@@ -827,7 +795,10 @@ export function TMDBPresetForm({
   const hasInvalidLimit = limit.trim().length > 0 && parsedLimit === undefined;
   const allowedMediaTypes = getTMDBAllowedMediaTypes(preset);
   const normalizedMediaType = normalizeTMDBPresetMediaType(preset, mediaType);
-  const eligibility = libraryEligibilityForMediaKind(normalizedMediaType);
+  const isListMode = sourceKind === "list";
+  const listID = parseTMDBListID(listUrl);
+  const eligibility = libraryEligibilityForMediaKind(isListMode ? "mixed" : normalizedMediaType);
+  const isPending = mutation.isPending || listMutation.isPending;
 
   useEffect(() => {
     if (mediaType !== normalizedMediaType) {
@@ -837,6 +808,28 @@ export function TMDBPresetForm({
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (isListMode) {
+      listMutation.mutate(
+        {
+          body: {
+            library_ids: libraryIds,
+            title,
+            description,
+            url: listUrl.trim(),
+            limit: parsedLimit,
+            featured,
+            poster_source_url: posterSourceUrl.trim() || undefined,
+            backdrop_source_url: backdropSourceUrl.trim() || undefined,
+            sync_schedule: tmdbSyncSchedule.trim() || undefined,
+            sort_config: selectValueToSortConfig(tmdbDefaultSort),
+          },
+          poster: posterFile,
+          backdrop: backdropFile,
+        },
+        { onSuccess: onClose },
+      );
+      return;
+    }
     mutation.mutate(
       {
         body: {
@@ -863,27 +856,37 @@ export function TMDBPresetForm({
   return (
     <ExternalEditorShell
       title="TMDB Collection"
-      description="Choose a TMDB preset once, then let sync keep the shelf fresh."
+      description="Choose a TMDB preset or public list once, then let sync keep the shelf fresh."
       summary={
         <Card className="gap-0">
           <CardHeader>
             <CardTitle>Import Summary</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <SummaryRow label="Preset" value={getTMDBPresetLabel(preset)} />
-            {tmdbPresetNeedsTimeWindow(preset) ? (
-              <SummaryRow label="Window" value={timeWindow === "day" ? "Daily" : "Weekly"} />
-            ) : null}
-            <SummaryRow
-              label="Media"
-              value={
-                normalizedMediaType === "all"
-                  ? "All"
-                  : normalizedMediaType === "tv"
-                    ? "TV Shows"
-                    : "Movies"
-              }
-            />
+            {isListMode ? (
+              <>
+                <SummaryRow label="Source" value="Public list" />
+                <SummaryRow label="List" value={listID === null ? "—" : `#${listID}`} />
+                <SummaryRow label="Media" value="Movies + TV" />
+              </>
+            ) : (
+              <>
+                <SummaryRow label="Preset" value={getTMDBPresetLabel(preset)} />
+                {tmdbPresetNeedsTimeWindow(preset) ? (
+                  <SummaryRow label="Window" value={timeWindow === "day" ? "Daily" : "Weekly"} />
+                ) : null}
+                <SummaryRow
+                  label="Media"
+                  value={
+                    normalizedMediaType === "all"
+                      ? "All"
+                      : normalizedMediaType === "tv"
+                        ? "TV Shows"
+                        : "Movies"
+                  }
+                />
+              </>
+            )}
             <SummaryRow label="Featured" value={featured ? "Yes" : "No"} />
           </CardContent>
         </Card>
@@ -922,65 +925,90 @@ export function TMDBPresetForm({
           />
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-2">
-            <Label>Preset</Label>
-            <Select value={preset} onValueChange={(v) => setPreset(v as TMDBPreset)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="trending">Trending</SelectItem>
-                <SelectItem value="popular">Popular</SelectItem>
-                <SelectItem value="top_rated">Top Rated</SelectItem>
-                <SelectItem value="now_playing">Now Playing</SelectItem>
-                <SelectItem value="upcoming">Upcoming</SelectItem>
-                <SelectItem value="airing_today">Airing Today</SelectItem>
-                <SelectItem value="on_the_air">On The Air</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          {tmdbPresetNeedsTimeWindow(preset) ? (
-            <div className="space-y-2">
-              <Label>Time Window</Label>
-              <Select value={timeWindow} onValueChange={(v) => setTimeWindow(v as TMDBTimeWindow)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="day">Daily</SelectItem>
-                  <SelectItem value="week">Weekly</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          ) : null}
+        <div className="space-y-2">
+          <Label htmlFor="tmdb-source">Source</Label>
+          <Select
+            value={sourceKind}
+            onValueChange={(v) => setSourceKind(v as Exclude<TMDBSourceKind, "other">)}
+          >
+            <SelectTrigger id="tmdb-source">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="preset">Preset (Trending, Popular, Top Rated…)</SelectItem>
+              <SelectItem value="list">Public list (themoviedb.org URL)</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-2">
-            <Label>Media Type</Label>
-            <Select
-              value={normalizedMediaType}
-              onValueChange={(v) => setMediaType(v as TMDBMediaType)}
-              disabled={allowedMediaTypes.length === 1}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {allowedMediaTypes.includes("all") ? (
-                  <SelectItem value="all">All</SelectItem>
-                ) : null}
-                {allowedMediaTypes.includes("movie") ? (
-                  <SelectItem value="movie">Movies</SelectItem>
-                ) : null}
-                {allowedMediaTypes.includes("tv") ? (
-                  <SelectItem value="tv">TV Shows</SelectItem>
-                ) : null}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
+        {isListMode ? (
+          <TMDBListURLField id="tmdb-list-url" value={listUrl} onChange={setListUrl} />
+        ) : (
+          <>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Preset</Label>
+                <Select value={preset} onValueChange={(v) => setPreset(v as TMDBPreset)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="trending">Trending</SelectItem>
+                    <SelectItem value="popular">Popular</SelectItem>
+                    <SelectItem value="top_rated">Top Rated</SelectItem>
+                    <SelectItem value="now_playing">Now Playing</SelectItem>
+                    <SelectItem value="upcoming">Upcoming</SelectItem>
+                    <SelectItem value="airing_today">Airing Today</SelectItem>
+                    <SelectItem value="on_the_air">On The Air</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {tmdbPresetNeedsTimeWindow(preset) ? (
+                <div className="space-y-2">
+                  <Label>Time Window</Label>
+                  <Select
+                    value={timeWindow}
+                    onValueChange={(v) => setTimeWindow(v as TMDBTimeWindow)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="day">Daily</SelectItem>
+                      <SelectItem value="week">Weekly</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Media Type</Label>
+                <Select
+                  value={normalizedMediaType}
+                  onValueChange={(v) => setMediaType(v as TMDBMediaType)}
+                  disabled={allowedMediaTypes.length === 1}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allowedMediaTypes.includes("all") ? (
+                      <SelectItem value="all">All</SelectItem>
+                    ) : null}
+                    {allowedMediaTypes.includes("movie") ? (
+                      <SelectItem value="movie">Movies</SelectItem>
+                    ) : null}
+                    {allowedMediaTypes.includes("tv") ? (
+                      <SelectItem value="tv">TV Shows</SelectItem>
+                    ) : null}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </>
+        )}
 
         <div className="space-y-2">
           <Label htmlFor="tmdb-limit">Max Items</Label>
@@ -993,7 +1021,7 @@ export function TMDBPresetForm({
             inputMode="numeric"
             value={limit}
             onChange={(event) => setLimit(event.target.value)}
-            placeholder="Defaults to 20"
+            placeholder={isListMode ? "Whole list (up to 500)" : "Defaults to 20"}
           />
         </div>
 
@@ -1035,9 +1063,14 @@ export function TMDBPresetForm({
         <Button
           type="submit"
           className="w-full"
-          disabled={mutation.isPending || libraryIds.length === 0 || hasInvalidLimit}
+          disabled={
+            isPending ||
+            libraryIds.length === 0 ||
+            hasInvalidLimit ||
+            (isListMode && listID === null)
+          }
         >
-          {mutation.isPending ? "Importing..." : "Import TMDB Collection"}
+          {isPending ? "Importing..." : isListMode ? "Import TMDB List" : "Import TMDB Collection"}
         </Button>
       </form>
     </ExternalEditorShell>
@@ -1516,17 +1549,17 @@ export function CollectionEditForm({
   initialLibraryId: number | null;
   onClose: () => void;
 }) {
-  const initialLibraryIds = (() => {
+  const [libraryIds, setLibraryIds] = useState<number[]>(() => {
     if (collection.library_ids && collection.library_ids.length > 0) return collection.library_ids;
     if (collection.library_id) return [collection.library_id];
     if (initialLibraryId) return [initialLibraryId];
     return libraries[0]?.id ? [libraries[0].id] : [];
-  })();
-  const [libraryIds, setLibraryIds] = useState<number[]>(initialLibraryIds);
+  });
   const [title, setTitle] = useState(collection.title ?? "");
   const [description, setDescription] = useState(collection.description ?? "");
-  const initialDefaultSort = sortConfigToSelectValue(collection.sort_config);
-  const [defaultSort, setDefaultSort] = useState<string>(initialDefaultSort);
+  const [defaultSort, setDefaultSort] = useState<string>(() =>
+    sortConfigToSelectValue(collection.sort_config),
+  );
   const [featured, setFeatured] = useState(collection.featured ?? false);
   const [visibility, setVisibility] = useState<"visible" | "hidden">(collection.visibility);
   const [posterFile, setPosterFile] = useState<File | null>(null);
@@ -1545,6 +1578,10 @@ export function CollectionEditForm({
   const [tmdbTimeWindow, setTmdbTimeWindow] = useState<TMDBTimeWindow>(tmdbDefaults.timeWindow);
   const [tmdbMediaType, setTmdbMediaType] = useState<TMDBMediaType>(tmdbDefaults.mediaType);
   const [tmdbLimit, setTmdbLimit] = useState(tmdbDefaults.limit);
+  const [tmdbSourceKind, setTmdbSourceKind] = useState<TMDBSourceKind>(() =>
+    tmdbSourceKindOf(collection),
+  );
+  const [tmdbListUrl, setTmdbListUrl] = useState(() => parseTMDBListSourceURL(collection));
   const traktDefaults = parseTraktPresetSourceConfig(collection);
   const [traktSourceKind, setTraktSourceKind] = useState<TraktSourceKind>(traktDefaults.sourceKind);
   const [traktListUrl, setTraktListUrl] = useState(traktDefaults.listUrl);
@@ -1569,8 +1606,14 @@ export function CollectionEditForm({
   const missingTraktListURL = isTraktListMode && traktListUrl.trim().length === 0;
   const allowedTMDBMediaTypes = getTMDBAllowedMediaTypes(tmdbPreset);
   const normalizedTMDBMediaType = normalizeTMDBPresetMediaType(tmdbPreset, tmdbMediaType);
+  const invalidTMDBListURL =
+    isTMDBCollection && tmdbSourceKind === "list" && !isValidTMDBListURL(tmdbListUrl);
   const editEligibility: LibraryEligibility | undefined = isTMDBCollection
-    ? libraryEligibilityForMediaKind(normalizedTMDBMediaType)
+    ? tmdbSourceKind === "other"
+      ? undefined
+      : libraryEligibilityForMediaKind(
+          tmdbSourceKind === "list" ? "mixed" : normalizedTMDBMediaType,
+        )
     : isTraktCollection
       ? libraryEligibilityForMediaKind(isTraktListMode ? "mixed" : traktMediaType)
       : undefined;
@@ -1593,24 +1636,19 @@ export function CollectionEditForm({
 
     let sourceConfig: Record<string, unknown> | undefined = collection.source_config;
     let sourceUrlValue: string | undefined;
-    let sourceDirty = false;
 
     if (isMDBListCollection) {
       sourceUrlValue = sourceUrl;
-      sourceDirty =
-        sourceUrl !== (collection.source_url ?? "") ||
-        sourceLimit !== getMDBListLimitValue(collection);
       sourceConfig = {
         mode: "mdblist_json",
         url: sourceUrl,
         ...(parsedSourceLimit ? { limit: parsedSourceLimit } : {}),
       };
-    } else if (isTMDBCollection) {
-      sourceDirty =
-        tmdbPreset !== tmdbDefaults.preset ||
-        normalizedTMDBMediaType !== tmdbDefaults.mediaType ||
-        tmdbTimeWindow !== tmdbDefaults.timeWindow ||
-        tmdbLimit !== tmdbDefaults.limit;
+    } else if (isTMDBCollection && tmdbSourceKind === "list") {
+      const tmdbListSource = buildTMDBListSourceInput({ listUrl: tmdbListUrl, limit: tmdbLimit });
+      sourceUrlValue = tmdbListSource.source_url;
+      sourceConfig = tmdbListSource.source_config;
+    } else if (isTMDBCollection && tmdbSourceKind === "preset") {
       const tmdbSource = buildTMDBPresetSourceInput({
         preset: tmdbPreset,
         mediaType: normalizedTMDBMediaType,
@@ -1620,13 +1658,6 @@ export function CollectionEditForm({
       sourceUrlValue = tmdbSource.source_url;
       sourceConfig = tmdbSource.source_config;
     } else if (isTraktCollection) {
-      sourceDirty =
-        traktSourceKind !== traktDefaults.sourceKind ||
-        traktListUrl !== traktDefaults.listUrl ||
-        traktPreset !== traktDefaults.preset ||
-        traktMediaType !== traktDefaults.mediaType ||
-        traktProfileId !== traktDefaults.profileId ||
-        traktLimit !== traktDefaults.limit;
       if (isTraktListMode) {
         const traktListSource = buildTraktListSourceInput({
           listUrl: traktListUrl,
@@ -1650,23 +1681,20 @@ export function CollectionEditForm({
       }
     }
 
-    const body = buildAdminCollectionPartialUpdate({
-      collection,
-      initialLibraryIds,
-      libraryIds,
+    const body: CreateLibraryCollectionRequest = {
+      library_ids: libraryIds,
       title,
       description,
       featured,
       visibility,
-      sourceDirty,
-      sourceUrl: sourceUrlValue,
-      sourceConfig,
-      syncSchedule: editSyncSchedule,
-      initialDefaultSort,
-      defaultSort,
-      posterSourceUrl,
-      backdropSourceUrl,
-    });
+      collection_type: collection.collection_type,
+      poster_source_url: posterSourceUrl.trim() || undefined,
+      backdrop_source_url: backdropSourceUrl.trim() || undefined,
+      source_url: sourceUrlValue,
+      source_config: sourceConfig,
+      sync_schedule: editSyncSchedule.trim(),
+      sort_config: selectValueToSortConfig(defaultSort),
+    };
 
     updateMutation.mutate(
       {
@@ -1835,79 +1863,130 @@ export function CollectionEditForm({
 
         <SyncScheduleField value={editSyncSchedule} onChange={setEditSyncSchedule} />
 
-        {isTMDBCollection ? (
-          <div className="grid gap-4 md:grid-cols-2">
+        {isTMDBCollection && tmdbSourceKind === "other" ? (
+          <p className="text-muted-foreground border-border rounded-lg border px-4 py-3 text-sm">
+            This collection follows a TMDB franchise or discover filter from a template. Its source
+            can&apos;t be changed here; saving keeps it as it is.
+          </p>
+        ) : null}
+
+        {isTMDBCollection && tmdbSourceKind !== "other" ? (
+          <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Preset</Label>
-              <Select value={tmdbPreset} onValueChange={(v) => setTmdbPreset(v as TMDBPreset)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="trending">Trending</SelectItem>
-                  <SelectItem value="popular">Popular</SelectItem>
-                  <SelectItem value="top_rated">Top Rated</SelectItem>
-                  <SelectItem value="now_playing">Now Playing</SelectItem>
-                  <SelectItem value="upcoming">Upcoming</SelectItem>
-                  <SelectItem value="airing_today">Airing Today</SelectItem>
-                  <SelectItem value="on_the_air">On The Air</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {tmdbPresetNeedsTimeWindow(tmdbPreset) ? (
-              <div className="space-y-2">
-                <Label>Time Window</Label>
-                <Select
-                  value={tmdbTimeWindow}
-                  onValueChange={(v) => setTmdbTimeWindow(v as TMDBTimeWindow)}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="day">Daily</SelectItem>
-                    <SelectItem value="week">Weekly</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            ) : null}
-            <div className="space-y-2">
-              <Label>Media Type</Label>
+              <Label htmlFor="collection-tmdb-source">Source</Label>
               <Select
-                value={normalizedTMDBMediaType}
-                onValueChange={(v) => setTmdbMediaType(v as TMDBMediaType)}
-                disabled={allowedTMDBMediaTypes.length === 1}
+                value={tmdbSourceKind}
+                onValueChange={(v) => setTmdbSourceKind(v as TMDBSourceKind)}
               >
-                <SelectTrigger>
+                <SelectTrigger id="collection-tmdb-source">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {allowedTMDBMediaTypes.includes("all") ? (
-                    <SelectItem value="all">All</SelectItem>
-                  ) : null}
-                  {allowedTMDBMediaTypes.includes("movie") ? (
-                    <SelectItem value="movie">Movies</SelectItem>
-                  ) : null}
-                  {allowedTMDBMediaTypes.includes("tv") ? (
-                    <SelectItem value="tv">TV Shows</SelectItem>
-                  ) : null}
+                  <SelectItem value="preset">Preset (Trending, Popular, Top Rated…)</SelectItem>
+                  <SelectItem value="list">Public list (themoviedb.org URL)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="collection-tmdb-limit">Max Items</Label>
-              <Input
-                id="collection-tmdb-limit"
-                type="number"
-                min={1}
-                max={COLLECTION_MAX_ITEMS}
-                step={1}
-                inputMode="numeric"
-                value={tmdbLimit}
-                onChange={(event) => setTmdbLimit(event.target.value)}
-                placeholder="Defaults to 20"
-              />
-            </div>
+
+            {tmdbSourceKind === "list" ? (
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="md:col-span-2">
+                  <TMDBListURLField
+                    id="collection-tmdb-list-url"
+                    value={tmdbListUrl}
+                    onChange={setTmdbListUrl}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="collection-tmdb-list-limit">Max Items</Label>
+                  <Input
+                    id="collection-tmdb-list-limit"
+                    type="number"
+                    min={1}
+                    max={COLLECTION_MAX_ITEMS}
+                    step={1}
+                    inputMode="numeric"
+                    value={tmdbLimit}
+                    onChange={(event) => setTmdbLimit(event.target.value)}
+                    placeholder="Whole list (up to 500)"
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Preset</Label>
+                  <Select value={tmdbPreset} onValueChange={(v) => setTmdbPreset(v as TMDBPreset)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="trending">Trending</SelectItem>
+                      <SelectItem value="popular">Popular</SelectItem>
+                      <SelectItem value="top_rated">Top Rated</SelectItem>
+                      <SelectItem value="now_playing">Now Playing</SelectItem>
+                      <SelectItem value="upcoming">Upcoming</SelectItem>
+                      <SelectItem value="airing_today">Airing Today</SelectItem>
+                      <SelectItem value="on_the_air">On The Air</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {tmdbPresetNeedsTimeWindow(tmdbPreset) ? (
+                  <div className="space-y-2">
+                    <Label>Time Window</Label>
+                    <Select
+                      value={tmdbTimeWindow}
+                      onValueChange={(v) => setTmdbTimeWindow(v as TMDBTimeWindow)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="day">Daily</SelectItem>
+                        <SelectItem value="week">Weekly</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
+                <div className="space-y-2">
+                  <Label>Media Type</Label>
+                  <Select
+                    value={normalizedTMDBMediaType}
+                    onValueChange={(v) => setTmdbMediaType(v as TMDBMediaType)}
+                    disabled={allowedTMDBMediaTypes.length === 1}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {allowedTMDBMediaTypes.includes("all") ? (
+                        <SelectItem value="all">All</SelectItem>
+                      ) : null}
+                      {allowedTMDBMediaTypes.includes("movie") ? (
+                        <SelectItem value="movie">Movies</SelectItem>
+                      ) : null}
+                      {allowedTMDBMediaTypes.includes("tv") ? (
+                        <SelectItem value="tv">TV Shows</SelectItem>
+                      ) : null}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="collection-tmdb-limit">Max Items</Label>
+                  <Input
+                    id="collection-tmdb-limit"
+                    type="number"
+                    min={1}
+                    max={COLLECTION_MAX_ITEMS}
+                    step={1}
+                    inputMode="numeric"
+                    value={tmdbLimit}
+                    onChange={(event) => setTmdbLimit(event.target.value)}
+                    placeholder="Defaults to 20"
+                  />
+                </div>
+              </div>
+            )}
           </div>
         ) : null}
 
@@ -2067,6 +2146,7 @@ export function CollectionEditForm({
             hasInvalidSourceLimit ||
             missingSourceURL ||
             hasInvalidTmdbLimit ||
+            invalidTMDBListURL ||
             hasInvalidTraktLimit ||
             missingTraktListURL ||
             missingTraktProfile

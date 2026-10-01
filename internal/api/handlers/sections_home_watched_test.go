@@ -84,6 +84,52 @@ func TestFilterWatchedHomeSectionItemsKeepsUnknownState(t *testing.T) {
 	}
 }
 
+func TestHomeHideWatchedPreservesActiveRewatch(t *testing.T) {
+	for _, itemType := range []string{"movie", "episode", "audiobook"} {
+		t.Run(itemType, func(t *testing.T) {
+			ctx := newAuthorizedPlaybackContext()
+			store := newPlaybackTestStore(t)
+			thresholds := userstore.ProgressThresholds{WatchedPct: 90, MinResumePct: 5}
+			for _, position := range []float64{7000, 900} {
+				if err := store.SetProgress(ctx, "profile-1", "rewatch", position, 7200, thresholds); err != nil {
+					t.Fatal(err)
+				}
+			}
+			progress, err := store.ListProgress(ctx, "profile-1", "in_progress", 20, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(progress) != 1 || !progress[0].Completed || progress[0].PositionSeconds != 900 {
+				t.Fatalf("expected a watched item with an active resume point, got %+v", progress)
+			}
+
+			handler := &SectionHandler{StoreProvider: testUserStoreProvider{store: store}}
+			resolved := []sections.ResolvedSection{
+				{ID: "continue", SectionType: sections.SectionContinueWatching, ItemLimit: 20},
+				{ID: "recent", SectionType: sections.SectionRecentlyAdded, ItemLimit: 20},
+			}
+			if itemType == "audiobook" {
+				resolved[0].Config = json.RawMessage(`{"continue_type":"listening"}`)
+			}
+			item := &models.MediaItem{ContentID: "rewatch", Type: itemType}
+			input := []sections.SectionWithItems{
+				{ResolvedSection: resolved[0], Items: []*models.MediaItem{item}, TotalCount: 1},
+				{ResolvedSection: resolved[1], Items: []*models.MediaItem{item}, TotalCount: 1},
+			}
+			filtered, states := handler.filterWatchedHomeSections(ctx, input, resolved)
+			if !states[item.ContentID].Played {
+				t.Fatal("rewatch should retain the watched flag")
+			}
+			if len(filtered[0].Items) != 1 {
+				t.Fatal("active rewatch disappeared from the resume section")
+			}
+			if len(filtered[1].Items) != 0 {
+				t.Fatal("watched item remained in Recently Added")
+			}
+		})
+	}
+}
+
 func TestFilterWatchedHomeSectionItemsRefillsDisplayLimit(t *testing.T) {
 	items := make([]*models.MediaItem, 0, 23)
 	states := make(map[string]*itemUserStateResponse, 23)
@@ -122,16 +168,17 @@ func TestHomeSectionsForFetchExpandsOnlyFilteredSections(t *testing.T) {
 		{ID: "ordinary", SectionType: sections.SectionRecentlyAdded, ItemLimit: 20},
 		{ID: "featured", SectionType: sections.SectionRecentlyAdded, Featured: true, ItemLimit: 20},
 		{ID: "most-watched", SectionType: sections.SectionMostWatched, ItemLimit: 20},
+		{ID: "continue", SectionType: sections.SectionContinueWatching, ItemLimit: 20},
 		{ID: "large", SectionType: sections.SectionRecentlyAdded, ItemLimit: 250},
 	}
 
-	unchanged := homeSectionsForFetch(resolved, sectionResponseOptions{})
+	unchanged := homeSectionsForFetch(resolved, false)
 	if unchanged[0].ItemLimit != 20 {
 		t.Fatalf("disabled preference changed limit to %d", unchanged[0].ItemLimit)
 	}
 
-	expanded := homeSectionsForFetch(resolved, sectionResponseOptions{hideWatchedHomeItems: true})
-	wantLimits := []int{100, 20, 20, 250}
+	expanded := homeSectionsForFetch(resolved, true)
+	wantLimits := []int{100, 20, 20, 20, 250}
 	for i, want := range wantLimits {
 		if got := expanded[i].ItemLimit; got != want {
 			t.Errorf("section %q fetch limit = %d, want %d", expanded[i].ID, got, want)
@@ -147,13 +194,55 @@ func TestHomeWatchedCandidateLimitCapsExpandedWindow(t *testing.T) {
 		display int
 		want    int
 	}{
-		{display: 0, want: 0},
+		// No configured limit means the fetcher's default of 20.
+		{display: 0, want: 100},
+		{display: -1, want: 100},
 		{display: 20, want: 100},
 		{display: 50, want: 200},
 		{display: 250, want: 250},
 	} {
 		if got := homeWatchedCandidateLimit(test.display); got != test.want {
 			t.Errorf("homeWatchedCandidateLimit(%d) = %d, want %d", test.display, got, test.want)
+		}
+	}
+}
+
+func TestDropEmptyWatchedHomeSections(t *testing.T) {
+	input := []sections.SectionWithItems{
+		{
+			ResolvedSection: sections.ResolvedSection{ID: "filtered", SectionType: sections.SectionRecentlyAdded},
+			TotalCount:      10,
+		},
+		{
+			ResolvedSection: sections.ResolvedSection{ID: "naturally-empty", SectionType: sections.SectionRecentlyAdded},
+		},
+		{
+			ResolvedSection: sections.ResolvedSection{
+				ID:          "featured",
+				SectionType: sections.SectionRecentlyAdded,
+				Featured:    true,
+			},
+			TotalCount: 10,
+		},
+		{
+			ResolvedSection: sections.ResolvedSection{ID: "most-watched", SectionType: sections.SectionMostWatched},
+			TotalCount:      10,
+		},
+		{
+			ResolvedSection: sections.ResolvedSection{ID: "non-empty", SectionType: sections.SectionRecentlyAdded},
+			Items:           []*models.MediaItem{{ContentID: "visible"}},
+			TotalCount:      10,
+		},
+	}
+
+	filtered := dropEmptyWatchedHomeSections(input)
+	wantIDs := []string{"naturally-empty", "featured", "most-watched", "non-empty"}
+	if len(filtered) != len(wantIDs) {
+		t.Fatalf("filtered sections = %d, want %d", len(filtered), len(wantIDs))
+	}
+	for i, want := range wantIDs {
+		if got := filtered[i].ID; got != want {
+			t.Errorf("filtered[%d].ID = %q, want %q", i, got, want)
 		}
 	}
 }
@@ -226,8 +315,13 @@ func TestHomePreferenceFiltersOnlyHomeResponses(t *testing.T) {
 	reqCtx := apimw.SetClaims(req.Context(), &auth.Claims{UserID: 1})
 	req = req.WithContext(apimw.SetProfileID(reqCtx, "profile-1"))
 
-	filtered := handler.prepareHomeSections(req.Context(), sectionItems, handler.homeOptions(req.Context()))
-	home := handler.buildSections(req.Context(), filtered, nil, requestAccessFilter(req), requestImageSize(req))
+	ctx = req.Context()
+	if !handler.homeHidesWatchedItems(ctx) {
+		t.Fatal("the profile's Home preference did not resolve to on")
+	}
+	resolved := []sections.ResolvedSection{sectionItems[0].ResolvedSection}
+	prepared, states := handler.filterWatchedHomeSections(ctx, sectionItems, resolved)
+	home := handler.buildSectionsWithUserStates(ctx, prepared, nil, requestAccessFilter(req), requestImageSize(req), states)
 	if got := home.Sections[0].Items; len(got) != 1 || got[0].ContentID != "unwatched" {
 		t.Fatalf("Home response items = %#v, want only unwatched", got)
 	}
@@ -235,5 +329,24 @@ func TestHomePreferenceFiltersOnlyHomeResponses(t *testing.T) {
 	library := handler.buildSectionsResponse(req, sectionItems, nil)
 	if got := len(library.Sections[0].Items); got != 2 {
 		t.Fatalf("non-Home response has %d items, want 2", got)
+	}
+}
+
+// A section with no configured item limit shows the fetcher's default of 20,
+// so the widened candidate window is cut back to 20, not left unbounded.
+func TestFilterWatchedHomeSectionItemsBoundsUnsetLimitToDefault(t *testing.T) {
+	items := make([]*models.MediaItem, 0, 100)
+	for i := 0; i < 100; i++ {
+		items = append(items, &models.MediaItem{ContentID: fmt.Sprintf("item-%03d", i+1)})
+	}
+	input := []sections.SectionWithItems{{
+		ResolvedSection: sections.ResolvedSection{ID: "ordinary", SectionType: sections.SectionRecentlyAdded},
+		Items:           items,
+		TotalCount:      100,
+	}}
+
+	filtered := filterWatchedHomeSectionItems(input, nil)
+	if got := len(filtered[0].Items); got != homeSectionDefaultItemLimit {
+		t.Fatalf("filtered section has %d items, want the default %d", got, homeSectionDefaultItemLimit)
 	}
 }

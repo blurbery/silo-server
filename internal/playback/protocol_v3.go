@@ -113,6 +113,9 @@ const (
 	// node that approves theme files as progressive AAC inputs.
 	TransportFeatureThemeAudioEgressV1    = "theme_audio_egress_v1"
 	TransportFeatureThemeAudioExecutionV1 = "theme_audio_execution_v1"
+	// A transcode node that executes the multi-track prepared-download layout
+	// (PreparedTracksRecipeVersion).
+	TransportFeaturePreparedTracksV1 = "prepared_tracks_v1"
 )
 
 // Degradation warning codes reported by playback plans.
@@ -240,11 +243,13 @@ const (
 const (
 	TransformationAudioToAACV3      = "audio_to_aac"
 	TransformationVideoToH264V3     = "video_to_h264"
+	TransformationVideoToHEVCV3     = "video_to_hevc"
 	TransformationServerDV7HDR10V3  = "server_dv7_to_hdr10"
 	TransformationServerDV8BaseV3   = "server_dv8_to_compatible_base"
 	TransformationHDRToSDRToneMapV3 = "hdr_to_sdr_tonemap"
 
 	TransformationVideoToH264RecipeVersionV3     = "2"
+	TransformationVideoToHEVCRecipeVersionV3     = "1"
 	TransformationAudioToAACRecipeVersionV3      = "4"
 	TransformationServerDV7HDR10RecipeVersionV3  = "3"
 	TransformationServerDV8BaseRecipeVersionV3   = "2"
@@ -267,6 +272,7 @@ const (
 const (
 	ClaimAudioDecodeV3                = "audio_decode"
 	ClaimH264DecodeV3                 = "h264_decode"
+	ClaimHEVCDecodeV3                 = "hevc_decode"
 	ClaimDolbyVisionMetadataRemovedV3 = "dolby_vision_metadata_removed"
 	ClaimHDR10BaseLayerPreservedV3    = "hdr10_base_layer_preserved"
 	ClaimHLGBaseLayerPreservedV3      = "hlg_base_layer_preserved"
