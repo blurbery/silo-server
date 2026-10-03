@@ -69,7 +69,7 @@ describe("CastCarousel", () => {
     expect(markup).toContain(">Second Director<");
     expect(markup).not.toContain("Third Director");
     expect(markup).not.toContain("Some Producer");
-    expect(markup).toContain("w-[140px]");
+    expect(markup).not.toContain("w-[140px]");
     expect(markup).toContain(">Writers<");
     expect(markup).toContain(">Cast<");
     const order = ["Denis Villeneuve", ">Writers<", "Hampton Fancher", ">Cast<", "Actor 0"].map(

@@ -38,7 +38,6 @@ interface CreditCardData {
 interface CreditSection {
   key: string;
   label: string;
-  featured: boolean;
   cards: CreditCardData[];
 }
 
@@ -76,14 +75,13 @@ function CastCarousel({
         if (cards.length === group.max) break;
       }
       if (cards.length > 0) {
-        out.push({ key: group.label, label: group.label, featured: !!group.featured, cards });
+        out.push({ key: group.label, label: group.label, cards });
       }
     }
     if (visible.length > 0) {
       out.push({
         key: "cast",
         label: "Cast",
-        featured: false,
         cards: visible.map((member) => ({
           name: member.name,
           subtitle: member.character,
@@ -153,7 +151,7 @@ function CastCarousel({
                   key={`${section.key}-${card.personId || card.name}-${i}`}
                   className="embla__slide shrink-0"
                 >
-                  <CastCard data={card} featured={section.featured} />
+                  <CastCard data={card} />
                 </li>
               ))}
             </Fragment>
@@ -185,7 +183,7 @@ function PrefetchCastPeople({ personIds }: { personIds: string[] }) {
   return null;
 }
 
-function CastCard({ data: member, featured }: { data: CreditCardData; featured: boolean }) {
+function CastCard({ data: member }: { data: CreditCardData }) {
   const href = member.personId ? buildPersonCatalogHref(member.personId) : null;
   const inner = (
     <>
@@ -215,13 +213,10 @@ function CastCard({ data: member, featured }: { data: CreditCardData; featured: 
 
   if (href) {
     return (
-      <ViewTransitionLink
-        to={href}
-        className={cn("group/cast block", featured ? "w-[140px]" : "w-[110px]")}
-      >
+      <ViewTransitionLink to={href} className="group/cast block w-[110px]">
         {inner}
       </ViewTransitionLink>
     );
   }
-  return <div className={cn("group/cast", featured ? "w-[140px]" : "w-[110px]")}>{inner}</div>;
+  return <div className="group/cast w-[110px]">{inner}</div>;
 }
