@@ -8,8 +8,6 @@ export interface CrewGroup {
   members: CrewMember[];
   /** Most cards shown for this group. */
   max: number;
-  /** Shows the group's cards larger, for the headline credit. */
-  featured?: boolean;
 }
 
 /**
@@ -26,7 +24,6 @@ export function buildCrewGroups(crew: CrewMember[], leadRole: "Director" | "Crea
       role: leadRole,
       members: leads,
       max: 2,
-      featured: true,
     },
     {
       label: "Writers",
