@@ -132,6 +132,45 @@ func TestFetchSeasonImagesListsSpecialsBeforeShowFallbacks(t *testing.T) {
 	}
 }
 
+func TestFetchSeasonImagesPrefersLaterExactSpecialsOverEarlierShowFallback(t *testing.T) {
+	specials := 0
+	legacy := &seasonImageProvider{
+		slug: "legacy",
+		itemImages: []RemoteImage{
+			{URL: "shared://specials.jpg", Type: ImagePoster, Rating: 1},
+			{URL: "legacy://show.jpg", Type: ImagePoster, Rating: 10},
+		},
+	}
+	scoped := &seasonImageProvider{
+		slug: "scoped",
+		seasonGalleries: map[int][]RemoteImage{0: {
+			{URL: "shared://specials.jpg", Type: ImagePoster, Rating: 8, SeasonNumber: &specials},
+		}},
+	}
+	service := &MetadataService{chainCache: map[string]chainCacheEntry{
+		"11:season": {providers: []Provider{legacy, scoped}, expiresAt: time.Now().Add(time.Hour)},
+	}}
+
+	images, _, err := service.FetchSeasonImages(context.Background(), map[string]string{"legacy": "1"}, "en", 11, 0)
+	if err != nil {
+		t.Fatalf("FetchSeasonImages() error = %v", err)
+	}
+	if len(images) != 2 {
+		t.Fatalf("images = %#v, want exact Specials poster then one show fallback", images)
+	}
+	first := images[0]
+	if first.URL != "shared://specials.jpg" || first.ProviderID != "scoped" || first.Rating != 8 ||
+		first.SeasonNumber == nil || *first.SeasonNumber != 0 {
+		t.Fatalf("images[0] = %#v, want scoped exact Specials record", first)
+	}
+	if images[1].URL != "legacy://show.jpg" {
+		t.Fatalf("images[1] = %#v, want remaining show fallback", images[1])
+	}
+	if len(scoped.seasonRequests) != 0 {
+		t.Fatalf("scoped GetSeasons calls = %d, want none once its exact result is accepted", len(scoped.seasonRequests))
+	}
+}
+
 func TestFetchSeasonImagesUsesPrimaryCompatibilityFallback(t *testing.T) {
 	provider := &seasonImageProvider{
 		slug:       "legacy",
@@ -179,10 +218,11 @@ func TestFetchSeasonImagesKeepsProviderErrorsAndContinues(t *testing.T) {
 	}
 }
 
-func TestFetchItemImagesFiltersIllustratedLogoSources(t *testing.T) {
+func TestFetchItemImagesFiltersClearArtLogos(t *testing.T) {
 	tvdb := &itemImageProvider{slug: "tvdb", images: []RemoteImage{
 		{ProviderID: "tvdb", URL: "tvdb://show-poster.jpg", Type: ImagePoster, Rating: 3},
-		{ProviderID: "tvdb", URL: "tvdb://illustrated-clear-art.png", Type: ImageLogo, Rating: 10},
+		{ProviderID: "tvdb", URL: tvdbClearArtURL, Type: ImageLogo, Rating: 10},
+		{ProviderID: "tvdb", URL: tvdbClearLogoURL, Type: ImageLogo, Rating: 8},
 	}}
 	tmdb := &itemImageProvider{slug: "tmdb", images: []RemoteImage{
 		{ProviderID: "tmdb", URL: "tmdb://lower-rated-wordmark.png", Type: ImageLogo, Rating: 5},
@@ -202,13 +242,18 @@ func TestFetchItemImagesFiltersIllustratedLogoSources(t *testing.T) {
 	if len(providerErrors) != 0 {
 		t.Fatalf("provider errors = %v, want none", providerErrors)
 	}
-	if len(images) != 4 {
-		t.Fatalf("images = %#v, want all non-logo art and TMDB wordmarks", images)
+	if len(images) != 5 {
+		t.Fatalf("images = %#v, want all art except the TVDB clear art", images)
 	}
+	sawClearLogo := false
 	for _, image := range images {
-		if image.ProviderID == "tvdb" && image.Type == ImageLogo {
-			t.Fatalf("illustrated TVDB logo was not filtered: %#v", image)
+		if image.URL == tvdbClearArtURL {
+			t.Fatalf("TVDB clear art was not filtered: %#v", image)
 		}
+		sawClearLogo = sawClearLogo || image.URL == tvdbClearLogoURL
+	}
+	if !sawClearLogo {
+		t.Fatalf("images = %#v, want the TVDB ClearLogo offered", images)
 	}
 	for i := 1; i < len(images); i++ {
 		if images[i-1].Rating < images[i].Rating {

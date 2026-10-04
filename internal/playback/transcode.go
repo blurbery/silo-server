@@ -159,6 +159,9 @@ type TranscodeOpts struct {
 	NodeType        string
 	ExecutionMode   string
 	FFmpegLogSink   FFmpegLogSink
+	// PrepareProgressSink receives PrepareFile's live encode progress. Like
+	// the log sink it is process-local and never frozen into a recipe.
+	PrepareProgressSink PrepareProgressSink
 }
 
 // DV7ToHDR10BitstreamFilter turns a single-track, dual-layer Profile 7 stream
