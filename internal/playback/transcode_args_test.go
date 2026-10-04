@@ -529,15 +529,18 @@ func TestBuildFFmpegArgsCopyVideoAcceptsNoncanonicalCodecCase(t *testing.T) {
 }
 
 func TestStartTranscodeRejectsInvalidVideoSampleEntry(t *testing.T) {
-	for _, opts := range []TranscodeOpts{
-		{TargetCodecVideo: "copy", VideoSampleEntry: "dvhe"},
-		{TargetCodecVideo: "h264", VideoSampleEntry: VideoSampleEntryDVH1},
-		{SourceVideoCodec: "hevc", TargetCodecVideo: "h264", VideoSampleEntry: VideoSampleEntryHEV1V3},
-		{SourceVideoCodec: "h264", TargetCodecVideo: "copy", VideoSampleEntry: VideoSampleEntryHEV1V3},
-		{SourceVideoCodec: "hevc", TargetCodecVideo: "copy", VideoSampleEntry: VideoSampleEntryHEV1V3, RemuxDVMode: RemuxDVPreserveV3},
+	for _, test := range []struct {
+		opts    TranscodeOpts
+		wantErr string
+	}{
+		{TranscodeOpts{TargetCodecVideo: "copy", VideoSampleEntry: "dvhe"}, "unsupported video sample-entry recipe"},
+		{TranscodeOpts{TargetCodecVideo: "h264", VideoSampleEntry: VideoSampleEntryDVH1}, "unsupported video sample-entry recipe"},
+		{TranscodeOpts{SourceVideoCodec: "hevc", TargetCodecVideo: "h264", VideoSampleEntry: VideoSampleEntryHEV1V3}, "unsupported video sample-entry recipe"},
+		{TranscodeOpts{SourceVideoCodec: "h264", TargetCodecVideo: "copy", VideoSampleEntry: VideoSampleEntryHEV1V3}, "video sample entry requires HEVC video copy or an HEVC encode"},
+		{TranscodeOpts{SourceVideoCodec: "hevc", TargetCodecVideo: "copy", VideoSampleEntry: VideoSampleEntryHEV1V3, RemuxDVMode: RemuxDVPreserveV3}, "dolby vision preserve HLS requires the dvh1 sample entry"},
 	} {
-		if _, err := StartTranscode(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "unsupported video sample-entry recipe") {
-			t.Fatalf("expected sample-entry admission rejection for %+v, got %v", opts, err)
+		if _, err := StartTranscode(context.Background(), test.opts); err == nil || !strings.Contains(err.Error(), test.wantErr) {
+			t.Fatalf("expected sample-entry admission rejection %q for %+v, got %v", test.wantErr, test.opts, err)
 		}
 	}
 }

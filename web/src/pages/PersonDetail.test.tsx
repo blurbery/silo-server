@@ -27,13 +27,13 @@ vi.mock("@/components/EditPersonDialog", () => ({ default: () => null }));
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(getPerson).mockResolvedValue({
-    id: 7,
+  const incompletePerson: Person = {
+    id: "7",
     name: "Incomplete Person",
     bio: "",
     photo_url: "",
-    birth_date: null,
-  } as Person);
+  };
+  vi.mocked(getPerson).mockResolvedValue(incompletePerson);
 });
 
 it("reads incomplete details without forcing a refresh, but preserves the explicit button", async () => {

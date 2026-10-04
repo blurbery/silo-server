@@ -1643,6 +1643,21 @@ func (r *ImageCacheJobRepository) enqueueArtworkRepair(ctx context.Context, limi
 // artwork; cached keys live under "local/..." like audiobook/ebook covers.
 const imageCacheLocalProviderID = "local"
 
+// Provider slugs and content-type names the image cache keys are built from.
+const (
+	imageCacheRemoteProviderID = "remote"
+	imageCacheTMDBProviderID   = "tmdb"
+	imageCacheTVDBProviderID   = "tvdb"
+	imageCacheIMDBProviderID   = "imdb"
+
+	imageCacheMovieType      = "movie"
+	imageCacheAudiobookType  = "audiobook"
+	imageCacheEbookType      = "ebook"
+	imageCacheMoviesKind     = "movies"
+	imageCacheAudiobooksKind = "audiobooks"
+	imageCacheEbooksKind     = "ebooks"
+)
+
 func imageCacheProviderIDFromSource(sourcePath, fallback string) string {
 	if isLocalImageSourcePath(sourcePath) {
 		return imageCacheLocalProviderID
@@ -1653,17 +1668,17 @@ func imageCacheProviderIDFromSource(sourcePath, fallback string) string {
 	if fallback != "" {
 		return fallback
 	}
-	return "remote"
+	return imageCacheRemoteProviderID
 }
 
 func imageCachePrimaryProvider(tmdbID, tvdbID, imdbID string) string {
 	switch {
 	case strings.TrimSpace(tmdbID) != "":
-		return "tmdb"
+		return imageCacheTMDBProviderID
 	case strings.TrimSpace(tvdbID) != "":
-		return "tvdb"
+		return imageCacheTVDBProviderID
 	case strings.TrimSpace(imdbID) != "":
-		return "imdb"
+		return imageCacheIMDBProviderID
 	default:
 		return ""
 	}
@@ -1671,11 +1686,11 @@ func imageCachePrimaryProvider(tmdbID, tvdbID, imdbID string) string {
 
 func imageCacheProviderContentID(providerID, tmdbID, tvdbID, imdbID, fallback string) string {
 	switch providerID {
-	case "tmdb":
+	case imageCacheTMDBProviderID:
 		return firstNonEmpty(tmdbID, tvdbID, imdbID, fallback)
-	case "tvdb":
+	case imageCacheTVDBProviderID:
 		return firstNonEmpty(tvdbID, tmdbID, imdbID, fallback)
-	case "imdb":
+	case imageCacheIMDBProviderID:
 		return firstNonEmpty(imdbID, tmdbID, tvdbID, fallback)
 	default:
 		return firstNonEmpty(tmdbID, tvdbID, imdbID, fallback)
@@ -1684,12 +1699,12 @@ func imageCacheProviderContentID(providerID, tmdbID, tvdbID, imdbID, fallback st
 
 func imageCacheContentType(contentType string) string {
 	switch strings.TrimSpace(contentType) {
-	case "movie":
-		return "movies"
-	case "audiobook":
-		return "audiobooks"
-	case "ebook":
-		return "ebooks"
+	case imageCacheMovieType:
+		return imageCacheMoviesKind
+	case imageCacheAudiobookType:
+		return imageCacheAudiobooksKind
+	case imageCacheEbookType:
+		return imageCacheEbooksKind
 	default:
 		return strings.TrimSpace(contentType)
 	}

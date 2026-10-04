@@ -85,7 +85,7 @@ func registerDownloadDelivery(reg *Registry) {
 		if route.kind == "subtitle" {
 			// Downloaded subtitles revalidate: a stored timing correction can
 			// change their bytes (ETag carries the subtitle revision).
-			op.Parameters = append(op.Parameters, &huma.Param{Name: "If-None-Match", In: "header", Schema: &huma.Schema{Type: huma.TypeString}})
+			op.Parameters = append(op.Parameters, &huma.Param{Name: ifNoneMatchField, In: paramInHeader, Schema: &huma.Schema{Type: huma.TypeString}})
 			op.Responses["304"] = &huma.Response{Description: "Representation not modified.", Headers: headers}
 		}
 		if route.proxy {
