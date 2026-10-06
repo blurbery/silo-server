@@ -35,6 +35,9 @@ import { getSeasonDisplayTitle, resolveSeriesPrimaryAction } from "./itemDetailL
 import { canCurateMetadata as canCurateMetadataForUser } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 
+/** Series lead with their creators; one without Creator credits keeps showing its directors. */
+const SERIES_LEAD_JOBS = ["Creator", "Director"] as const;
+
 export default function SeriesContent({
   item,
   showAdvisoryAge,
@@ -144,7 +147,12 @@ export default function SeriesContent({
             overviewTranslating={overviewTranslating}
             onTranslateOverview={onTranslateOverview}
             crewLine={
-              <HeroCrewLine crew={item.crew ?? []} genres={item.genres} jobLabel="Created by" />
+              <HeroCrewLine
+                crew={item.crew ?? []}
+                genres={item.genres}
+                jobLabel="Created by"
+                leadJobs={SERIES_LEAD_JOBS}
+              />
             }
             actions={
               <MediaUserActionBar
