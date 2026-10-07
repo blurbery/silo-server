@@ -837,6 +837,12 @@ jobs:
       SILO_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/watch_party?sslmode=disable
       SECRET_KEY: ci-only-disposable-database-encryption-key-00000000
     steps:
+      # Fork: setup-go waits for the libvips install every Go job starts
+      # before checkout.
+      - *libvips-cache-key
+      - *libvips-restore
+      - *libvips-install
+
       - name: Checkout
         uses: actions/checkout@v5
         with:
@@ -844,8 +850,11 @@ jobs:
 
       - name: Set up Go
         uses: ./.github/actions/setup-go
+        id: setup-go
         with:
           cache-name: fork-db
+
+      - *libvips-save
 
       - name: Verify fork PostgreSQL merge regressions
         run: |
