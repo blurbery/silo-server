@@ -4,6 +4,8 @@
 
 # Library visibility, rating ceilings, mixed catalogs, and section results.
 ./internal/catalog TestDualLibraryItemDeniedByDisabledLibraryDB
+./internal/catalog TestCatalogQueryRequestedLibraryOutsideAccessDB
+./internal/catalog TestLibraryCollectionWithoutLibraryOverlapResolvesEmptyDB
 ./internal/catalog TestMixedCatalogMangaCounts
 ./internal/catalog TestContentRatingCeilingAcrossSystemsDB
 ./internal/recommendations TestRecentCompletedItemIDsGroupsSeriesBeforeLimit
@@ -91,6 +93,7 @@
 ./internal/downloads TestPreparedMonitorSyncQueuesNothingForAStaleMonitorDB
 ./internal/downloads TestPreparedSeasonReplacementCountsTowardConcurrentLimitDB
 ./internal/downloads TestPreparedReplacementQuotaAccountingDB
+./internal/downloads TestManagedBatchOverConcurrentCapDB
 ./internal/downloads TestAttachPreparationsPostgres
 ./internal/downloads TestFailedPreparationRefreshIsSharedPostgres
 ./internal/downloads TestPreparationControlsPauseResumeAndCancel

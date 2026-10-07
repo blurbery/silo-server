@@ -127,7 +127,8 @@ Yes, manifests include metadata needed to make the offline item feel native:
 - Title, year, overview, runtime, content rating, genres.
 - Series, season, and episode context for episodes.
 - Poster/backdrop thumbhashes and authenticated artwork proxy URLs for poster,
-  backdrop, and logo when available.
+  backdrop, and logo when available. Episode manifests also carry the parent
+  series poster.
 - Chapters, intro/credits/recap/preview markers.
 - External and downloaded subtitle fetch URLs plus known subtitle file sizes.
 - Container, codecs, resolution, HDR, duration, selected audio track, and audio
@@ -632,7 +633,9 @@ whole batch in one request.
 GET /api/v2/downloads/{id}/artwork/{kind}
 ```
 
-`kind` is `poster`, `backdrop`, or `logo`, and `X-Silo-Device-Id` is required. The
+`kind` is `poster`, `backdrop`, `logo`, or `series_poster`, and
+`X-Silo-Device-Id` is required. `series_poster` exists only for episode entries and
+serves the parent series poster; access to the series is checked as well. The
 manifest's `artwork_urls` point here. Fetch each available image once while online
 and cache the bytes locally. Artwork and subtitle assets are whole-object,
 privately cached deliveries; they do not advertise byte ranges.
@@ -876,6 +879,11 @@ Notes:
 - Artwork and subtitle URLs are authenticated proxy paths on this server. Fetch
   them once while online and cache the bytes locally.
 - Thumbhash fields are inline placeholders for fast offline UI rendering.
+- For an episode, `poster` and `poster_thumbhash` are the episode still and
+  `backdrop` is the series backdrop. The series poster arrives separately as
+  `series_poster_thumbhash` and `artwork_urls.series_poster`, present only on
+  episode manifests; use it for series-level screens such as a downloaded
+  series' header.
 - `stable_identity` is for rescan recovery when a server-side `content_id` changes.
 - `integrity.expected_bytes` should match the local media file size after download.
 - `revision` should match the download row revision. If a row revision increases,
@@ -1181,7 +1189,7 @@ Persist these records in the app's local database:
 | Local model            | Required fields                                                                                                                                                                                                                       |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `OfflineDownload`      | `download_id`, `content_id`, `episode_id`, `batch_id`, `quality`, `effective_quality`, `delivery_format`, `target_bitrate_kbps`, `revision`, `status`, local media path, local manifest path, byte count, created/updated timestamps. |
-| `OfflineAsset`         | `download_id`, asset kind (`media`, `poster`, `backdrop`, `logo`, `subtitle`), remote proxy path, local path, expected bytes if known, fetch status.                                                                                  |
+| `OfflineAsset`         | `download_id`, asset kind (`media`, `poster`, `backdrop`, `logo`, `series_poster`, `subtitle`), remote proxy path, local path, expected bytes if known, fetch status.                                                                 |
 | `OfflineProgressEvent` | `media_item_id`, `position`, `duration`, `updated_at`, retry/ack state.                                                                                                                                                               |
 | `DownloadSubscription` | Server subscription id, `series_id`, mode, season filters, retention settings, active state.                                                                                                                                          |
 
@@ -1359,7 +1367,8 @@ Use manifest fields as follows:
 - `series_id`, `series_title`, `season_number`, and `episode_number` drive episode
   grouping.
 - `poster_thumbhash` and `backdrop_thumbhash` are placeholders while local artwork
-  bytes load.
+  bytes load. For an episode, `poster` is the episode still; series-level screens
+  use `series_poster` and `series_poster_thumbhash`.
 - `chapters`, `intro`, `credits`, `recap`, and `preview` drive the same skip and
   chapter UI as online playback.
 - `audio_tracks` and `selected_audio_track_index` seed the audio-track picker when
@@ -1563,7 +1572,7 @@ operations use:
 | 422  | `validation_failed`      | A well-formed request with an invalid domain value: quality, status, revision guard, device identity, subtitle ref, subscription option, non-canonical decimal ID, or an unknown/duplicated query parameter. `errors[].location` names the member. |
 | 428  | `precondition_required`  | A subscription mutation without `If-Match`.                               |
 | 412  | `precondition_failed`    | A stale `If-Match` validator.                                             |
-| 429  | `rate_limited`           | Concurrent download cap or period quota hit.                              |
+| 429  | `rate_limited`           | Concurrent download cap or period quota hit. New managed entries that register `ready` (original quality, or a prepared file that is already ready) count only toward the period quota; the app queues their transfers. |
 | 500  | `internal_error`         | Unexpected server error.                                                  |
 | 501  | `capability_unsupported` | The requested delivery is not supported by configuration or policy — tone mapping disabled or disallowed, a quality the server cannot prepare, or a missing prepare pipeline. |
 | 503  | `dependency_unavailable` | Downloads, offline assets, series monitoring, or capability discovery is temporarily unavailable; retry the same request. |
@@ -1726,7 +1735,7 @@ unavailable or ineligible proxy targets fall back to existing local delivery.
 
 `GET /api/v2/downloads/{id}/artwork/{kind}` and
 `GET /api/v2/downloads/{id}/subtitles/{ref}` require the device header.
-Artwork kinds are poster, backdrop and logo; subtitle references retain the
+Artwork kinds are poster, backdrop, logo and series_poster; subtitle references retain the
 external:index, embedded:ordinal, and downloaded:id identity. Current content access is
 checked before asset delivery, and downloaded subtitle ownership must match the
 entry's media file. These two asset routes preserve whole-object delivery and

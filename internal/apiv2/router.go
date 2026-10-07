@@ -430,6 +430,8 @@ type Dependencies struct {
 	// CatalogTrailers answers the trailer capability and refresh action
 	// (*handlers.ItemsHandler).
 	CatalogTrailers CatalogTrailerService
+	// Shuffles starts and advances shuffles (*shuffle.Service).
+	Shuffles ShuffleAPI
 	// MetadataAI answers the metadata AI capability and the on-view
 	// translation action (*handlers.MetadataAIHandler).
 	MetadataAI MetadataAIService
@@ -1109,8 +1111,8 @@ type MetadataAIService interface {
 // operations use.
 type PeopleService interface {
 	SearchPeopleScoped(ctx context.Context, query string, limit int, mediaScope string, filter mediacatalog.AccessFilter) ([]handlers.PersonView, error)
-	Person(ctx context.Context, id int64, queueRefresh bool) (handlers.PersonView, error)
-	RefreshPerson(ctx context.Context, userID int, id int64) error
+	Person(ctx context.Context, id int64, queueRefresh bool, filter mediacatalog.AccessFilter) (handlers.PersonView, error)
+	RefreshPerson(ctx context.Context, userID int, id int64, filter mediacatalog.AccessFilter) error
 }
 
 // LiteraryWorkService is the slice of *handlers.LiteraryWorkHandler the work

@@ -955,7 +955,17 @@ func (s *Service) ensureManagedDecisions(ctx context.Context, userID int, req Cr
 	}
 	var inserted []*Download
 	if err := s.repo.WithUserQuotaLock(ctx, userID, func(ctx context.Context) error {
-		activating := len(newIdx)
+		// Only entries that start preparing count as active. Original
+		// entries, and prepared ones whose file is already ready, register
+		// ready and the app queues their transfers, so a season larger than
+		// the concurrent cap still registers.
+		activating := 0
+		for _, i := range newIdx {
+			d := decisions[i]
+			if d.RequiresArtifact && !s.artifacts.readyArtifact(ctx, items[i].file, d.DeliveryFormat, d.PrepareTarget) {
+				activating++
+			}
+		}
 		for _, r := range prepared {
 			d := decisions[r.i]
 			ready := s.artifacts.readyArtifact(ctx, items[r.i].file, d.DeliveryFormat, d.PrepareTarget)
