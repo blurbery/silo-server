@@ -266,3 +266,75 @@ func TestFinalizeVariantsSkipsOwnerLookupWithoutPartsDB(t *testing.T) {
 		t.Fatalf("in-scope stale edition = %q, want it cleared", got.editionKey)
 	}
 }
+
+// Movie discs belong to their content id, not an episode, so their siblings
+// come from the content-owner lookup.
+func TestFinalizeVariantsLoadsMovieDiscsOutsideTheScopeDB(t *testing.T) {
+	dsn := os.Getenv("SILO_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("SILO_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse test database url: %v", err)
+	}
+	cfg.ConnConfig.Tracer = variantQueryTracer{}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("connect test database: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	suffix := time.Now().UnixNano()
+	root := fmt.Sprintf("/variant-finalize-movies-%d", suffix)
+	movieID := fmt.Sprintf("variant-finalize-movie-%d", suffix)
+	var folderID int
+	if err := pool.QueryRow(ctx, `INSERT INTO media_folders (type, name, enabled) VALUES ('movies', $1, true) RETURNING id`, movieID).Scan(&folderID); err != nil {
+		t.Fatalf("seed folder: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM media_folders WHERE id = $1`, folderID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM media_items WHERE content_id = $1`, movieID)
+	})
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO media_items (content_id, type, title, status, genres)
+		VALUES ($1, 'movie', 'Discs', 'matched', '{}'::text[])`, movieID); err != nil {
+		t.Fatalf("seed movie: %v", err)
+	}
+	scope := root + "/Discs (2010)"
+	ids := map[string]int{}
+	for name, path := range map[string]string{
+		"disc-in":  scope + "/Discs.2010.CD1.mkv",
+		"disc-out": root + "/Discs (2010) extra/Discs.2010.CD2.mkv",
+	} {
+		var id int
+		if err := pool.QueryRow(ctx, `
+			INSERT INTO media_files (content_id, media_folder_id, file_path, file_size)
+			VALUES ($1, $2, $3, 1024) RETURNING id`, movieID, folderID, path).Scan(&id); err != nil {
+			t.Fatalf("seed file %s: %v", name, err)
+		}
+		ids[name] = id
+	}
+
+	scan := &Scanner{fileRepo: NewFileRepository(pool)}
+	folder := &models.MediaFolder{ID: folderID, Type: "movies", Paths: []string{root}}
+	var queries atomic.Int64
+	if err := scan.FinalizeVariantsByPathPrefix(context.WithValue(ctx, variantQueryCountKey{}, &queries), folder, scope); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	// Scope load, the content-owner lookup, one batched update.
+	if got := queries.Load(); got != 3 {
+		t.Fatalf("finalize issued %d queries, want 3", got)
+	}
+	for name, id := range ids {
+		var kind string
+		var total int
+		if err := pool.QueryRow(ctx, `SELECT presentation_kind, COALESCE(presentation_part_total, 0) FROM media_files WHERE id = $1`, id).Scan(&kind, &total); err != nil {
+			t.Fatalf("load %s: %v", name, err)
+		}
+		if kind != "multipart_movie" || total != 2 {
+			t.Fatalf("%s kind=%q total=%d, want multipart_movie with total 2", name, kind, total)
+		}
+	}
+}
