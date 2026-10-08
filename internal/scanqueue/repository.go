@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/oklog/ulid/v2"
 
@@ -121,17 +120,14 @@ func (r *Repository) Create(ctx context.Context, input CreateInput) (*models.Sca
 	if err == nil {
 		return run, true, nil
 	}
-
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		existing, lookupErr := r.coalesceIntoActive(ctx, r.pool, input)
-		if lookupErr != nil {
-			return nil, false, lookupErr
-		}
-		return existing, false, nil
+	// ON CONFLICT DO NOTHING returns no row when an active run already owns
+	// the scope, so the conflict surfaces as ErrScanRunNotFound rather than a
+	// unique violation. Any other error is a real insert failure.
+	if !errors.Is(err, ErrScanRunNotFound) {
+		return nil, false, fmt.Errorf("create scan run: %w", err)
 	}
 
-	existing, lookupErr := r.GetActiveByScope(ctx, input.LibraryID, input.Mode, input.Path)
+	existing, lookupErr := r.coalesceIntoActive(ctx, r.pool, input)
 	if lookupErr != nil {
 		return nil, false, lookupErr
 	}

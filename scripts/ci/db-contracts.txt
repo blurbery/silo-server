@@ -12,6 +12,12 @@
 ./internal/sections TestCompatibilityRecentlyAddedReturnsFlatDistinctSeries
 ./internal/scanner TestFileRepositoryPreservesFirstSeenScanProvenance
 
+# A scan request that lands on an active scope reuses it or owes it a follow-up,
+# and insert failures other than that conflict reach the caller.
+./internal/scanqueue TestCreateOnRunningScopeOwesFollowUpEnqueuedOnComplete
+./internal/scanqueue TestCreateOnRunningScopeIgnoresDirectAdminTriggers
+./internal/scanqueue TestCreateReturnsInsertErrorsOtherThanScopeConflict
+
 # Profile history and account/invitation persistence.
 ./internal/api/handlers TestEbookProgressEventsPostgres
 ./internal/auth TestUserRepositoryUpdateAccessGroupIDDB
