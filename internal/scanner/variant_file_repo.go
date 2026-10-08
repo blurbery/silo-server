@@ -101,9 +101,8 @@ func (r *FileRepository) ListVariantFilesByOwners(ctx context.Context, folderID 
 
 // UpdateVariantMetadata writes only the edition, presentation and
 // multi-episode columns (and updated_at) of the given files, in batches. A row
-// is skipped when it has gone missing, moved to another path, or already holds
-// these values, so a concurrent scan never sees a stale write. Returns the
-// number of rows changed.
+// is skipped when it has gone missing or moved to another path since it was
+// loaded, or already holds these values. Returns the number of rows changed.
 func (r *FileRepository) UpdateVariantMetadata(ctx context.Context, folderID int, files []VariantFile) (int, error) {
 	updated := 0
 	for start := 0; start < len(files); start += variantUpdateChunk {
