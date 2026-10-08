@@ -262,8 +262,9 @@ func (h *StreamHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 		// response has to keep the same promise the plan made.
 		if err := playback.ServeRemuxWithOptions(w, r, file.FilePath, "mp4", seekSeconds, session.TranscodeAudio, session.AudioTrackIndex, file.PrimaryDVProfile(), playback.RemuxServeOptions{
 			DVMode:                     session.RemuxDVMode,
-			DropInitialLeadingPictures: session.DropInitialLeadingPictures,
 			FFmpegPath:                 h.ffmpegPath(),
+			DropResumeLeadingPictures:  session.RemuxResumeLeadingPictureDrop,
+			DropInitialLeadingPictures: session.DropInitialLeadingPictures,
 			ContentType:                playback.RemuxContentType(file.IsAudioOnly()),
 			AudioOnly:                  file.IsAudioOnly(),
 			SourceAudioChannels:        session.SourceAudioChannels,

@@ -75,6 +75,10 @@ type Claims struct {
 	// DropInitialLeadingPictures enables the bounded HEVC open-GOP resume
 	// normalization selected by the signed server-side playback recipe.
 	DropInitialLeadingPictures bool `json:"dilp,omitempty"`
+	// RemuxResumeLeadingPictureDrop asks a seeked progressive remux to drop
+	// open-GOP leading pictures when the executing FFmpeg supports it. It is
+	// best effort, so a node that predates the claim serves the plain copy.
+	RemuxResumeLeadingPictureDrop bool `json:"rlpd,omitempty"`
 
 	// Ownership / authorization lookup keys (re-resolved at reconstruct).
 	// Not trust assertions.

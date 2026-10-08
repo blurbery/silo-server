@@ -12,8 +12,9 @@ other matches sort by name, with person ID breaking ties. Ranking happens before
 applying the limit.
 
 The optional `media_scope` parameter limits results to people credited on items
-in that scope. It accepts `video` (movies and series), `movie`, `series`, `episode`,
-`audiobook`, `ebook`, or `manga`. Omit it to search credits across all media scopes.
+in that scope. It accepts `video` (movies and series), `video_with_episodes` (movies,
+series, and episodes), `movie`, `series`, `episode`, `audiobook`, `ebook`, or `manga`.
+Omit it to search credits across all media scopes.
 Results require at least one credit visible to the viewer. Library restrictions, disabled libraries, rating
 limits, and excluded media types apply before the limit, including when the media
 scope is omitted. Every credit role participates, so directors match video searches
@@ -132,6 +133,17 @@ selection, and the Jellyfin compatibility surface: an item always plays from its
 full accessible version list. No client change is needed: the setting only
 changes what an existing `library_id` request returns.
 
+## Device-scoped playback answers
+
+`getCatalogItem` and `listCatalogItemVersions` accept the optional
+`X-Silo-Device-Id` header, as `getWatchState` does. The effective playback
+fields (`effective_audio_track_index`, `effective_audio_language`, and the item's
+`effective_subtitle_*` fields) resolve the acting profile's preferences for that
+device, so a device-scoped override wins over the profile value. Without the
+header they resolve the profile's preferences alone. Clients that set
+device overrides should send the header so the detail page matches what playback
+picks.
+
 ## Episode files
 
 Each episode in `listSeasonEpisodes` and `listCatalogItemEpisodes` lists its
@@ -167,6 +179,13 @@ how the files were scanned: one scan per imported episode, as arr webhooks
 produce, groups the same way as one library scan. On the home row, the
 section's `total_count` is a lower bound: it exceeds `item_limit` when more
 cards exist. The catalog view reports the exact count.
+
+Replacing a title's file keeps its added date. A quality upgrade deletes the
+old release before importing the new one under a new name, so the title is
+briefly absent; if the replacement arrives within the server's file removal
+grace (24 hours by default), the title returns with its original added date
+and does not reappear at the top of recently added. See
+[missing files](architecture/missing-files.md).
 
 Recently-added section membership is shared only within the same library and
 access scope. Scan-complete events are coalesced into invalidations at most once
@@ -282,6 +301,29 @@ Text searches with a nonempty `q` and the default `query` source accept explicit
 `relevance` sorting, including structured requests with rule groups. Other
 sources and saved collection definitions reject `relevance`; it describes a
 text query's ranking rather than a persistent collection order.
+
+### Search media scopes
+
+The `type` parameter of `GET /api/v2/catalog` and `POST /api/v2/catalog/query`
+names one media scope: `movie`, `series`, `episode`, `audiobook`, `ebook`,
+`manga`, or `video` (movies and series). `video` means the same thing in
+search, browse, filters, and smart collections.
+
+`video_with_episodes` is a search scope for clients that want everything
+watchable without books. With a nonempty `q` on the `query` source, it returns
+movies, series, and episodes, ranked together; audiobooks, ebooks, and manga are
+excluded. Without `q`, and on `getCatalogFilters` and `searchCatalogFacet`, it
+covers the same rows as `video`, because a browse lists catalog items and never
+mixes in episode rows (an unscoped browse has no episodes either). Other
+sources refuse it with `422` at `query.type` (`body.type` on the structured
+form), and saved collection definitions do not accept it. People search accepts
+the same value as `media_scope`, so a client can send one scope to both.
+
+`GET /api/v2/catalog/search/capabilities` advertises
+`video_with_episodes_scope: true` when the server accepts the scope. Older
+servers ignore an unrecognized `type`, which searches every media type, and
+reject it as a people `media_scope`. A client that hides books must check the
+flag and send `video` when it is absent.
 
 `GET /api/v2/catalog/search/capabilities` reports the selected provider and, for
 Meilisearch, `result_window_limit`, `session_ttl_seconds`, and
@@ -406,8 +448,8 @@ book libraries, never carry an advisory age, so the limit never hides them.
   age, next to `total_movies` and `total_shows`.
 - Media-request discovery cannot apply the limit, because titles outside the
   library carry no advisory age.
-- Only a household manager (a server admin, or the primary profile) can set or
-  clear either field; a restricted profile cannot change its own limit.
+- Only a household manager (the account's primary profile, with its PIN verified
+  when it has one; on an admin account too) can set or clear either field; a restricted profile cannot change its own limit.
   Changing either bumps the account's access policy revision, the same as
   changing `max_content_rating`.
 - Detect support with `max_advisory_age_supported` and

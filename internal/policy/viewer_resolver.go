@@ -93,7 +93,7 @@ func (r *ViewerResolver) ResolveFacts(ctx context.Context, input access.ResolveI
 			return access.Scope{}, access.ErrProfileNotFound
 		}
 		var err error
-		profileVerified, err = access.VerifyProfileForRequest(profile, input, user.ID, user.AccessPolicyRevision, r.tokens)
+		profileVerified, err = access.VerifyProfileForRequest(profile, input, user.ID, r.tokens)
 		if err != nil {
 			return access.Scope{}, err
 		}
@@ -157,6 +157,10 @@ func (r *ViewerResolver) ResolveFacts(ctx context.Context, input access.ResolveI
 	if len(disabled) == 0 {
 		disabled = nil
 	}
+	hidden := slices.Clone(decision.HiddenLibraryIDs)
+	if len(hidden) == 0 {
+		hidden = nil
+	}
 
 	allowUnrated := false
 	if r.unrated != nil {
@@ -174,6 +178,7 @@ func (r *ViewerResolver) ResolveFacts(ctx context.Context, input access.ResolveI
 		AllowedLibraryIDs:   allowed,
 		DisabledLibraryIDs:  disabled,
 		LibrariesRestricted: decision.LibrariesRestricted,
+		HiddenLibraryIDs:    hidden,
 		MaturityLimits: access.MaturityLimits{
 			MaxContentRating:    access.StricterCeiling(decision.MaxContentRating, decision.MaxContentRatingOverride),
 			AllowUnratedContent: allowUnrated,

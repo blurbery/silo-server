@@ -8,6 +8,7 @@
 ./internal/catalog TestLibraryCollectionWithoutLibraryOverlapResolvesEmptyDB
 ./internal/catalog TestMixedCatalogMangaCounts
 ./internal/catalog TestContentRatingCeilingAcrossSystemsDB
+./internal/catalog TestJellyfinPersonReadsMatchNativeVisibilityPostgres
 ./internal/recommendations TestRecentCompletedItemIDsGroupsSeriesBeforeLimit
 ./internal/sections TestCompatibilityRecentlyAddedReturnsFlatDistinctSeries
 ./internal/scanner TestFileRepositoryPreservesFirstSeenScanProvenance
@@ -24,6 +25,8 @@
 ./internal/auth TestUserRepositoryUpdatePromotingToAdminClearsAccessGroupDB
 ./internal/auth TestUserRepositoryUpdateDemotingAdminAssignsDefaultAccessGroupDB
 ./internal/auth TestLoginIdentitySpaceDB
+./internal/auth TestLoginSessionActivityAndAdminRevocationDB
+./internal/jellycompat TestLoginAccountNameWithHashDB
 ./internal/invitations TestLinkInvitationLifecycleDB
 ./internal/invitations TestEmailedInvitationLinkReplacementDB
 ./internal/invitations TestInvitationServiceCommittedOutcomesDB
@@ -53,6 +56,9 @@
 # Verification delivery survives a lost persistence receipt with bounded retries.
 ./internal/notifications TestEmailVerificationDispatchRetriesUncertainSendOnceWithSameMessage
 ./internal/notifications TestEmailVerificationDispatchStopsAfterSecondUncertainty
+
+# Image cache jobs run again for artwork the target no longer holds.
+./internal/metadata TestEnqueueRequeuesSucceededJobOnlyWhenAskedDB
 
 # Artwork publication, deletion locks and corrected metadata identity.
 ./internal/metadata TestArtworkDeliveryPublicationAndReconciliation
@@ -110,3 +116,10 @@
 
 # Intro analysis state timestamps and config-hash isolation.
 ./internal/intromarkers TestSeasonStateIsKeyedByAnalysisHashPostgres
+
+# Login sessions record the device that signed in.
+./internal/auth TestLoginSessionRecordsReportedDeviceDB
+./internal/auth TestDeviceLoginSessionRecordsPollingDeviceDB
+
+# Admin top-activity leaderboards count playback, not marked-watched rows.
+./internal/api/handlers TestAdminTopActivityCountsPlaybackNotMarks

@@ -989,8 +989,9 @@ func (s *Server) serveRemuxClaims(w http.ResponseWriter, r *http.Request, claims
 	// server's stream handler serves the same claims.
 	_ = playback.ServeRemuxWithOptions(w, r, claims.MediaPath, "mp4", seekSeconds, claims.TranscodeAudio, claims.AudioTrackIndex, claims.DVProfile, playback.RemuxServeOptions{
 		DVMode:                     playback.RemuxDVMode(claims.RemuxDVMode),
-		DropInitialLeadingPictures: claims.DropInitialLeadingPictures,
 		FFmpegPath:                 s.watcher.Config().Playback.FFmpegPath,
+		DropResumeLeadingPictures:  claims.RemuxResumeLeadingPictureDrop,
+		DropInitialLeadingPictures: claims.DropInitialLeadingPictures,
 		ContentType:                playback.RemuxContentType(claims.AudioOnly),
 		AudioOnly:                  claims.AudioOnly,
 		SourceAudioChannels:        claims.SourceAudioChannels,

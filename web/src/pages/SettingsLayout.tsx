@@ -150,7 +150,7 @@ const NAV_SECTIONS: NavSection[] = [
         path: "devices",
         label: "Your Devices",
         icon: MonitorSmartphone,
-        description: "Per-device quality, HDR, and audio or subtitle sync.",
+        description: "Per-device quality, HDR, sync, and the profile this browser opens.",
         keywords: [
           "devices",
           "tv",
@@ -163,8 +163,15 @@ const NAV_SECTIONS: NavSection[] = [
           "dolby vision",
           "sound delay",
           "lip sync",
+          "who's watching",
+          "profile picker",
+          "remember profile",
+          "launch",
         ],
         settings: settingIndex(
+          "Profile at launch",
+          "Remember last profile",
+          "Ask who's watching",
           "Preferred quality",
           "Maximum bitrate",
           "HDR",
@@ -416,6 +423,23 @@ const NAV_SECTIONS: NavSection[] = [
   {
     label: "Account",
     items: [
+      {
+        path: "sessions",
+        label: "Signed-in sessions",
+        icon: MonitorSmartphone,
+        description: "See active sign-ins and sign out a browser or app.",
+        primaryOrAdmin: true,
+        keywords: [
+          "sessions",
+          "active",
+          "client",
+          "device",
+          "last seen",
+          "sign out",
+          "revoke",
+          "security",
+        ],
+      },
       {
         path: "account",
         label: "Account",

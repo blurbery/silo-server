@@ -37,7 +37,7 @@ type CatalogBrowseInput struct {
 	Q             string   `query:"q" doc:"Search text" example:"heat"`
 	NamePrefix    string   `query:"name_prefix" doc:"Alphabetical jump: only titles whose sort title (or title, when none is set) starts here"`
 	Match         string   `query:"match" enum:"all,any" doc:"How the filters combine; default all"`
-	Type          string   `query:"type" doc:"Media scope: movie, series, episode, audiobook, ebook, podcast, video, …" example:"movie"`
+	Type          string   `query:"type" doc:"Media scope: movie, series, episode, audiobook, ebook, manga, or video (movies and series). video_with_episodes, for source=query only, searches movies, series, and episodes when q is set and lists movies and series without q; check getCatalogSearchCapabilities.video_with_episodes_scope first" example:"movie"`
 	Genre         string   `query:"genre" example:"Crime"`
 	Status        string   `query:"status" doc:"Metadata match state" example:"matched"`
 	YearMin       int      `query:"year_min" minimum:"0" example:"1990"`
@@ -64,7 +64,7 @@ type CatalogFiltersInput struct {
 	LibraryID     ID     `query:"library_id" example:"1"`
 	CollectionID  string `query:"collection_id"`
 	PersonID      ID     `query:"person_id"`
-	Type          string `query:"type" example:"movie"`
+	Type          string `query:"type" doc:"Media scope, as on listCatalogItems; video_with_episodes lists the facets of video" example:"movie"`
 	SkipTechnical bool   `query:"skip_technical" doc:"true omits the file-derived facets (resolutions, audio and subtitle languages)"`
 }
 
@@ -110,7 +110,7 @@ type CatalogQuery struct {
 	PersonID     ID                  `json:"person_id,omitempty"`
 	Q            string              `json:"q,omitempty"`
 	NamePrefix   string              `json:"name_prefix,omitempty" doc:"Alphabetical jump: only titles whose sort title (or title, when none is set) starts here"`
-	Type         string              `json:"type,omitempty"`
+	Type         string              `json:"type,omitempty" doc:"Media scope, as the listCatalogItems type parameter"`
 	Group        string              `json:"group,omitempty" enum:"work"`
 	SkipTotal    bool                `json:"skip_total,omitzero"`
 	QueryLimit   int                 `json:"query_limit,omitzero" minimum:"0"`
@@ -137,6 +137,14 @@ type CatalogItemInput struct {
 	ImageSize string `query:"image_size" enum:"small,medium,large,original"`
 	LibraryID ID     `query:"library_id" doc:"The library the item is being viewed in; picks its presentation when the item is in several"`
 	FileID    ID     `query:"file_id" doc:"The version the viewer selected; affects the effective playback answer"`
+}
+
+// CatalogItemDeviceInput names one item whose answer carries the effective
+// playback choice (effective_audio_*, effective_subtitle_*), which the
+// caller's device-scoped preferences decide.
+type CatalogItemDeviceInput struct {
+	DeviceID string `header:"X-Silo-Device-Id" maxLength:"128" doc:"The stable device identifier used to resolve device-scoped playback preferences; absent resolves the profile's preferences" example:"tv-1"`
+	CatalogItemInput
 }
 
 // CatalogSeriesInput names one series.
@@ -623,14 +631,21 @@ func (reg *Registry) catalogItems() (CatalogItemService, *Problem) {
 
 // itemViewer resolves the caller into the seams' viewer: identity from the
 // context, access policy from the access seam, artwork size and
-// presentation hints from the query. The v2 listener reads no device
-// header, so the filter carries no device id.
+// presentation hints from the query. The filter carries no device id; reads
+// that resolve device-scoped preferences use itemViewerOnDevice.
 func (reg *Registry) itemViewer(ctx context.Context, imageSize string, libraryID, fileID ID) (handlers.ItemViewer, *Problem) {
+	return reg.itemViewerOnDevice(ctx, "", imageSize, libraryID, fileID)
+}
+
+// itemViewerOnDevice is itemViewer for the caller's declared
+// X-Silo-Device-Id, so device-scoped playback preferences resolve as they
+// do on v1 and in getWatchState. The id is clamped like v1's header read.
+func (reg *Registry) itemViewerOnDevice(ctx context.Context, deviceID, imageSize string, libraryID, fileID ID) (handlers.ItemViewer, *Problem) {
 	_, profileID, p := viewerIdentity(ctx)
 	if p != nil {
 		return handlers.ItemViewer{}, p
 	}
-	opts := handlers.AccessFilterOptions{}
+	opts := handlers.AccessFilterOptions{DeviceID: handlers.NewDeviceMetadata(deviceID, "", "").DeviceID}
 	if libraryID != "" {
 		n, p := libraryID.positive("query.library_id")
 		if p != nil {
@@ -838,7 +853,7 @@ func (in *CatalogFiltersInput) catalogValues() url.Values {
 // 422 on the query parameter the message names; the source when it names
 // none, since the source decides what the rest must carry.
 func parseCatalogRequest(values url.Values) (catalogpkg.CatalogRequest, *Problem) {
-	req, err := catalogpkg.ParseCatalogRequest(values)
+	req, err := catalogpkg.ParseCatalogRequestWithOptions(values, catalogpkg.CatalogRequestOptions{SearchMediaScopes: true})
 	if err != nil {
 		location := "query.source"
 		for _, name := range []string{"section_id", "collection_id", "person_id", fieldLibraryID, scopeField, "groups"} {
@@ -846,6 +861,9 @@ func parseCatalogRequest(values url.Values) (catalogpkg.CatalogRequest, *Problem
 				location = "query." + name
 				break
 			}
+		}
+		if errors.Is(err, catalogpkg.ErrSearchMediaScopeSource) {
+			location = "query.type"
 		}
 		return catalogpkg.CatalogRequest{}, NewProblem(TypeValidationFailed, "The request did not pass validation; see errors.").
 			WithErrors(ProblemError{Location: location, Code: codeInvalid, Detail: err.Error()})
@@ -1102,12 +1120,12 @@ func (reg *Registry) queryCatalogItems(ctx context.Context, cursors *Cursors, in
 	return output, err
 }
 
-func (reg *Registry) getCatalogItem(ctx context.Context, in *CatalogItemInput) (*CatalogItemDetailOutput, error) {
+func (reg *Registry) getCatalogItem(ctx context.Context, in *CatalogItemDeviceInput) (*CatalogItemDetailOutput, error) {
 	svc, p := reg.catalogItems()
 	if p != nil {
 		return nil, p
 	}
-	viewer, p := reg.itemViewer(ctx, in.ImageSize, in.LibraryID, in.FileID)
+	viewer, p := reg.itemViewerOnDevice(ctx, in.DeviceID, in.ImageSize, in.LibraryID, in.FileID)
 	if p != nil {
 		return nil, p
 	}
@@ -1130,12 +1148,12 @@ func (reg *Registry) getCatalogItem(ctx context.Context, in *CatalogItemInput) (
 	return &CatalogItemDetailOutput{Body: out}, nil
 }
 
-func (reg *Registry) listCatalogItemVersions(ctx context.Context, in *CatalogItemInput) (*FileVersionCollectionOutput, error) {
+func (reg *Registry) listCatalogItemVersions(ctx context.Context, in *CatalogItemDeviceInput) (*FileVersionCollectionOutput, error) {
 	svc, p := reg.catalogItems()
 	if p != nil {
 		return nil, p
 	}
-	viewer, p := reg.itemViewer(ctx, in.ImageSize, in.LibraryID, in.FileID)
+	viewer, p := reg.itemViewerOnDevice(ctx, in.DeviceID, in.ImageSize, in.LibraryID, in.FileID)
 	if p != nil {
 		return nil, p
 	}
