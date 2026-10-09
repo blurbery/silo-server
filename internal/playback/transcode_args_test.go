@@ -733,6 +733,28 @@ func TestBuildFFmpegArgs_CopyVideoResumePrependsLeadingPictureFilter(t *testing.
 	}
 }
 
+// Fork: a plan frozen at an older DV7 recipe reaches StartTranscode with the
+// strip mode but no filter chain. It must be refused before FFmpeg starts, so
+// Dolby Vision is never copied without the strip.
+func TestStartTranscodeRefusesDVStripWithoutTheValidatedChain(t *testing.T) {
+	for _, mode := range []RemuxDVMode{RemuxDVStripToHDR10V3, RemuxDVStripToBaseV3} {
+		_, err := StartTranscode(context.Background(), TranscodeOpts{
+			InputPath:        "/media/movie.mkv",
+			OutputDir:        t.TempDir(),
+			SessionID:        "session-stale-dv7",
+			SourceVideoCodec: "hevc",
+			TargetCodecVideo: "copy",
+			TargetCodecAudio: "aac",
+			VideoSampleEntry: VideoSampleEntryHVC1V3,
+			RemuxDVMode:      mode,
+			SegmentDuration:  2,
+		})
+		if err == nil || !strings.Contains(err.Error(), "validated copy recipe") {
+			t.Fatalf("%s without the filter chain: err = %v, want the validated copy recipe refusal", mode, err)
+		}
+	}
+}
+
 func TestBuildFFmpegArgs_MediaSourceStripKeepsDefaultSampleEntry(t *testing.T) {
 	args := buildFFmpegArgs(TranscodeOpts{
 		InputPath:            "/media/movie.mkv",

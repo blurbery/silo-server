@@ -189,8 +189,8 @@ func TestProbeTransformationRegistryV3DV7RecipeNeedsDoviRPUAndFilterUnits(t *tes
 				return
 			}
 			for _, transformation := range registry.Advertised() {
-				if transformation.Name == TransformationServerDV7HDR10V3 && transformation.RecipeVersion != "2" {
-					t.Fatalf("server_dv7_to_hdr10 recipe version = %q, want 2", transformation.RecipeVersion)
+				if transformation.Name == TransformationServerDV7HDR10V3 && transformation.RecipeVersion != TransformationServerDV7HDR10RecipeVersionV3 {
+					t.Fatalf("server_dv7_to_hdr10 recipe version = %q, want %s", transformation.RecipeVersion, TransformationServerDV7HDR10RecipeVersionV3)
 				}
 			}
 		})
