@@ -366,3 +366,25 @@ func TestExplicitStripRecipeRefusesAnUnstrippableSource(t *testing.T) {
 		t.Fatalf("error = %v, want it to name the unstrippable source", err)
 	}
 }
+
+// The remux strip runs DV7ToHDR10BitstreamFilter, so an FFmpeg that has
+// dovi_rpu but not filter_units cannot run it.
+func TestSupportsDoviRPUFilterNeedsFilterUnits(t *testing.T) {
+	for _, test := range []struct {
+		name, bsfs string
+		want       bool
+	}{
+		{"both filters", "printf 'dovi_rpu\\nfilter_units\\n'", true},
+		{"dovi_rpu only", "echo dovi_rpu", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bin := filepath.Join(t.TempDir(), "ffmpeg")
+			if err := os.WriteFile(bin, []byte("#!/bin/sh\ncase \"$*\" in\n  *-bsfs*) "+test.bsfs+"; exit 0;;\nesac\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if got := supportsDoviRPUFilter(bin); got != test.want {
+				t.Fatalf("supportsDoviRPUFilter = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
