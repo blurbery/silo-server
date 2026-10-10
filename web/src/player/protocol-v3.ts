@@ -127,6 +127,14 @@ export const FEATURE_NEUTRAL_PLAYBACK_V3_CONTRACT = "neutral_playback_v3_contrac
 export const FEATURE_OUTPUT_CHANGE_V3 = "output_change_v1";
 
 /**
+ * Delivery-scoped `hls` feature: the media element's own HLS implementation,
+ * not hls.js, plays the stream. The server then packages copied HEVC under the
+ * `hvc1`/`dvh1` sample entries Apple's native HLS requires instead of FFmpeg's
+ * default `hev1`.
+ */
+export const FEATURE_NATIVE_HLS_PLAYBACK_V3 = "native_hls_playback_v1";
+
+/**
  * The client can be told mid-session that the plan it is playing is no longer
  * valid, over the realtime `plan_invalidated` command.
  *
