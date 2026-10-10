@@ -2096,7 +2096,15 @@ func (s *MetadataService) processInternal(ctx context.Context, req ProcessReques
 		upsertStaleProviderIDValues(ctx, s.staleIDRepo, followUpContentID, staleValues)
 	}
 	if result != nil && strings.TrimSpace(result.ContentID) != "" {
-		if syncErr := s.syncRefreshDebtForItem(ctx, result.ContentID); syncErr != nil {
+		syncCtx := ctx
+		// A claimed item merged into another one hands its counted attempt to
+		// the item it became. The merge keeps the higher attempt count of the
+		// two rows, so a merge into a row already at or past the terminal count
+		// can repeat the notice or miss it; it changes no scheduling.
+		if result.ContentID != req.ContentID && refreshAttemptCounted(ctx, RefreshTargetItem, req.ContentID) {
+			syncCtx = withCountedRefreshAttempt(ctx, RefreshTargetItem, result.ContentID)
+		}
+		if syncErr := s.syncRefreshDebtForItem(syncCtx, result.ContentID); syncErr != nil {
 			slog.WarnContext(ctx, "metadata: failed to sync refresh debt after successful metadata refresh", "component", "metadata",
 				"content_id", result.ContentID,
 				"error", syncErr)
@@ -2935,7 +2943,9 @@ func (s *MetadataService) RefreshScheduledItem(ctx context.Context, contentID st
 }
 
 // RefreshScheduledTarget re-fetches metadata for a queued item, season, or
-// episode target using the background refresh merge policy.
+// episode target using the background refresh merge policy. The caller must
+// have claimed the target's debt row: the claim counted this attempt, so a
+// target that reaches its terminal attempts here reports it.
 //
 // A queued item may be the durable recovery for a viewer's trailer request
 // whose process died mid-refresh (see RequestTrailersRefresh). That request
@@ -2944,6 +2954,7 @@ func (s *MetadataService) RefreshScheduledItem(ctx context.Context, contentID st
 // a recovery that fails hands the slot back instead of leaving the viewer
 // blocked for a week over trailers nobody ever stored.
 func (s *MetadataService) RefreshScheduledTarget(ctx context.Context, targetType, contentID string) error {
+	ctx = withCountedRefreshAttempt(ctx, targetType, contentID)
 	if NormalizeRefreshTargetType(targetType) == RefreshTargetItem {
 		if claim := s.adoptTrailersRefreshClaim(ctx, contentID); claim != nil {
 			return claim.run(ctx)
@@ -3062,7 +3073,35 @@ func (s *MetadataService) refreshTarget(ctx context.Context, targetType, content
 // RequestStaleMetadataRefresh nudges a stale target into the durable refresh
 // queue and starts a detached refresh when the target is due. Provider work is
 // never done inline on the caller's request path.
+//
+// Detail views call this for incomplete items. A target whose only debt is
+// episode-incomplete debt parked after its terminal attempts stays parked: a
+// view adds no evidence that another provider fetch would help. A view no
+// longer lifts it to the top priority band or refreshes it; its terminal
+// re-check, an operator refresh, a rescan, or a trailer request still does.
 func (s *MetadataService) RequestStaleMetadataRefresh(ctx context.Context, targetType, contentID string) error {
+	if s == nil || s.refreshDebtRepo == nil {
+		return nil
+	}
+	targetType = NormalizeRefreshTargetType(targetType)
+	contentID = strings.TrimSpace(contentID)
+	if targetType == "" || contentID == "" {
+		return nil
+	}
+	debt, err := s.refreshDebtRepo.GetTarget(ctx, targetType, contentID)
+	if err != nil && !errors.Is(err, ErrRefreshDebtNotFound) {
+		return err
+	}
+	if debt != nil && isParkedEpisodeDebt(debt.ReasonMask, debt.AttemptCount) {
+		return nil
+	}
+	return s.queueStaleMetadataRefresh(ctx, targetType, contentID)
+}
+
+// queueStaleMetadataRefresh is RequestStaleMetadataRefresh without the terminal
+// check, for callers whose own work needs the next refresh whatever the
+// target's episode debt is.
+func (s *MetadataService) queueStaleMetadataRefresh(ctx context.Context, targetType, contentID string) error {
 	if s == nil || s.refreshDebtRepo == nil {
 		return nil
 	}
@@ -3659,7 +3698,8 @@ func (s *MetadataService) syncRefreshDebtForItem(ctx context.Context, contentID 
 		return err
 	}
 	now := time.Now().UTC()
-	logRefreshDebtTerminal(RefreshTargetItem, contentID, reasonMask, attemptCount)
+	logRefreshDebtTerminal(RefreshTargetItem, contentID, reasonMask, attemptCount,
+		refreshAttemptCounted(ctx, RefreshTargetItem, contentID))
 	return s.refreshDebtRepo.MarkSuccess(
 		ctx,
 		contentID,
@@ -3711,7 +3751,8 @@ func (s *MetadataService) syncRefreshDebtForSeason(ctx context.Context, seasonID
 	if err != nil {
 		return err
 	}
-	logRefreshDebtTerminal(RefreshTargetSeason, seasonID, reasonMask, attemptCount)
+	logRefreshDebtTerminal(RefreshTargetSeason, seasonID, reasonMask, attemptCount,
+		refreshAttemptCounted(ctx, RefreshTargetSeason, seasonID))
 	return s.refreshDebtRepo.MarkTargetSuccess(
 		ctx,
 		RefreshTargetSeason,
@@ -3745,7 +3786,8 @@ func (s *MetadataService) syncRefreshDebtForEpisode(ctx context.Context, episode
 	if err != nil {
 		return err
 	}
-	logRefreshDebtTerminal(RefreshTargetEpisode, episodeID, reasonMask, attemptCount)
+	logRefreshDebtTerminal(RefreshTargetEpisode, episodeID, reasonMask, attemptCount,
+		refreshAttemptCounted(ctx, RefreshTargetEpisode, episodeID))
 	return s.refreshDebtRepo.MarkTargetSuccess(
 		ctx,
 		RefreshTargetEpisode,
@@ -3804,7 +3846,8 @@ func (s *MetadataService) syncRefreshDebtFailure(ctx context.Context, contentID 
 		attemptCount++
 	}
 	now := time.Now().UTC()
-	logRefreshDebtTerminal(RefreshTargetItem, contentID, reasonMask, attemptCount)
+	logRefreshDebtTerminal(RefreshTargetItem, contentID, reasonMask, attemptCount,
+		incrementAttempt || refreshAttemptCounted(ctx, RefreshTargetItem, contentID))
 	return s.refreshDebtRepo.MarkFailure(
 		ctx,
 		contentID,
@@ -3834,7 +3877,8 @@ func (s *MetadataService) syncRefreshDebtTargetFailure(ctx context.Context, targ
 		attemptCount++
 	}
 	now := time.Now().UTC()
-	logRefreshDebtTerminal(targetType, contentID, reasonMask, attemptCount)
+	logRefreshDebtTerminal(targetType, contentID, reasonMask, attemptCount,
+		incrementAttempt || refreshAttemptCounted(ctx, targetType, contentID))
 	return s.refreshDebtRepo.MarkTargetFailure(
 		ctx,
 		targetType,
