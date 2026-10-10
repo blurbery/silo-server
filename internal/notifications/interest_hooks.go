@@ -130,7 +130,7 @@ func (p *interestTrackingProvider) ForUser(ctx context.Context, userID int) (use
 			SeriesEpisodeRollupStore: rollup,
 		}
 	}
-	return preserveDeviceSettings(wrapped, store), nil
+	return preserveSupersededProgress(wrapped, store), nil
 }
 
 func (p *interestTrackingProvider) Close() error {
@@ -217,9 +217,8 @@ var _ userstore.SettingMutationTransactioner = (*interestTrackingStoreWithDevice
 // needs an explicit forward below; the assertions make a missing one a compile
 // error instead of a silent production slowdown.
 //
-// SeriesEpisodeRollupStore and EpisodeParentCompletionStore are conditional
-// on the backing store, so they live on the wrapper types above rather than
-// being forwarded unconditionally.
+// Catalog capabilities are conditional on the backing store and are preserved
+// on the wrapper types above rather than forwarded unconditionally.
 var _ userstore.WatchedBatchWriter = (*interestTrackingStore)(nil)
 var _ userstore.VisibleHistoryAdder = (*interestTrackingStore)(nil)
 var _ userstore.HistoryVisibilityStore = (*interestTrackingStore)(nil)
@@ -710,6 +709,114 @@ func (s *interestTrackingStore) ListAdminSettingValuesPage(ctx context.Context, 
 		return nil, false, fmt.Errorf("administrator setting pagination is unsupported")
 	}
 	return pager.ListAdminSettingValuesPage(ctx, after, limit)
+}
+
+func preserveSupersededProgress(wrapped, inner userstore.UserStore) userstore.UserStore {
+	superseded, ok := inner.(userstore.SupersededEpisodeProgressStore)
+	if !ok {
+		return preserveDeviceSettings(wrapped, inner)
+	}
+	devices, hasSettings := inner.(userstore.DeviceSettingsStore)
+	switch w := wrapped.(type) {
+	case *interestTrackingStoreWithDevicesRollupAndCompletion:
+		if hasSettings {
+			return &struct {
+				*interestTrackingStoreWithDevicesRollupAndCompletion
+				userstore.SupersededEpisodeProgressStore
+				userstore.DeviceSettingsStore
+			}{w, superseded, devices}
+		}
+		return &struct {
+			*interestTrackingStoreWithDevicesRollupAndCompletion
+			userstore.SupersededEpisodeProgressStore
+		}{w, superseded}
+	case *interestTrackingStoreWithDevicesAndCompletion:
+		if hasSettings {
+			return &struct {
+				*interestTrackingStoreWithDevicesAndCompletion
+				userstore.SupersededEpisodeProgressStore
+				userstore.DeviceSettingsStore
+			}{w, superseded, devices}
+		}
+		return &struct {
+			*interestTrackingStoreWithDevicesAndCompletion
+			userstore.SupersededEpisodeProgressStore
+		}{w, superseded}
+	case *interestTrackingStoreWithRollupAndCompletion:
+		if hasSettings {
+			return &struct {
+				*interestTrackingStoreWithRollupAndCompletion
+				userstore.SupersededEpisodeProgressStore
+				userstore.DeviceSettingsStore
+			}{w, superseded, devices}
+		}
+		return &struct {
+			*interestTrackingStoreWithRollupAndCompletion
+			userstore.SupersededEpisodeProgressStore
+		}{w, superseded}
+	case *interestTrackingStoreWithCompletion:
+		if hasSettings {
+			return &struct {
+				*interestTrackingStoreWithCompletion
+				userstore.SupersededEpisodeProgressStore
+				userstore.DeviceSettingsStore
+			}{w, superseded, devices}
+		}
+		return &struct {
+			*interestTrackingStoreWithCompletion
+			userstore.SupersededEpisodeProgressStore
+		}{w, superseded}
+	case *interestTrackingStoreWithDevicesAndRollup:
+		if hasSettings {
+			return &struct {
+				*interestTrackingStoreWithDevicesAndRollup
+				userstore.SupersededEpisodeProgressStore
+				userstore.DeviceSettingsStore
+			}{w, superseded, devices}
+		}
+		return &struct {
+			*interestTrackingStoreWithDevicesAndRollup
+			userstore.SupersededEpisodeProgressStore
+		}{w, superseded}
+	case *interestTrackingStoreWithDevices:
+		if hasSettings {
+			return &struct {
+				*interestTrackingStoreWithDevices
+				userstore.SupersededEpisodeProgressStore
+				userstore.DeviceSettingsStore
+			}{w, superseded, devices}
+		}
+		return &struct {
+			*interestTrackingStoreWithDevices
+			userstore.SupersededEpisodeProgressStore
+		}{w, superseded}
+	case *interestTrackingStoreWithRollup:
+		if hasSettings {
+			return &struct {
+				*interestTrackingStoreWithRollup
+				userstore.SupersededEpisodeProgressStore
+				userstore.DeviceSettingsStore
+			}{w, superseded, devices}
+		}
+		return &struct {
+			*interestTrackingStoreWithRollup
+			userstore.SupersededEpisodeProgressStore
+		}{w, superseded}
+	case *interestTrackingStore:
+		if hasSettings {
+			return &struct {
+				*interestTrackingStore
+				userstore.SupersededEpisodeProgressStore
+				userstore.DeviceSettingsStore
+			}{w, superseded, devices}
+		}
+		return &struct {
+			*interestTrackingStore
+			userstore.SupersededEpisodeProgressStore
+		}{w, superseded}
+	default:
+		return preserveDeviceSettings(wrapped, inner)
+	}
 }
 
 // ApplyJellycompatProgress preserves the atomic leaf edit through the production

@@ -174,6 +174,28 @@ type SeriesEpisodeRollupStore interface {
 	SeasonEpisodeWatchCounts(ctx context.Context, profileID string, seasonIDs []string) (map[string]SeriesWatchCounts, error)
 }
 
+// SupersededEpisodeCandidate is an in-progress item that may be hidden from a
+// Continue Watching surface when a later episode in the same series was
+// completed more recently.
+type SupersededEpisodeCandidate struct {
+	MediaItemID string
+	UpdatedAt   time.Time
+}
+
+// SupersededEpisodeProgressStore is an optional store capability for resolving
+// superseded Continue Watching episodes without walking the profile's global
+// completed-progress history. Postgres implements the relationship as one
+// account- and profile-scoped catalog query; stores whose progress and catalog
+// live separately keep using catalog's bounded snapshot fallback.
+//
+// Implementations must return only candidate IDs for which a later episode in
+// the same series has a visible completed-progress row whose updated_at is
+// strictly newer than the candidate timestamp. Hidden completed-progress rows
+// must not supersede a candidate.
+type SupersededEpisodeProgressStore interface {
+	SupersededEpisodeProgressIDs(ctx context.Context, profileID string, candidates []SupersededEpisodeCandidate) (map[string]struct{}, error)
+}
+
 // HomeDismissalItemReader reads a profile's dismissals of specific items on
 // one Home surface, so a caller that needs a series' episodes does not list
 // every dismissal of the surface. Implemented by the Postgres store; callers
