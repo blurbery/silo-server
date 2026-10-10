@@ -10,10 +10,6 @@ import (
 	catalogsvc "github.com/Silo-Server/silo-server/internal/catalog"
 )
 
-const (
-	collectionUngroupedState = "ungrouped"
-)
-
 type AdminGroups struct {
 	Items              []AdminCollectionGroup `json:"items"`
 	UngroupedSortOrder int                    `json:"ungrouped_sort_order"`
@@ -251,7 +247,7 @@ func (reg *Registry) moveAdminGroupCollections(ctx context.Context, in *AdminMov
 	if p != nil {
 		return nil, p
 	}
-	e = reg.deps.AdminCollectionGroups.MoveAdminGroupCollections(guarded, string(in.GroupID), v.LibraryID, idsToStrings(in.Body.OrderedIDs), in.MoveOmitted != "" && in.MoveOmitted != collectionUngroupedState)
+	e = reg.deps.AdminCollectionGroups.MoveAdminGroupCollections(guarded, string(in.GroupID), v.LibraryID, idsToStrings(in.Body.OrderedIDs), in.MoveOmitted != "" && in.MoveOmitted != "ungrouped")
 	read := &AdminMoveOrderInput{GroupID: in.GroupID, LibraryID: in.LibraryID}
 	if errors.Is(e, catalogsvc.ErrLibraryCollectionRevisionMismatch) {
 		now, re := reg.getAdminGroupCollectionOrder(ctx, read)

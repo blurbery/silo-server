@@ -138,11 +138,11 @@ delivery classes a client negotiates in. §4 gives the folding.
 
 `transformations` advertises only what an eligible executor has validated. Most
 entries come from the installed FFmpeg probe; pooled transcode nodes contribute
-their own advertisements. Both Dolby Vision base-layer transformations require
-the `dovi_rpu` and `filter_units` bitstream filters. `hdr_to_sdr_tonemap` additionally requires an
+their own advertisements. `hdr_to_sdr_tonemap` additionally requires an
 administrator-enabled hardware or software policy and a successful device-level
 smoke probe for the applicable PQ, HLG, or SDR fallback-base source kind. A
-client must not assume a transformation exists because this document names it.
+client must not assume a
+transformation exists because this document names it.
 
 `enabled` survives from the rollout period and is now constant `true`; the
 negative shape was deliberately removed while the alpha `/api/v1` contract was
@@ -241,7 +241,6 @@ body cap: 256 KiB. Body: `ReplanRequestV3`
 | `409` | `stale_playback_plan` | `failed_plan_id` is not the session's current plan, `playback_attempt_id` is not the session's attempt, or a newer replacement is already active |
 | `409` | `idempotency_key_reused` | This `replan_request_id` was used for a different replan |
 | `409` | `replan_in_progress` | A replan for this session holds the lease right now |
-| `409` | `output_route_unchanged` | A legacy output-route invalidation changed only opaque or non-planning state; the active plan remains mounted |
 | `503` | `replan_capacity_exhausted` | Server-wide concurrent replan limit (8) reached; retryable |
 | `500` | `internal_error` | Store outage |
 
@@ -623,18 +622,17 @@ and active-output HDR are separate facts — browsers tone-map HDR content onto 
 outputs, and Safari 26 reports `dynamic-range: standard` even on an XDR display —
 so the media query survives only as the best-effort `hdr` output boolean. Format
 claims come from exact shape probes matched to the bytes the remux delivers:
-progressive and native HLS probe Silo's 2160p HEVC Main10, Rec. 2020, PQ,
-SMPTE ST 2086 shape under `hvc1`, while hls.js independently probes the same
-MediaSource shape under `hev1`. The explicit v3 HDR10 strip remux labels its
-output `hvc1`; legacy and automatic strip paths retain FFmpeg's `hev1` default.
-Evidence from one playback engine never authorizes the other. Dolby Vision
+HDR10 requires Media Capabilities support for Silo's progressive 2160p HEVC
+Main10, Rec. 2020, PQ, SMPTE ST 2086 shape, probed under exactly the `hvc1`
+sample entry because the explicit v3 HDR10 strip remux labels its output `hvc1`
+(legacy and automatic strip paths retain FFmpeg's default `hev1`). Dolby Vision
 requires a definitive media-element answer for exactly `dvh1.05.06` or
-`dvh1.08.06`, because the preserve remux tags its output `dvh1`; an answer only
-for `dvhe` is evidence for bytes Silo does not send on that route. When native
-HLS is available, the media-element `dvh1` and `hvc1` claims are scoped to
-`hls`. When native HLS is unavailable, they are scoped to `progressive`; the
-hls.js MediaSource path keeps its separate `hev1` evidence.
-
+`dvh1.08.06`, because the preserve remux tags its output `dvh1`. An answer only
+for the other spelling (`hev1`/`dvhe`) is evidence for a file Silo never sends
+and earns no claim. When native HLS is available, these media-element `dvh1` and
+`hvc1` claims are scoped to `hls`, and `progressive` does not inherit them. When
+native HLS is unavailable, they remain scoped to `progressive`; the hls.js MSE
+path does not inherit evidence from a different playback engine.
 `original_http` never receives normalized-remux evidence. An HDR10 claim can
 carry `hdr10_max_width`, `hdr10_max_height`, `hdr10_max_frame_rate`, and
 `hdr10_max_bitrate_kbps`; these ceilings keep a successful format probe from
@@ -651,7 +649,7 @@ client negotiates in three classes.
 | --- | --- | --- |
 | `original_http` | `original_http` | The source file, byte-for-byte, over HTTP with range support |
 | `server_remux_progressive` | `progressive` | Repackaged into a new container, streamed as one chunked response |
-| `server_remux_hls` | `hls` | Repackaged into HLS segments; native Apple HLS uses the validated `hvc1`/`dvh1` sample entry while hls.js MediaSource routes use independently validated `hev1` |
+| `server_remux_hls` | `hls` | Repackaged into HLS segments; codecs untouched |
 | `server_transcode_hls` | `hls` | Re-encoded and segmented |
 
 Because `original_http` carries the complete source file, a client may put
@@ -1285,10 +1283,7 @@ HDR, 4K, or transcode-policy reason — deselecting the subtitle restores playba
 `invalid_seek_position`, `invalid_replan`, `seek_reanchor_route_changed`,
 `seek_reanchor_recipe_unavailable`,
 `seek_reanchor_intent_mismatch`, `seek_failure_recovery_intent_mismatch`,
-`policy_unavailable`, `policy_denied`, `routing_policy_unsatisfied`,
-`route_capacity_unavailable`. A policy evaluation infrastructure failure is
-retryable `policy_unavailable`; only an evaluated policy decision whose result
-is deny uses non-retryable `policy_denied`.
+`policy_denied`, `routing_policy_unsatisfied`, `route_capacity_unavailable`.
 The last two come from the node-routing resolver:
 `routing_policy_unsatisfied` means no route shape is legal under the configured
 execution and egress policy and is never retryable, while
@@ -1392,7 +1387,9 @@ Native embedded selection requires `embedded_subtitles_v1` in `client_features` 
 }
 ```
 
-`track_identity` is either `ffmpeg_stream_index` (the absolute probed AVStream index) or `container_track_id` (the canonical positive decimal container track ID, when available from probing). Neither is a combined subtitle ordinal. Missing or ambiguous identity metadata disqualifies the native route. Container and codec support must match; authored ASS preservation additionally requires styling and font support. The old `embedded_text` flag alone never authorizes native selection. Text sidecar rendering depends on `sidecar_text`, regardless of the source being embedded or external.
+`track_identity` is either `ffmpeg_stream_index` (the absolute probed AVStream index) or `container_track_id` (the canonical positive decimal container track ID, when available from probing). Neither is a combined subtitle ordinal. Missing or ambiguous identity metadata disqualifies the native route.
+
+The scanner records `container_track_id` as the MP4 track ID (`tkhd`) that FFprobe reports and, for Matroska, as the TrackEntry's `TrackNumber`, which FFprobe does not report. The scanner reads the Matroska `Tracks` element itself and maps each entry to its FFmpeg stream the way FFmpeg's demuxer creates streams. It records a number only when the per-type stream counts, the subtitle positions, and the subtitle codecs all agree with the probe. A track number is often not stream index + 1, because remuxes keep the original numbers. Tracks with the legacy codec IDs `S_ASS` and `S_SSA` get no ID: FFmpeg reports them as `ass`, but Media3 drops them, so a client could not resolve the number and its capability cannot exclude them. Files probed before Matroska numbers were recorded get them from the `backfill_matroska_track_numbers` task, which reads only the `Tracks` element and writes only when the file and the row still match the stored probe. It reads only files with a SubRip or ASS track lacking an ID, the codecs a client currently plays by track number, and records each file it reads in `matroska_track_backfill_checks` against the file's size, mtime and stored tracks. A recorded file is read again only after one of those changes or the matching rules do; a file storage could not open, or that differs on disk from its row until a scan rewrites it, is retried on the next start. A file skipped for its codecs, such as a PGS-only one, gets an ID from its next reprobe, or from the backfill once its codec is added to that list. Container and codec support must match; authored ASS preservation additionally requires styling and font support. The old `embedded_text` flag alone never authorizes native selection. Text sidecar rendering depends on `sidecar_text`, regardless of the source being embedded or external.
 
 The native decision is `subtitle: {"mode":"render", "track_id":"file:42:subtitle:0", "embedded":{"stream_index":3,"container_track_id":"4"}, "inventory":[...]}`. The client selects that exact stream from the original media and does not mount the inventory's fallback URL. Native selection applies only to `original_http`; remux and transcode plans use sidecars or burn-in. Inventory `delivery` continues to describe the available server representation, so even a `burn_in_only` entry can be selected natively when the client attests the exact bitmap codec.
 
@@ -1579,8 +1576,13 @@ A transformation is a named, versioned media operation with claims attached.
 | `audio_to_aac` | `server` | `2` | — | `audio_decode` |
 | `video_to_h264` | `server` | `2` | `sdr` output | `h264_decode` |
 | `hdr_to_sdr_tonemap` | `server` | `1` | limited-range BT.709 `sdr` output with HDR metadata removed | `hdr_metadata_removed`, `sdr_bt709_output` |
-| `server_dv7_to_hdr10` | `server` | `3` | `hdr10` output; progressive/native Apple HLS label copied HEVC `hvc1`, while hls.js labels its independently probed MediaSource path `hev1` | `dolby_vision_metadata_removed`, `hdr10_base_layer_preserved`, `enhancement_layer_discarded` |
-| `server_dv8_to_compatible_base` | `server` | `2` | Range selected from the explicit Profile 8 BL compatibility ID: `hdr10` (1/6), `sdr` (2), or `hlg` (4), with the same route-specific `hvc1`/`hev1` isolation | `dolby_vision_metadata_removed` plus the matching base-layer claim |
+| `server_dv7_to_hdr10` | `server` | `2` | `hdr10` output | `dolby_vision_metadata_removed`, `hdr10_base_layer_preserved`, `enhancement_layer_discarded` |
+
+`server_dv7_to_hdr10` recipe version 2 removes a single-track Profile 7
+enhancement layer (NAL unit type 63) with `filter_units` as well as the Dolby
+Vision RPUs with `dovi_rpu`. An executor on recipe 1 is never offered a recipe 2
+plan, and a copy started under recipe 1 cannot be reopened on an upgraded
+executor, so that session replans.
 
 `audio_to_aac` recipe version 2 treats the selected source channel count as a
 byte-affecting input. When a source with more than two channels is encoded to
@@ -1643,8 +1645,7 @@ tone-map smoke probe is lazy and cached by binary, backend, and device:
 
 | Transformation | Probe |
 | --- | --- |
-| `server_dv7_to_hdr10` | `ffmpeg -bsfs` contains both `dovi_rpu` and `filter_units` |
-| `server_dv8_to_compatible_base` | `ffmpeg -bsfs` contains both `dovi_rpu` and `filter_units` |
+| `server_dv7_to_hdr10` | `ffmpeg -bsfs` contains `dovi_rpu` and `filter_units` |
 | `audio_to_aac` | `ffmpeg -encoders` contains an `aac` encoder and a bounded silent-frame smoke test executes the exact stereo-downmix limiter graph |
 | `video_to_h264` | `ffmpeg -encoders` contains any of `libx264`, `h264_qsv`, `h264_vaapi`, `h264_nvenc`, `h264_videotoolbox` |
 | `hdr_to_sdr_tonemap` | A bounded decode → BT.709 H.264 encode succeeds for the advertised PQ, BT.2100 HLG, legacy HLG, BT.709 SDR-base, and/or BT.2020 SDR-base source kinds on the real software, VAAPI/QSV, or NVENC executor |

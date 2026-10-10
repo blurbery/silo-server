@@ -4,10 +4,26 @@
 > 1.0. The frozen alpha `/api/v1` surface answers the same features through the pre-1.0 bridge
 > window and is then retired. See [the native API contract](architecture/api-contract.md).
 
+## Section browsing
+
+Catalog reads with `source=section` resolve the row on the acting profile's
+`home` or `library` page. This includes personal rows and the profile's overrides
+to server rows. Paging uses that effective row's configuration. A row hidden or
+removed by the profile, a row belonging to another profile, or a row in an
+inaccessible library answers `404`, as an unknown section does.
+
 ## People search
 
-`GET /api/v2/catalog/people` (`listPeople`) accepts a name fragment in `q` and
-`limit` from 1 to 100 (default 20). Case-insensitive exact name matches come first;
+`GET /api/v2/catalog/people` (`listPeople`) accepts a name query in `q` and
+`limit` from 1 to 100 (default 20). Each whitespace-separated word of `q` must
+start a word of the person's name, case-insensitively and in any order. A word
+starts the name or follows a character that is not a letter or digit, so `hacks`
+matches "Lark Hackshaw" but not "Chad Thackston", and `luc` matches "Jean-Luc".
+A partial last word still matches, which keeps typeahead working. A name
+written without separators, as many Chinese, Japanese, and Korean names are,
+matches only from its start. Only the first eight distinct words count, and a
+repeated word counts once. `%` and `_` are literal. Case-insensitive exact name
+matches come first;
 other matches sort by name, with person ID breaking ties. Ranking happens before
 applying the limit.
 
@@ -819,12 +835,14 @@ The four `rating_imdb`, `rating_tmdb`, `rating_rt_critic` and
 `rating_rt_audience` members are unchanged, keep their own scales, and remain
 the only ratings browse can sort or filter by.
 
-Rating sources follow the same refresh and lock rules as those four members. A
-scheduled refresh only adds sources the item lacks, a manual refresh overwrites
-the sources the providers report, and locking the rating field freezes all of
-them. A refresh never removes a source a provider stopped reporting. Identify
-is the exception: it matches the item to a different title, so the sources the
-new match reports replace the stored set, and a source it does not report is
+Rating sources follow the lock rules of those four members, but not their
+scheduled-refresh rule. A manual or scheduled refresh overwrites the sources
+the providers report, so scores and vote counts stay current; the chain's
+provider order picks one entry per source. The bulk enrichment pass only adds
+sources the item lacks. Locking the rating field freezes all of them. A
+refresh never removes a source a provider stopped reporting. Identify is the
+exception: it matches the item to a different title, so the sources the new
+match reports replace the stored set, and a source it does not report is
 removed.
 
 Plugins send them under `ratings.sources` in a metadata item, as

@@ -5,10 +5,6 @@ import (
 	"net/http"
 )
 
-const schemeHTTPS = "https"
-
-const schemeHTTP = "http"
-
 type contextKey string
 
 const clientIPKey contextKey = "client_ip"
@@ -83,9 +79,9 @@ func RequestScheme(r *http.Request) string {
 		return scheme
 	}
 	if r.TLS != nil {
-		return schemeHTTPS
+		return "https"
 	}
-	return schemeHTTP
+	return "http"
 }
 
 // RequestHost returns the host[:port] the client addressed: the single

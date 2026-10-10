@@ -29,7 +29,7 @@ import { reportSessionRouteEventV2 } from "@/player/route-events-v2";
 import { buildRouteEventV3 } from "@/player/route-events-v3";
 import { buildPlayerStreamUrl } from "@/player/stream-url";
 import type { PlayerChapter } from "@/player/types";
-import { probeWebCapabilities } from "@/player/hooks/useCodecDetection";
+import { useCodecDetection } from "@/player/hooks/useCodecDetection";
 import { usePlaybackRealtime } from "@/player/hooks/usePlaybackRealtime";
 import { buildReplanRequestV3, buildStartRequestV3 } from "@/player/playback-session-wire-v3";
 import type { SleepSetting } from "@/player/components/SleepTimerMenu";
@@ -221,11 +221,11 @@ export function useAudiobookPlayback({
   useEffect(() => {
     onStopRequestedRef.current = onStopRequested;
   }, [onStopRequested]);
-  // Audiobooks only need the synchronous audio/browser capability snapshot.
-  // The video player's later HDR/output refinement must not restart an active
-  // audiobook session; audio codecs are still tested against audio/video MP4.
-  const capabilityProbe = useMemo(probeWebCapabilities, []);
-  const capabilitiesSettled = true;
+  // The same probe the video player uses: its audio codecs are already tested
+  // against `audio/mp4` as well as `video/mp4`, so an audio-only source is
+  // described honestly without a second detection path.
+  const capabilityProbe = useCodecDetection();
+  const capabilitiesSettled = capabilityProbe.settled;
   const clientCapabilities = useMemo(
     () => buildClientCapabilitiesV3(capabilityProbe),
     [capabilityProbe],
@@ -809,7 +809,6 @@ export function useAudiobookPlayback({
     parts,
     rate,
     recoverFromPlanFailure,
-    sessionState.streamUrl,
     setAbsoluteTime,
     stopSession,
   ]);

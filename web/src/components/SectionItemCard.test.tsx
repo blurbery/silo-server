@@ -134,11 +134,6 @@ describe("SectionItemCard", () => {
             season_number: 2,
             badges: ["season_premiere"],
           },
-          user_state: {
-            played: true,
-            is_favorite: false,
-            in_watchlist: false,
-          },
         }}
       />,
     );

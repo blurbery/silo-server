@@ -362,7 +362,6 @@ func goldenCapabilityResponse() playback.CapabilityResponseV3 {
 			{Name: playback.TransformationAudioToAACV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3, ValidatedClaims: []string{playback.ClaimAudioDecodeV3}},
 			{Name: playback.TransformationHDRToSDRToneMapV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationHDRToSDRToneMapRecipeVersionV3, ValidatedClaims: []string{playback.ClaimHDRMetadataRemovedV3, playback.ClaimSDRBT709OutputV3}},
 			{Name: playback.TransformationServerDV7HDR10V3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3, ValidatedClaims: playback.DV7ToHDR10ClaimsV3()},
-			{Name: playback.TransformationServerDV8BaseV3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationServerDV8BaseRecipeVersionV3, ValidatedClaims: playback.DV8ToBaseLayerClaimsV3("")},
 			{Name: playback.TransformationVideoToH264V3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationVideoToH264RecipeVersionV3, ValidatedClaims: []string{playback.ClaimH264DecodeV3}},
 		},
 	}

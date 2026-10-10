@@ -13,13 +13,6 @@ import (
 	subtitleai "github.com/Silo-Server/silo-server/internal/subtitles/ai"
 )
 
-const (
-	policyEvalTimeoutSettingKey = "policy.eval_timeout_ms"
-	defaultPolicyEvalTimeoutMS  = 250
-	minPolicyEvalTimeoutMS      = 10
-	maxPolicyEvalTimeoutMS      = 5000
-)
-
 // stringOr returns the value from the map for the given key, or the fallback if absent/empty.
 func stringOr(m map[string]string, key, fallback string) string {
 	if v, ok := m[key]; ok && v != "" {
@@ -652,6 +645,20 @@ func LoadFromDB(m map[string]string) (*Config, error) {
 	if artifactMaxBytes < 0 {
 		return nil, fmt.Errorf("invalid value for %q: must be non-negative", "download.artifact_max_bytes")
 	}
+	artifactCacheHours, err := intOr(m, DownloadArtifactCacheHoursSettingKey, DefaultDownloadArtifactCacheHours)
+	if err != nil {
+		return nil, err
+	}
+	if artifactCacheHours < 0 || artifactCacheHours > MaxDownloadArtifactCacheHours {
+		return nil, fmt.Errorf("invalid value for %q: must be 0 to %d", DownloadArtifactCacheHoursSettingKey, MaxDownloadArtifactCacheHours)
+	}
+	artifactDiskCeiling, err := intOr(m, DownloadArtifactDiskCeilingSettingKey, DefaultDownloadArtifactDiskCeilingPercent)
+	if err != nil {
+		return nil, err
+	}
+	if artifactDiskCeiling < MinDownloadArtifactDiskCeilingPercent || artifactDiskCeiling > MaxDownloadArtifactDiskCeilingPercent {
+		return nil, fmt.Errorf("invalid value for %q: must be %d to %d", DownloadArtifactDiskCeilingSettingKey, MinDownloadArtifactDiskCeilingPercent, MaxDownloadArtifactDiskCeilingPercent)
+	}
 	artifactDir := strings.TrimSpace(stringOr(m, downloadArtifactDirSettingKey, ""))
 	if artifactDir != "" && !filepath.IsAbs(artifactDir) {
 		return nil, fmt.Errorf("invalid value for %q: must be an absolute path", downloadArtifactDirSettingKey)
@@ -660,18 +667,17 @@ func LoadFromDB(m map[string]string) (*Config, error) {
 	cfg.Download.ArtifactDir = artifactDir
 	cfg.Download.MaxConcurrentPrepares = maxConcurrentPrepares
 	cfg.Download.ArtifactMaxBytes = artifactMaxBytes
+	cfg.Download.ArtifactCacheHours = artifactCacheHours
+	cfg.Download.ArtifactDiskCeilingPercent = artifactDiskCeiling
 	// Playback owns these keys; read them the same way so one malformed value
 	// cannot stall the whole download config.
 	cfg.Download.Allow4KTranscode = AdminSettingEnabled(Allow4KTranscodeSettingKey, m[Allow4KTranscodeSettingKey])
 	cfg.Download.AllowHEVCEncoding = AdminSettingEnabled(PlaybackAllowHEVCEncodingSettingKey, m[PlaybackAllowHEVCEncodingSettingKey])
 
 	// Policy
-	policyEvalTimeoutMS, err := intOr(m, policyEvalTimeoutSettingKey, defaultPolicyEvalTimeoutMS)
+	policyEvalTimeoutMS, err := intOr(m, "policy.eval_timeout_ms", 100)
 	if err != nil {
 		return nil, err
-	}
-	if policyEvalTimeoutMS < minPolicyEvalTimeoutMS || policyEvalTimeoutMS > maxPolicyEvalTimeoutMS {
-		return nil, fmt.Errorf("invalid value for %q: must be between %d and %d", policyEvalTimeoutSettingKey, minPolicyEvalTimeoutMS, maxPolicyEvalTimeoutMS)
 	}
 	cfg.Policy.EvalTimeoutMS = policyEvalTimeoutMS
 	policyEditorEnabled, err := boolOr(m, "policy.editor_enabled", false)

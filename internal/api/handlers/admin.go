@@ -44,16 +44,6 @@ import (
 	"github.com/Silo-Server/silo-server/internal/userstore"
 )
 
-const (
-	settingAIBaseURL   = "ai.base_url"
-	settingAIChatModel = "ai.chat_model"
-	settingASRModel    = "ai.asr_model"
-)
-
-const (
-	settingASRBaseURL = "ai.asr_base_url"
-)
-
 // AdminMetadataRefresher can refresh metadata for individual items.
 type AdminMetadataRefresher interface {
 	RefreshItem(ctx context.Context, contentID string) error
@@ -584,7 +574,7 @@ func (h *AdminHandler) loadTargetUser(w http.ResponseWriter, r *http.Request, id
 			writeError(w, http.StatusNotFound, "not_found", "User not found")
 			return nil, true
 		}
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to fetch user")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch user")
 		return nil, true
 	}
 	return target, false
@@ -752,7 +742,7 @@ func (h *AdminHandler) HandleListUsers(w http.ResponseWriter, r *http.Request) {
 func (h *AdminHandler) ListAdminUsers(ctx context.Context) ([]AdminUserView, error) {
 	users, err := h.userRepo.List(ctx)
 	if err != nil {
-		return nil, apiError(http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to list users")
+		return nil, apiError(http.StatusInternalServerError, "internal_error", "Failed to list users")
 	}
 	return h.adminUserViews(ctx, users)
 }
@@ -763,7 +753,7 @@ func (h *AdminHandler) ListAdminUsers(ctx context.Context) ([]AdminUserView, err
 func (h *AdminHandler) ListAdminUsersPage(ctx context.Context, afterID, limit int, identity string) ([]AdminUserView, bool, error) {
 	users, err := h.userRepo.ListPage(ctx, afterID, limit+1, identity)
 	if err != nil {
-		return nil, false, apiError(http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to list users")
+		return nil, false, apiError(http.StatusInternalServerError, "internal_error", "Failed to list users")
 	}
 	hasMore := len(users) > limit
 	if hasMore {
@@ -781,7 +771,7 @@ func (h *AdminHandler) ListAdminUsersPage(ctx context.Context, afterID, limit in
 func (h *AdminHandler) adminUserViews(ctx context.Context, users []*models.User) ([]AdminUserView, error) {
 	policies, err := h.groupPolicies(ctx)
 	if err != nil {
-		return nil, apiError(http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to resolve effective policy")
+		return nil, apiError(http.StatusInternalServerError, "internal_error", "Failed to resolve effective policy")
 	}
 	resp := make([]AdminUserView, 0, len(users))
 	userIDs := make([]int, 0, len(users))
@@ -816,7 +806,7 @@ func (h *AdminHandler) HandleGetUser(w http.ResponseWriter, r *http.Request) {
 
 	groupPolicy, err := h.groupPolicyFor(r.Context(), user)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to resolve effective policy")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve effective policy")
 		return
 	}
 	resp := toAdminUserResponse(user, groupPolicy)
@@ -893,7 +883,7 @@ func (h *AdminHandler) HandleCreateUser(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.AccessGroupID != nil {
 		if h.AccessGroups == nil {
-			writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Access groups are not configured")
+			writeError(w, http.StatusInternalServerError, "internal_error", "Access groups are not configured")
 			return
 		}
 		if _, err := h.AccessGroups.Get(r.Context(), *req.AccessGroupID); err != nil {
@@ -901,7 +891,7 @@ func (h *AdminHandler) HandleCreateUser(w http.ResponseWriter, r *http.Request) 
 				writeError(w, http.StatusUnprocessableEntity, "unprocessable_entity", "Invalid access_group_id")
 				return
 			}
-			writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to validate access group")
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to validate access group")
 			return
 		}
 	}
@@ -935,14 +925,14 @@ func (h *AdminHandler) HandleCreateUser(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusConflict, "duplicate", "A user with that username or email already exists")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to create user")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create user")
 		return
 	}
 	h.invalidateStats(r.Context(), cache.ChannelAdmin, cache.EventAdminStatsInvalidated, strconv.Itoa(user.ID))
 
 	createdGroupPolicy, err := h.groupPolicyFor(r.Context(), user)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to resolve effective policy")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve effective policy")
 		return
 	}
 	writeJSON(w, http.StatusCreated, toAdminUserResponse(user, createdGroupPolicy))
@@ -996,7 +986,7 @@ func (h *AdminHandler) HandleUpdateUser(w http.ResponseWriter, r *http.Request) 
 		}
 		if req.AccessGroupID.Value != nil {
 			if h.AccessGroups == nil {
-				writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Access groups are not configured")
+				writeError(w, http.StatusInternalServerError, "internal_error", "Access groups are not configured")
 				return
 			}
 			if _, err := h.AccessGroups.Get(r.Context(), *req.AccessGroupID.Value); err != nil {
@@ -1004,7 +994,7 @@ func (h *AdminHandler) HandleUpdateUser(w http.ResponseWriter, r *http.Request) 
 					writeError(w, http.StatusUnprocessableEntity, "unprocessable_entity", "Invalid access_group_id")
 					return
 				}
-				writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to validate access group")
+				writeError(w, http.StatusInternalServerError, "internal_error", "Failed to validate access group")
 				return
 			}
 		}
@@ -1092,13 +1082,13 @@ func (h *AdminHandler) HandleUpdateUser(w http.ResponseWriter, r *http.Request) 
 
 	user, err := h.userRepo.GetByID(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to fetch updated user")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch updated user")
 		return
 	}
 
 	updatedGroupPolicy, err := h.groupPolicyFor(r.Context(), user)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to resolve effective policy")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve effective policy")
 		return
 	}
 	writeJSON(w, http.StatusOK, toAdminUserResponse(user, updatedGroupPolicy))
@@ -1171,7 +1161,7 @@ func (h *AdminHandler) sweepWatchlistTitles(ctx context.Context, userID int) {
 // HandleImpersonateUser handles POST /admin/users/{id}/impersonate.
 func (h *AdminHandler) HandleImpersonateUser(w http.ResponseWriter, r *http.Request) {
 	if h.ImpersonationService == nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Impersonation service unavailable")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Impersonation service unavailable")
 		return
 	}
 
@@ -1215,7 +1205,7 @@ func (h *AdminHandler) HandleImpersonateUser(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusForbidden, "impersonation_not_allowed", "Impersonation is not allowed")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to start impersonation")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to start impersonation")
 		return
 	}
 
@@ -1227,7 +1217,7 @@ func (h *AdminHandler) HandleImpersonateUser(w http.ResponseWriter, r *http.Requ
 func (h *AdminHandler) HandleListSessions(w http.ResponseWriter, r *http.Request) {
 	sessions, err := h.loadPlaybackSessions(r.Context(), r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to list sessions")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list sessions")
 		return
 	}
 
@@ -1245,7 +1235,7 @@ func (h *AdminHandler) loadPlaybackSessions(ctx context.Context, r *http.Request
 // HandleListPlaybackHistory handles GET /admin/playback-history.
 func (h *AdminHandler) HandleListPlaybackHistory(w http.ResponseWriter, r *http.Request) {
 	if h.pool == nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Database not configured")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Database not configured")
 		return
 	}
 
@@ -1326,7 +1316,7 @@ func (h *AdminHandler) HandleListPlaybackHistory(w http.ResponseWriter, r *http.
 
 	rows, err := h.pool.Query(r.Context(), query, args...)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to list playback history")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list playback history")
 		return
 	}
 	defer rows.Close()
@@ -1351,13 +1341,13 @@ func (h *AdminHandler) HandleListPlaybackHistory(w http.ResponseWriter, r *http.
 			&row.DurationSeconds,
 			&row.Completed,
 		); err != nil {
-			writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to scan playback history row")
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to scan playback history row")
 			return
 		}
 		history = append(history, row)
 	}
 	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to iterate playback history")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to iterate playback history")
 		return
 	}
 
@@ -1367,7 +1357,7 @@ func (h *AdminHandler) HandleListPlaybackHistory(w http.ResponseWriter, r *http.
 // HandleListUserProfiles handles GET /admin/users/{id}/profiles.
 func (h *AdminHandler) HandleListUserProfiles(w http.ResponseWriter, r *http.Request) {
 	if h.storeProv == nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "User store not configured")
+		writeError(w, http.StatusInternalServerError, "internal_error", "User store not configured")
 		return
 	}
 
@@ -1389,7 +1379,7 @@ func (h *AdminHandler) HandleListUserProfiles(w http.ResponseWriter, r *http.Req
 
 	profiles, err := store.ListProfiles(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to list profiles")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list profiles")
 		return
 	}
 
@@ -1436,7 +1426,7 @@ func updateRequiresSessionRevocation(current *models.User, input models.UpdateUs
 // Lists media files that have not been matched to content (content_id IS NULL).
 func (h *AdminHandler) HandleListUnmatched(w http.ResponseWriter, r *http.Request) {
 	if h.pool == nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Database not configured")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Database not configured")
 		return
 	}
 
@@ -1488,7 +1478,7 @@ func (h *AdminHandler) listUnmatchedFiles(ctx context.Context, limit, offset int
 		 ORDER BY id ASC
 		 LIMIT $1 OFFSET $2`, limit, offset, after)
 	if err != nil {
-		return nil, apiError(http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to list unmatched files")
+		return nil, apiError(http.StatusInternalServerError, "internal_error", "Failed to list unmatched files")
 	}
 	defer rows.Close()
 
@@ -1496,12 +1486,12 @@ func (h *AdminHandler) listUnmatchedFiles(ctx context.Context, limit, offset int
 	for rows.Next() {
 		var f unmatchedFileRow
 		if err := rows.Scan(&f.ID, &f.MediaFolderID, &f.FilePath, &f.FileSize, &f.Container); err != nil {
-			return nil, apiError(http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to scan file")
+			return nil, apiError(http.StatusInternalServerError, "internal_error", "Failed to scan file")
 		}
 		files = append(files, f)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, apiError(http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to iterate files")
+		return nil, apiError(http.StatusInternalServerError, "internal_error", "Failed to iterate files")
 	}
 
 	return files, nil
@@ -1521,7 +1511,7 @@ func (h *AdminHandler) HandleGetStats(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, errAdminStatsCountUsers) {
 			message = "Failed to count users"
 		}
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, message)
+		writeError(w, http.StatusInternalServerError, "internal_error", message)
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -1817,12 +1807,12 @@ func redactAdminSettings(values map[string]string) {
 // HandleGetSettings handles GET /admin/settings.
 func (h *AdminHandler) HandleGetSettings(w http.ResponseWriter, r *http.Request) {
 	if h.SettingsRepo == nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Settings store not configured")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Settings store not configured")
 		return
 	}
 	all, err := h.SettingsRepo.GetAll(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to load settings")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load settings")
 		return
 	}
 	redactAdminSettings(all)
@@ -1834,12 +1824,12 @@ func (h *AdminHandler) HandleGetSettings(w http.ResponseWriter, r *http.Request)
 // by runtime readers so an untouched form always describes active behavior.
 func (h *AdminHandler) HandleGetEffectiveSettings(w http.ResponseWriter, r *http.Request) {
 	if h.SettingsRepo == nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Settings store not configured")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Settings store not configured")
 		return
 	}
 	all, err := h.SettingsRepo.GetAll(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to load settings")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load settings")
 		return
 	}
 	effective := h.effectiveAdminSettings(all)
@@ -2204,7 +2194,7 @@ func listProfileNamesByID(ctx context.Context, store userstore.UserStore) (map[s
 func adminProfileExists(w http.ResponseWriter, r *http.Request, store userstore.UserStore, profileID string) bool {
 	profile, err := store.GetProfile(r.Context(), profileID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to load profile")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load profile")
 		return false
 	}
 	if profile == nil {
@@ -2216,12 +2206,12 @@ func adminProfileExists(w http.ResponseWriter, r *http.Request, store userstore.
 
 func (h *AdminHandler) adminUserStore(w http.ResponseWriter, r *http.Request, userID int) (userstore.UserStore, bool) {
 	if h.storeProv == nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "User store not configured")
+		writeError(w, http.StatusInternalServerError, "internal_error", "User store not configured")
 		return nil, false
 	}
 	store, err := h.storeProv.ForUser(r.Context(), userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to access user store")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to access user store")
 		return nil, false
 	}
 	if store == nil {
@@ -2562,7 +2552,7 @@ func (h *AdminHandler) checkLocalLoginSetting(ctx context.Context, tx pgx.Tx, be
 // SetMany performs one transaction, so a multi-field save is all-or-nothing.
 func (h *AdminHandler) HandleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if h.SettingsRepo == nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Settings store not configured")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Settings store not configured")
 		return
 	}
 
@@ -2583,7 +2573,7 @@ func (h *AdminHandler) HandleUpdateSettings(w http.ResponseWriter, r *http.Reque
 
 func (h *AdminHandler) UpdateAdminSettings(ctx context.Context, values map[string]string, guard func(AdminSettingsSnapshot) error) (AdminSettingsUpdateResult, error) {
 	if h.SettingsRepo == nil {
-		return AdminSettingsUpdateResult{}, &APIError{Status: 500, Code: autoscanDeliveryInternalError, Message: "Settings store not configured"}
+		return AdminSettingsUpdateResult{}, &APIError{Status: 500, Code: "internal_error", Message: "Settings store not configured"}
 	}
 	req := updateSettingsRequest{Values: values}
 
@@ -2707,7 +2697,7 @@ func (h *AdminHandler) UpdateAdminSettings(ctx context.Context, values map[strin
 		return AdminSettingsUpdateResult{}, &APIError{Status: http.StatusBadRequest, Code: validationCode, Message: validationErr.Error()}
 	}
 	if err != nil {
-		return AdminSettingsUpdateResult{}, &APIError{Status: http.StatusInternalServerError, Code: autoscanDeliveryInternalError, Message: "Failed to update settings"}
+		return AdminSettingsUpdateResult{}, &APIError{Status: http.StatusInternalServerError, Code: "internal_error", Message: "Failed to update settings"}
 	}
 
 	responseValues := make(map[string]string, len(normalized))
@@ -2747,7 +2737,7 @@ func (h *AdminHandler) UpdateAdminSettings(ctx context.Context, values map[strin
 // HandleUpdateSetting handles PUT /admin/settings/{key}.
 func (h *AdminHandler) HandleUpdateSetting(w http.ResponseWriter, r *http.Request) {
 	if h.SettingsRepo == nil {
-		writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Settings store not configured")
+		writeError(w, http.StatusInternalServerError, "internal_error", "Settings store not configured")
 		return
 	}
 
@@ -2788,7 +2778,7 @@ func (h *AdminHandler) UpdateAdminSetting(ctx context.Context, key, value string
 	req := updateSettingRequest{Value: value}
 
 	if h.SettingsRepo == nil {
-		return AdminSettingUpdateResult{}, &APIError{Status: http.StatusInternalServerError, Code: autoscanDeliveryInternalError, Message: "Settings store not configured"}
+		return AdminSettingUpdateResult{}, &APIError{Status: http.StatusInternalServerError, Code: "internal_error", Message: "Settings store not configured"}
 	}
 
 	if key == "" {
@@ -2834,7 +2824,7 @@ func (h *AdminHandler) UpdateAdminSetting(ctx context.Context, key, value string
 			return AdminSettingUpdateResult{}, &APIError{Status: http.StatusBadRequest, Code: "bad_request", Message: "clientip.trusted_proxies must be a comma-separated list of CIDRs: " + err.Error()}
 		}
 		req.Value = normalized
-	case settingAIBaseURL, settingASRBaseURL, settingAIChatModel, settingASRModel:
+	case "ai.base_url", "ai.asr_base_url", "ai.chat_model", "ai.asr_model":
 		req.Value = strings.TrimSpace(req.Value)
 	case "metadata_ai.on_view":
 		switch req.Value {
@@ -3089,7 +3079,7 @@ func (h *AdminHandler) UpdateAdminSetting(ctx context.Context, key, value string
 		return AdminSettingUpdateResult{}, &APIError{Status: http.StatusBadRequest, Code: validationCode, Message: validationErr.Error()}
 	}
 	if err != nil {
-		return AdminSettingUpdateResult{}, &APIError{Status: http.StatusInternalServerError, Code: autoscanDeliveryInternalError, Message: "Failed to update setting"}
+		return AdminSettingUpdateResult{}, &APIError{Status: http.StatusInternalServerError, Code: "internal_error", Message: "Failed to update setting"}
 	}
 	if effectiveChanged {
 		if h.EventBus != nil {
@@ -3289,5 +3279,5 @@ func writeAdminSettingsServiceError(w http.ResponseWriter, err error) {
 		writeError(w, apiErr.Status, apiErr.Code, apiErr.Message)
 		return
 	}
-	writeError(w, http.StatusInternalServerError, autoscanDeliveryInternalError, "Failed to update settings")
+	writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update settings")
 }

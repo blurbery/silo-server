@@ -450,37 +450,15 @@ func TestSessionManager_PolicyAdmissionDeciderMatchesLegacy(t *testing.T) {
 	}
 }
 
-func TestSessionManager_AdmissionDeciderErrorIsUnavailable(t *testing.T) {
+func TestSessionManager_AdmissionDeciderErrorDenies(t *testing.T) {
 	sm := playback.NewSessionManager(0, 0)
 	sm.SetAdmissionDecider(func(context.Context, playback.AdmissionRequest) (playback.AdmissionDecision, error) {
 		return playback.AdmissionDecision{}, errors.New("policy unavailable")
 	})
 
 	_, err := sm.StartSession(1, "profile-1", 100, playback.PlayDirect, false)
-	if !errors.Is(err, playback.ErrPlaybackAdmissionUnavailable) {
-		t.Fatalf("StartSession with failing decider = %v, want ErrPlaybackAdmissionUnavailable", err)
-	}
-	if errors.Is(err, playback.ErrPlaybackNotAllowed) {
-		t.Fatalf("StartSession with failing decider = %v, must not look like a policy denial", err)
-	}
-}
-
-func TestSessionManager_ReplacementAdmissionDeciderErrorIsUnavailable(t *testing.T) {
-	sm := playback.NewSessionManager(0, 0)
-	session, err := sm.StartSession(1, "profile-1", 100, playback.PlayDirect, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sm.SetAdmissionDecider(func(context.Context, playback.AdmissionRequest) (playback.AdmissionDecision, error) {
-		return playback.AdmissionDecision{}, errors.New("policy unavailable")
-	})
-
-	err = sm.CheckReplacementAllowed(context.Background(), session.ID, playback.PlayDirect, false)
-	if !errors.Is(err, playback.ErrPlaybackAdmissionUnavailable) {
-		t.Fatalf("CheckReplacementAllowed with failing decider = %v, want ErrPlaybackAdmissionUnavailable", err)
-	}
-	if errors.Is(err, playback.ErrPlaybackNotAllowed) {
-		t.Fatalf("CheckReplacementAllowed with failing decider = %v, must not look like a policy denial", err)
+	if !errors.Is(err, playback.ErrPlaybackNotAllowed) {
+		t.Fatalf("StartSession with failing decider = %v, want ErrPlaybackNotAllowed", err)
 	}
 }
 
@@ -1371,9 +1349,9 @@ func TestLegacyStreamUpdateKeepsReplacementReservation(t *testing.T) {
 	}
 }
 
-// A full v3 route description owns the remux byte recipe: a replan that lands
-// on a non-DV/non-Firefox source must clear stale fields, while legacy partial
-// updates must not clobber them.
+// A full v3 route description owns RemuxDVMode: a replan that lands on a
+// non-DV source must clear a stale strip mode, while legacy partial updates
+// must not clobber one.
 func TestUpdateStreamStateClearsRemuxDVModeOnRouteSet(t *testing.T) {
 	sm := playback.NewSessionManager(5, 2)
 
@@ -1381,7 +1359,7 @@ func TestUpdateStreamStateClearsRemuxDVModeOnRouteSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
 	}
-	if err := sm.UpdateStreamState(session.ID, playback.SessionStreamState{RemuxDVMode: playback.RemuxDVStripToHDR10V3, DropInitialLeadingPictures: true, TranscodeRouteSet: true}); err != nil {
+	if err := sm.UpdateStreamState(session.ID, playback.SessionStreamState{RemuxDVMode: playback.RemuxDVStripToHDR10V3, TranscodeRouteSet: true}); err != nil {
 		t.Fatalf("UpdateStreamState(set): %v", err)
 	}
 
@@ -1396,9 +1374,6 @@ func TestUpdateStreamStateClearsRemuxDVModeOnRouteSet(t *testing.T) {
 	if got.RemuxDVMode != playback.RemuxDVStripToHDR10V3 {
 		t.Fatalf("RemuxDVMode after legacy update = %q, want strip_to_hdr10", got.RemuxDVMode)
 	}
-	if !got.DropInitialLeadingPictures {
-		t.Fatal("DropInitialLeadingPictures was cleared by a legacy partial update")
-	}
 
 	// v3 route-set update for a non-DV source: mode clears.
 	if err := sm.UpdateStreamState(session.ID, playback.SessionStreamState{TranscodeRouteSet: true}); err != nil {
@@ -1410,8 +1385,5 @@ func TestUpdateStreamStateClearsRemuxDVModeOnRouteSet(t *testing.T) {
 	}
 	if got.RemuxDVMode != "" {
 		t.Fatalf("RemuxDVMode after route-set update = %q, want cleared", got.RemuxDVMode)
-	}
-	if got.DropInitialLeadingPictures {
-		t.Fatal("DropInitialLeadingPictures survived a full non-Firefox route replacement")
 	}
 }

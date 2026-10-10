@@ -14,15 +14,6 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
-const (
-	diagnosticsManifestField = "manifest"
-	diagnosticsBundleField   = "bundle"
-)
-
-const (
-	retryAfterHeader = "Retry-After"
-)
-
 type DiagnosticsIngressService interface {
 	UploadStatus(context.Context, int) (diagnostics.Status, error)
 	ExtendUploadDeadlines(http.ResponseWriter, *http.Request)
@@ -83,7 +74,7 @@ func diagnosticsIngressProblem(err error) error {
 	}
 	problem := NewProblem(kind, failure.Message)
 	if failure.RetryAfter != "" {
-		problem = problem.WithHeader(retryAfterHeader, failure.RetryAfter)
+		problem = problem.WithHeader("Retry-After", failure.RetryAfter)
 	}
 	return problem
 }
@@ -125,13 +116,13 @@ func registerDiagnosticsIngress(reg *Registry) {
 	upload.Errors = []int{400, 403, 408, 409, 413, 415, 429, 500, 503}
 	requestBody := &huma.RequestBody{Required: true, Content: map[string]*huma.MediaType{
 		mediaTypeMultipart: {Schema: reg.api.OpenAPI().Components.Schemas.Schema(reflect.TypeFor[DiagnosticsUploadForm](), true, ""), Encoding: map[string]*huma.Encoding{
-			diagnosticsManifestField: {ContentType: mediaTypeJSON}, diagnosticsBundleField: {ContentType: diagnostics.BundleContentType},
+			"manifest": {ContentType: "application/json"}, "bundle": {ContentType: diagnostics.BundleContentType},
 		}},
 	}}
 	responseHeaders := map[string]map[string]*huma.Header{}
 	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
 		responseHeaders[strconv.Itoa(status)] = map[string]*huma.Header{
-			retryAfterHeader: {Schema: &huma.Schema{Type: schemaTypeString}, Description: "Minimum delay in seconds after an explicit quota or busy rejection; not permission to replay an uncertain upload."},
+			"Retry-After": {Schema: &huma.Schema{Type: "string"}, Description: "Minimum delay in seconds after an explicit quota or busy rejection; not permission to replay an uncertain upload."},
 		}
 	}
 	Register(reg, upload, func(ctx context.Context, in *DiagnosticsUploadInput) (*DiagnosticsUploadOutput, error) {

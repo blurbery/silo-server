@@ -1,16 +1,13 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   detectHDRFromMatchMedia,
   detectMaxResolutionFromScreen,
   prewarmCodecDetection,
   probeHDR10PlaybackSupport,
-  probeHLSHDR10PlaybackSupport,
-  probeHLGPlaybackSupport,
   probeWebCapabilities,
   resetCodecDetectionForTests,
   useCodecDetection,
-  useCodecDetectionState,
 } from "./useCodecDetection";
 
 afterEach(() => {
@@ -84,30 +81,6 @@ describe("probeWebCapabilities", () => {
     await expect(probeHDR10PlaybackSupport()).resolves.toBe(false);
   });
 
-  it("probes hls.js HDR10 against its exact hev1 MediaSource shape", async () => {
-    const decodingInfo = vi.fn().mockResolvedValue({
-      supported: true,
-      smooth: true,
-      powerEfficient: true,
-      keySystemAccess: null,
-    });
-    const isTypeSupported = vi.fn().mockReturnValue(true);
-    vi.stubGlobal("navigator", { mediaCapabilities: { decodingInfo } });
-    vi.stubGlobal("MediaSource", { isTypeSupported });
-
-    await expect(probeHLSHDR10PlaybackSupport()).resolves.toBe(true);
-    expect(isTypeSupported).toHaveBeenCalledWith('video/mp4; codecs="hev1.2.4.L153.B0"');
-    expect(decodingInfo).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "media-source",
-        video: expect.objectContaining({
-          contentType: 'video/mp4; codecs="hev1.2.4.L153.B0"',
-          transferFunction: "pq",
-        }),
-      }),
-    );
-  });
-
   it("advertises native Dolby Vision Profile 8 from the dvh1 sample entry", () => {
     vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("high") }));
     vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockImplementation((mime) =>
@@ -127,52 +100,7 @@ describe("probeWebCapabilities", () => {
     });
     expect(capabilities.codecsVideo).not.toContain("hevc");
     expect(capabilities.progressiveCodecsVideo).toContain("hevc");
-    expect(capabilities.nativeHls).toBe(true);
-  });
-
-  it("advertises native Profile 5 through Safari's exact level-7 answer", () => {
-    vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockImplementation((mime) =>
-      mime === 'video/mp4; codecs="dvh1.05.07"' ? "probably" : "",
-    );
-
-    const capabilities = probeWebCapabilities();
-
-    expect(capabilities.hdrDetails.dolby_vision_profiles).toEqual([5]);
-    expect(capabilities.hdrDetails.dolby_vision_profile_levels).toEqual([
-      { profile: 5, max_level: 7 },
-    ]);
-  });
-
-  it("publishes the highest exact Profile 8 level Safari confirms", () => {
-    vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockImplementation((mime) =>
-      ['video/mp4; codecs="dvh1.08.07"', 'video/mp4; codecs="dvh1.08.06"'].includes(mime)
-        ? "probably"
-        : "",
-    );
-
-    expect(probeWebCapabilities().hdrDetails.dolby_vision_profile_levels).toEqual([
-      { profile: 8, max_level: 7, bl_compatibility_ids: [1] },
-    ]);
-  });
-
-  it("probes the clean Profile 8.4 HLG fallback independently", async () => {
-    const decodingInfo = vi.fn().mockImplementation((configuration: MediaDecodingConfiguration) => {
-      const supported = configuration.video?.transferFunction === "hlg";
-      return Promise.resolve({ supported, smooth: supported, powerEfficient: supported });
-    });
-    vi.stubGlobal("navigator", { mediaCapabilities: { decodingInfo } });
-
-    await expect(probeHLGPlaybackSupport()).resolves.toBe(true);
-    await expect(probeHDR10PlaybackSupport()).resolves.toBe(false);
-    expect(decodingInfo).toHaveBeenCalledWith(
-      expect.objectContaining({
-        video: expect.objectContaining({
-          contentType: 'video/mp4; codecs="hvc1.2.4.L153.B0"',
-          colorGamut: "rec2020",
-          transferFunction: "hlg",
-        }),
-      }),
-    );
+    expect(capabilities.nativeHLS).toBe(true);
   });
 
   // The preserve remux tags its output dvh1; a browser that answers only for
@@ -230,7 +158,7 @@ describe("probeWebCapabilities", () => {
 
   // Moving a window between displays can change what the decoder will admit to,
   // so the media-query listeners still drive a re-probe.
-  it("re-probes Dolby Vision claims when the active output changes", async () => {
+  it("re-probes Dolby Vision claims when the active output changes", () => {
     let decodes = false;
     const listeners = new Set<() => void>();
     const query = {
@@ -246,11 +174,11 @@ describe("probeWebCapabilities", () => {
     const { result, unmount } = renderHook(() => useCodecDetection());
     expect(result.current.hdrDetails.dolby_vision_profiles).toEqual([]);
 
-    await act(async () => {
+    act(() => {
       decodes = true;
       for (const listener of listeners) listener();
     });
-    await waitFor(() => expect(result.current.hdrDetails.dolby_vision_profiles).toEqual([8]));
+    expect(result.current.hdrDetails.dolby_vision_profiles).toEqual([8]);
     unmount();
   });
 
@@ -274,59 +202,22 @@ describe("probeWebCapabilities", () => {
       },
     });
 
-    const { result, unmount } = renderHook(() => useCodecDetectionState());
+    const { result, unmount } = renderHook(() => useCodecDetection());
     expect(result.current.settled).toBe(false);
-    expect(result.current.probe.hdrDetails.hdr10).toBe(false);
-    expect(result.current.probe.codecsVideo).not.toContain("hevc");
-    expect(result.current.probe.progressiveCodecsVideo).not.toContain("hevc");
-    await waitFor(() =>
-      expect(result.current.probe.hdrDetails).toMatchObject({
-        hdr10: true,
-        hdr10_max_width: 3840,
-        hdr10_max_height: 2160,
-        hdr10_max_frame_rate: 24,
-        hdr10_max_bitrate_kbps: 80_000,
-      }),
-    );
-    expect(result.current.probe.codecsVideo).not.toContain("hevc");
-    expect(result.current.probe.progressiveCodecsVideo).toContain("hevc");
+    expect(result.current.hdrDetails.hdr10).toBe(false);
+    expect(result.current.codecsVideo).not.toContain("hevc");
+    expect(result.current.progressiveCodecsVideo).not.toContain("hevc");
+    await act(async () => Promise.resolve());
+    expect(result.current.hdrDetails).toMatchObject({
+      hdr10: true,
+      hdr10_max_width: 3840,
+      hdr10_max_height: 2160,
+      hdr10_max_frame_rate: 24,
+      hdr10_max_bitrate_kbps: 80_000,
+    });
+    expect(result.current.codecsVideo).not.toContain("hevc");
+    expect(result.current.progressiveCodecsVideo).toContain("hevc");
     expect(result.current.settled).toBe(true);
-    unmount();
-  });
-
-  it("publishes one settled capability snapshot instead of a transient no-HDR state", async () => {
-    let resolveDecode: ((value: MediaCapabilitiesDecodingInfo) => void) | undefined;
-    const pendingDecode = new Promise<MediaCapabilitiesDecodingInfo>((resolve) => {
-      resolveDecode = resolve;
-    });
-    vi.stubGlobal("navigator", { mediaCapabilities: { decodingInfo: () => pendingDecode } });
-    vi.stubGlobal("matchMedia", () => ({
-      matches: false,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    }));
-
-    const snapshots: Array<{ settled: boolean; hdr10: boolean }> = [];
-    const { result, rerender, unmount } = renderHook(() => {
-      const value = useCodecDetectionState();
-      snapshots.push({ settled: value.settled, hdr10: value.probe.hdrDetails.hdr10 });
-      return value;
-    });
-    expect(result.current).toMatchObject({ settled: false });
-
-    await act(async () => {
-      resolveDecode?.({
-        supported: true,
-        smooth: true,
-        powerEfficient: true,
-        keySystemAccess: null,
-      });
-      await pendingDecode;
-    });
-    rerender();
-    await waitFor(() => expect(result.current.settled).toBe(true));
-    expect(result.current.probe.hdrDetails.hdr10).toBe(true);
-    expect(snapshots).not.toContainEqual({ settled: true, hdr10: false });
     unmount();
   });
 
@@ -338,21 +229,14 @@ describe("probeWebCapabilities", () => {
       keySystemAccess: null,
     });
     vi.stubGlobal("navigator", { mediaCapabilities: { decodingInfo } });
-    vi.stubGlobal("MediaSource", { isTypeSupported: () => true });
-    vi.stubGlobal("matchMedia", () => ({
-      matches: false,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    }));
 
     await prewarmCodecDetection();
-    const callsAfterPrewarm = decodingInfo.mock.calls.length;
-    const { result, unmount } = renderHook(() => useCodecDetectionState());
-    await waitFor(() => expect(result.current.settled).toBe(true));
+    const { result, unmount } = renderHook(() => useCodecDetection());
+    await act(async () => Promise.resolve());
 
-    expect(callsAfterPrewarm).toBeGreaterThan(0);
-    expect(decodingInfo).toHaveBeenCalledTimes(callsAfterPrewarm);
-    expect(result.current.probe.hdrDetails.hdr10).toBe(true);
+    expect(decodingInfo).toHaveBeenCalledTimes(1);
+    expect(result.current.settled).toBe(true);
+    expect(result.current.hdrDetails.hdr10).toBe(true);
     unmount();
   });
 

@@ -430,8 +430,8 @@ func TestStartRemoteSafariHEVCMKVRemuxCopiesAdvertisedCodecs(t *testing.T) {
 	if request.TargetCodecVideo != "copy" || request.TargetCodecAudio != "copy" {
 		t.Fatalf("remote codecs = video %q audio %q, want copy/copy", request.TargetCodecVideo, request.TargetCodecAudio)
 	}
-	if request.VideoSampleEntry != playback.VideoSampleEntryDVH1 || request.RemuxDVMode != string(playback.RemuxDVPreserveV3) {
-		t.Fatalf("remote Dolby Vision recipe = sample entry %q mode %q, want dvh1/preserve", request.VideoSampleEntry, request.RemuxDVMode)
+	if request.VideoSampleEntry != playback.VideoSampleEntryDVH1 {
+		t.Fatalf("VideoSampleEntry = %q, want dvh1", request.VideoSampleEntry)
 	}
 	if request.CopyFMP4RecipeVersion != playback.CopyFMP4RecipeVersion {
 		t.Fatalf("CopyFMP4RecipeVersion = %q, want %q", request.CopyFMP4RecipeVersion, playback.CopyFMP4RecipeVersion)
@@ -447,8 +447,8 @@ func TestStartRemoteSafariHEVCMKVRemuxCopiesAdvertisedCodecs(t *testing.T) {
 	if !ok {
 		t.Fatal("remote recipe was not persisted")
 	}
-	if card.TargetCodecVideo != "copy" || card.TargetCodecAudio != "copy" || card.VideoSampleEntry != playback.VideoSampleEntryDVH1 || card.RemuxDVMode != playback.RemuxDVPreserveV3 {
-		t.Fatalf("persisted recipe = video %q audio %q sample-entry %q DV mode %q, want copy/copy/dvh1/preserve", card.TargetCodecVideo, card.TargetCodecAudio, card.VideoSampleEntry, card.RemuxDVMode)
+	if card.TargetCodecVideo != "copy" || card.TargetCodecAudio != "copy" || card.VideoSampleEntry != playback.VideoSampleEntryDVH1 {
+		t.Fatalf("persisted recipe = video %q audio %q sample-entry %q, want copy/copy/dvh1", card.TargetCodecVideo, card.TargetCodecAudio, card.VideoSampleEntry)
 	}
 }
 

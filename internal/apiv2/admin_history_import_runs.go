@@ -187,7 +187,7 @@ func registerAdminHistoryImportRuns(reg *Registry, op func(string, string, strin
 			source = &id
 		}
 		scope := adminHistoryCursorScope(ctx, "listAdminHistoryImportRuns", string(in.SourceID))
-		scope.Sort = loginSessionCursorSort
+		scope.Sort = "-created_at,-id"
 		var after *historyimport.RunKey
 		if in.Cursor != "" {
 			var position runPosition

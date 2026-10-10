@@ -2,9 +2,8 @@ package apiv2
 
 import (
 	"context"
-	"net/http"
-
 	"github.com/Silo-Server/silo-server/internal/api/handlers"
+	"net/http"
 )
 
 type AdminMarkerProvidersService interface {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/oklog/ulid/v2"
 
@@ -56,13 +57,6 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 const scanRunColumns = `id, media_folder_id, mode, path, trigger, status, result_payload,
 	error_message, autoscan_event_id, followup_trigger, requested_at, started_at, completed_at, heartbeat_at, updated_at`
 
-const createScanRunQuery = `
-	INSERT INTO scan_runs (
-		id, media_folder_id, mode, path, trigger, status, autoscan_event_id
-	) VALUES ($1, $2, $3, $4, $5, $6, $7)
-	ON CONFLICT DO NOTHING
-	RETURNING ` + scanRunColumns
-
 func scanRunRow(row pgx.Row) (*models.ScanRun, error) {
 	var run models.ScanRun
 	if err := row.Scan(
@@ -108,7 +102,11 @@ func scanRunRows(rows pgx.Rows) ([]*models.ScanRun, error) {
 }
 
 func (r *Repository) Create(ctx context.Context, input CreateInput) (*models.ScanRun, bool, error) {
-	run, err := scanRunRow(r.pool.QueryRow(ctx, createScanRunQuery,
+	run, err := scanRunRow(r.pool.QueryRow(ctx, `
+		INSERT INTO scan_runs (
+			id, media_folder_id, mode, path, trigger, status, autoscan_event_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING `+scanRunColumns,
 		ulid.Make().String(),
 		input.LibraryID,
 		input.Mode,
@@ -120,18 +118,17 @@ func (r *Repository) Create(ctx context.Context, input CreateInput) (*models.Sca
 	if err == nil {
 		return run, true, nil
 	}
-	// ON CONFLICT DO NOTHING returns no row when an active run already owns
-	// the scope, so the conflict surfaces as ErrScanRunNotFound rather than a
-	// unique violation. Any other error is a real insert failure.
-	if !errors.Is(err, ErrScanRunNotFound) {
-		return nil, false, fmt.Errorf("create scan run: %w", err)
+
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		existing, lookupErr := r.coalesceIntoActive(ctx, r.pool, input)
+		if lookupErr != nil {
+			return nil, false, lookupErr
+		}
+		return existing, false, nil
 	}
 
-	existing, lookupErr := r.coalesceIntoActive(ctx, r.pool, input)
-	if lookupErr != nil {
-		return nil, false, lookupErr
-	}
-	return existing, false, nil
+	return nil, false, fmt.Errorf("create scan run: %w", err)
 }
 
 // coalesceIntoActive returns the accepted or running run that already owns
@@ -200,7 +197,12 @@ func (r *Repository) CreateBatch(ctx context.Context, inputs []CreateInput) ([]*
 	runs := make([]*models.ScanRun, 0, len(inputs))
 	created := make([]bool, 0, len(inputs))
 	for _, input := range inputs {
-		run, err := scanRunRow(tx.QueryRow(ctx, createScanRunQuery,
+		run, err := scanRunRow(tx.QueryRow(ctx, `
+			INSERT INTO scan_runs (
+				id, media_folder_id, mode, path, trigger, status, autoscan_event_id
+			) VALUES ($1, $2, $3, $4, $5, $6, $7)
+			ON CONFLICT DO NOTHING
+			RETURNING `+scanRunColumns,
 			ulid.Make().String(),
 			input.LibraryID,
 			input.Mode,

@@ -12,7 +12,7 @@ func TestExecutableRecipeV3RoundTripPreservesOperationalFields(t *testing.T) {
 	plan := &PlanV3{PlanID: "plan:frozen", Delivery: DeliveryTranscodeHLSV3}
 	revision := tonemap.SourceRevision{MediaFileID: 42, FileSize: 100, FileModifiedUnixNano: 200, StreamSignature: "stream"}
 	want := PlannerResultV3{
-		Plan: plan, PlayMethod: PlayTranscode, TranscodeAudio: true, DropInitialLeadingPictures: true,
+		Plan: plan, PlayMethod: PlayTranscode, TranscodeAudio: true,
 		TargetVideoCodec: "h264", TargetAudioCodec: "aac", SourceAudioChannels: 8, TargetAudioChannels: 6, TargetAudioBitrateKbps: 320,
 		TargetResolution: "1080p", TargetBitrateKbps: 18_000,
 		ToneMapPolicy: tonemap.PolicyHardwareThenSoftware, ToneMapMode: tonemap.ModeHardware,
@@ -35,7 +35,7 @@ func TestExecutableRecipeV3RoundTripPreservesOperationalFields(t *testing.T) {
 		t.Fatal("stale frozen recipe matched a newer plan")
 	}
 	got := recipe.PlannerResult(plan)
-	if got.Plan != plan || got.PlayMethod != want.PlayMethod || got.TranscodeAudio != want.TranscodeAudio || got.DropInitialLeadingPictures != want.DropInitialLeadingPictures ||
+	if got.Plan != plan || got.PlayMethod != want.PlayMethod || got.TranscodeAudio != want.TranscodeAudio ||
 		got.TargetVideoCodec != want.TargetVideoCodec || got.TargetAudioCodec != want.TargetAudioCodec ||
 		got.SourceAudioChannels != want.SourceAudioChannels || got.TargetAudioChannels != want.TargetAudioChannels || got.TargetAudioBitrateKbps != want.TargetAudioBitrateKbps || got.TargetResolution != want.TargetResolution ||
 		got.TargetBitrateKbps != want.TargetBitrateKbps || got.SubtitleTrackIndex != want.SubtitleTrackIndex ||
@@ -187,7 +187,7 @@ func TestExecutableRecipeV3RejectsIncompleteOrContradictoryToneMapRecipe(t *test
 func TestExecutableRecipeV3SurvivesJSONRoundTrip(t *testing.T) {
 	plan := &PlanV3{PlanID: "plan:frozen"}
 	recipe := FreezeExecutableRecipeV3(PlannerResultV3{
-		Plan: plan, PlayMethod: PlayRemux, DropInitialLeadingPictures: true,
+		Plan: plan, PlayMethod: PlayRemux,
 		FrozenSourceMetadata: &SourceExecutionMetadataV3{VideoCodec: "h264", SoftwareVideoDecode: true, DurationSeconds: 7_201},
 		SubtitleTrackIndex:   -1, SubtitleTransportTrackIndex: 0,
 	})

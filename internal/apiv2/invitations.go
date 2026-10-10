@@ -14,10 +14,6 @@ import (
 	"github.com/Silo-Server/silo-server/internal/models"
 )
 
-const (
-	invitationKind = "invitation"
-)
-
 const listAdminInvitationsOperation = "listAdminInvitations"
 
 // invitationDeliveryUnknown reports an invitation created before delivery was recorded.
@@ -233,7 +229,7 @@ func registerInvitations(reg *Registry) {
 		if public {
 			o.Class = ClassPublic
 			o.DemoRestricted = false
-			o.RateLimitBucket = invitationKind
+			o.RateLimitBucket = "invitation"
 		}
 		if method == http.MethodPost {
 			o.Errors = append(o.Errors, http.StatusNotImplemented)
@@ -308,7 +304,7 @@ func registerInvitations(reg *Registry) {
 		if p != nil {
 			return nil, p
 		}
-		scope := CursorScope{OperationID: listAdminInvitationsOperation, Security: strconv.Itoa(claimsFrom(ctx).UserID) + "/" + profileFrom(ctx), Filter: "v1/limit=" + strconv.Itoa(in.Limit), Sort: adminSubtitleListSort, Tiebreaker: adminSubtitleListTiebreaker}
+		scope := CursorScope{OperationID: listAdminInvitationsOperation, Security: strconv.Itoa(claimsFrom(ctx).UserID) + "/" + profileFrom(ctx), Filter: "v1/limit=" + strconv.Itoa(in.Limit), Sort: "created_at:desc", Tiebreaker: "id:desc"}
 		var after *invitations.PageKey
 		if in.Cursor != "" {
 			after = new(invitations.PageKey)

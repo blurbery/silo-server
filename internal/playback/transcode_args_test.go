@@ -442,36 +442,6 @@ func TestStartTranscodeRejectsUnvalidatedBitstreamFilter(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unsupported video bitstream filter recipe") {
 		t.Fatalf("expected bitstream-filter admission rejection for encoded video, got %v", err)
 	}
-	_, err = StartTranscode(context.Background(), TranscodeOpts{
-		RemuxDVMode:      RemuxDVPreserveV3,
-		TargetCodecVideo: "h264",
-	})
-	if err == nil {
-		t.Fatal("Dolby Vision preserve mode was accepted for encoded video")
-	}
-	_, err = StartTranscode(context.Background(), TranscodeOpts{
-		RemuxDVMode:      RemuxDVStripToHDR10V3,
-		TargetCodecVideo: "copy",
-	})
-	if err == nil {
-		t.Fatal("Dolby Vision strip mode was accepted without its bitstream filter")
-	}
-	_, err = StartTranscode(context.Background(), TranscodeOpts{
-		DropInitialLeadingPictures: true,
-		SourceVideoCodec:           "h264",
-		TargetCodecVideo:           "copy",
-	})
-	if err == nil {
-		t.Fatal("leading-picture normalization was accepted for H.264")
-	}
-	_, err = StartTranscode(context.Background(), TranscodeOpts{
-		DropInitialLeadingPictures: true,
-		SourceVideoCodec:           "hevc",
-		TargetCodecVideo:           "h264",
-	})
-	if err == nil {
-		t.Fatal("leading-picture normalization was accepted for encoded video")
-	}
 }
 
 func TestBuildFFmpegArgsCopyVideoAppliesSampleEntry(t *testing.T) {
@@ -529,30 +499,13 @@ func TestBuildFFmpegArgsCopyVideoAcceptsNoncanonicalCodecCase(t *testing.T) {
 }
 
 func TestStartTranscodeRejectsInvalidVideoSampleEntry(t *testing.T) {
-	for _, test := range []struct {
-		opts    TranscodeOpts
-		wantErr string
-	}{
-		{TranscodeOpts{TargetCodecVideo: "copy", VideoSampleEntry: "dvhe"}, "unsupported video sample-entry recipe"},
-		{TranscodeOpts{TargetCodecVideo: "h264", VideoSampleEntry: VideoSampleEntryDVH1}, "unsupported video sample-entry recipe"},
-		{TranscodeOpts{SourceVideoCodec: "hevc", TargetCodecVideo: "h264", VideoSampleEntry: VideoSampleEntryHEV1V3}, "unsupported video sample-entry recipe"},
-		{TranscodeOpts{SourceVideoCodec: "h264", TargetCodecVideo: "copy", VideoSampleEntry: VideoSampleEntryHEV1V3}, "video sample entry requires HEVC video copy or an HEVC encode"},
-		{TranscodeOpts{SourceVideoCodec: "hevc", TargetCodecVideo: "copy", VideoSampleEntry: VideoSampleEntryHEV1V3, RemuxDVMode: RemuxDVPreserveV3}, "dolby vision preserve HLS requires the dvh1 sample entry"},
+	for _, opts := range []TranscodeOpts{
+		{TargetCodecVideo: "copy", VideoSampleEntry: "dvhe"},
+		{TargetCodecVideo: "h264", VideoSampleEntry: VideoSampleEntryDVH1},
 	} {
-		if _, err := StartTranscode(context.Background(), test.opts); err == nil || !strings.Contains(err.Error(), test.wantErr) {
-			t.Fatalf("expected sample-entry admission rejection %q for %+v, got %v", test.wantErr, test.opts, err)
+		if _, err := StartTranscode(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "unsupported video sample-entry recipe") {
+			t.Fatalf("expected sample-entry admission rejection for %+v, got %v", opts, err)
 		}
-	}
-}
-
-func TestValidVideoSampleEntryIncludesProtocolV3HEV1(t *testing.T) {
-	for _, entry := range []string{"", VideoSampleEntryHEV1V3, VideoSampleEntryHVC1V3, VideoSampleEntryDVH1V3} {
-		if !validVideoSampleEntry(entry) {
-			t.Fatalf("valid protocol-v3 sample entry %q was rejected", entry)
-		}
-	}
-	if validVideoSampleEntry("dvhe") {
-		t.Fatal("unvalidated sample entry was accepted")
 	}
 }
 
@@ -668,148 +621,12 @@ func TestBuildFFmpegArgs_CopyVideoAppliesValidatedBitstreamFilter(t *testing.T) 
 		TargetCodecVideo:     "copy",
 		TargetCodecAudio:     "copy",
 		VideoBitstreamFilter: DV7ToHDR10BitstreamFilter,
-		VideoSampleEntry:     VideoSampleEntryHVC1V3,
 		SegmentDuration:      2,
 	})
 
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "-c:v copy -bsf:v "+DV7ToHDR10BitstreamFilter+" -tag:v hvc1") {
-		t.Fatalf("copy-video args should strip Dolby Vision and emit Safari's hvc1 sample entry: %s", joined)
-	}
-	if strings.Contains(joined, "dvh1") || strings.Contains(joined, "-strict unofficial") {
-		t.Fatalf("stripped HDR10 HLS must not retain Dolby Vision output signaling: %s", joined)
-	}
-}
-
-func TestBuildFFmpegArgs_CopyVideoResumePrependsLeadingPictureFilter(t *testing.T) {
-	args := buildFFmpegArgs(TranscodeOpts{
-		InputPath:                  "/media/movie.mkv",
-		OutputDir:                  "/tmp/out",
-		SessionID:                  "session-firefox-resume",
-		SourceVideoCodec:           "hevc",
-		TargetCodecVideo:           "copy",
-		TargetCodecAudio:           "aac",
-		VideoBitstreamFilter:       DV7ToHDR10BitstreamFilter,
-		DropInitialLeadingPictures: true,
-		VideoSampleEntry:           VideoSampleEntryHEV1V3,
-		SeekSeconds:                983.178,
-		SegmentDuration:            2,
-	})
-
-	combined := "hevc_mp4toannexb," + DropInitialLeadingPicturesBitstreamFilter + "," + DV7ToHDR10BitstreamFilter
-	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "-c:v copy -bsf:v "+combined) || strings.Contains(joined, "-tag:v") {
-		t.Fatalf("resumed Firefox copy-HLS filter chain = %s, want %q", joined, combined)
-	}
-
-	zeroStart := buildFFmpegArgs(TranscodeOpts{
-		InputPath:                  "/media/movie.mkv",
-		OutputDir:                  "/tmp/out",
-		SessionID:                  "session-firefox-zero",
-		SourceVideoCodec:           "hevc",
-		TargetCodecVideo:           "copy",
-		TargetCodecAudio:           "aac",
-		VideoBitstreamFilter:       DV7ToHDR10BitstreamFilter,
-		DropInitialLeadingPictures: true,
-		SegmentDuration:            2,
-	})
-	zeroJoined := strings.Join(zeroStart, " ")
-	if strings.Contains(zeroJoined, DropInitialLeadingPicturesBitstreamFilter) || !strings.Contains(zeroJoined, "-bsf:v hevc_mp4toannexb,"+DV7ToHDR10BitstreamFilter) {
-		t.Fatalf("zero-start copy-HLS changed its filter recipe: %s", zeroJoined)
-	}
-
-	encoded := buildFFmpegArgs(TranscodeOpts{
-		InputPath:                  "/media/movie.mkv",
-		OutputDir:                  "/tmp/out",
-		SessionID:                  "session-h264",
-		SourceVideoCodec:           "hevc",
-		TargetCodecVideo:           "h264",
-		TargetCodecAudio:           "aac",
-		DropInitialLeadingPictures: true,
-		SegmentDuration:            2,
-	})
-	if strings.Contains(strings.Join(encoded, " "), DropInitialLeadingPicturesBitstreamFilter) {
-		t.Fatalf("encoded-video HLS received the copy-only filter: %s", strings.Join(encoded, " "))
-	}
-}
-
-// Fork: a plan frozen at an older DV7 recipe reaches StartTranscode with the
-// strip mode but no filter chain. It must be refused before FFmpeg starts, so
-// Dolby Vision is never copied without the strip.
-func TestStartTranscodeRefusesDVStripWithoutTheValidatedChain(t *testing.T) {
-	for _, mode := range []RemuxDVMode{RemuxDVStripToHDR10V3, RemuxDVStripToBaseV3} {
-		_, err := StartTranscode(context.Background(), TranscodeOpts{
-			InputPath:        "/media/movie.mkv",
-			OutputDir:        t.TempDir(),
-			SessionID:        "session-stale-dv7",
-			SourceVideoCodec: "hevc",
-			TargetCodecVideo: "copy",
-			TargetCodecAudio: "aac",
-			VideoSampleEntry: VideoSampleEntryHVC1V3,
-			RemuxDVMode:      mode,
-			SegmentDuration:  2,
-		})
-		if err == nil || !strings.Contains(err.Error(), "validated copy recipe") {
-			t.Fatalf("%s without the filter chain: err = %v, want the validated copy recipe refusal", mode, err)
-		}
-	}
-}
-
-func TestBuildFFmpegArgs_MediaSourceStripKeepsDefaultSampleEntry(t *testing.T) {
-	args := buildFFmpegArgs(TranscodeOpts{
-		InputPath:            "/media/movie.mkv",
-		OutputDir:            "/tmp/out",
-		SessionID:            "session-dv7-mse",
-		TargetCodecVideo:     "copy",
-		TargetCodecAudio:     "copy",
-		VideoBitstreamFilter: DV7ToHDR10BitstreamFilter,
-		VideoSampleEntry:     VideoSampleEntryHEV1V3,
-		SegmentDuration:      2,
-	})
-
-	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "-c:v copy -bsf:v "+DV7ToHDR10BitstreamFilter) {
-		t.Fatalf("MediaSource Dolby Vision fallback should retain its strip filter: %s", joined)
-	}
-	if strings.Contains(joined, "-tag:v") {
-		t.Fatalf("MediaSource HLS must not inherit native Apple sample entries: %s", joined)
-	}
-}
-
-func TestBuildFFmpegArgs_CopyVideoPreservesNativeDolbyVisionSampleEntry(t *testing.T) {
-	args := buildFFmpegArgs(TranscodeOpts{
-		InputPath:        "/media/movie.mkv",
-		OutputDir:        "/tmp/out",
-		SessionID:        "session-dv8",
-		TargetCodecVideo: "copy",
-		TargetCodecAudio: "aac",
-		RemuxDVMode:      RemuxDVPreserveV3,
-		VideoSampleEntry: VideoSampleEntryDVH1V3,
-		SegmentDuration:  2,
-	})
-
-	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "-c:v copy -tag:v dvh1 -strict unofficial") {
-		t.Fatalf("native Dolby Vision HLS should emit Safari's dvh1 sample entry and retain its configuration record: %s", joined)
-	}
-	if strings.Contains(joined, "-bsf:v") || strings.Contains(joined, "hvc1") {
-		t.Fatalf("native Dolby Vision HLS must not use the base-layer strip recipe: %s", joined)
-	}
-}
-
-func TestBuildFFmpegArgs_PlainCopyKeepsLegacySampleEntry(t *testing.T) {
-	args := buildFFmpegArgs(TranscodeOpts{
-		InputPath:        "/media/movie.mkv",
-		OutputDir:        "/tmp/out",
-		SessionID:        "session-copy",
-		TargetCodecVideo: "copy",
-		TargetCodecAudio: "copy",
-		SegmentDuration:  2,
-	})
-
-	joined := strings.Join(args, " ")
-	if strings.Contains(joined, "-tag:v") || strings.Contains(joined, "-strict unofficial") {
-		t.Fatalf("non-Dolby copy HLS must keep its existing FFmpeg sample entry: %s", joined)
+	if !strings.Contains(joined, "-c:v copy -bsf:v dovi_rpu=strip=1,filter_units=remove_types=63 ") {
+		t.Fatalf("copy-video args should apply the validated DV bitstream filter: %s", joined)
 	}
 }
 

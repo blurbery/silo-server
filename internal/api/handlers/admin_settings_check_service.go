@@ -3,20 +3,8 @@ package handlers
 import (
 	"context"
 	"errors"
-
 	"github.com/Silo-Server/silo-server/internal/config"
 )
-
-const (
-	connectionCheckRedis           = "redis"
-	connectionCheckAITranscription = "ai_transcription"
-)
-
-const (
-	connectionCheckAIChat = "ai_chat"
-)
-
-const connectionCheckFailedMessage = "Connection check failed. Verify the submitted settings and provider availability."
 
 var ErrAdminSettingsCheckKind = errors.New("unsupported settings check kind")
 var ErrAdminSettingsCheckConfig = errors.New("invalid settings check configuration")
@@ -31,7 +19,7 @@ type AdminSettingsCheckResult struct {
 // must not automatically replay an uncertain result.
 func (h *AdminHandler) CheckAdminSettingsConnection(ctx context.Context, kind string, values map[string]string, dirtyKeys []string) (AdminSettingsCheckResult, error) {
 	switch kind {
-	case "s3_public", "s3_operational", "s3_private", connectionCheckRedis, "recommendations_embedding", connectionCheckAIChat, connectionCheckAITranscription, "meilisearch", collectionTypeMDBList:
+	case "s3_public", "s3_operational", "s3_private", "redis", "recommendations_embedding", "ai_chat", "ai_transcription", "meilisearch", "mdblist":
 	default:
 		return AdminSettingsCheckResult{}, ErrAdminSettingsCheckKind
 	}
@@ -55,7 +43,7 @@ func (h *AdminHandler) CheckAdminSettingsConnection(ctx context.Context, kind st
 	if !result.Success {
 		result.Message = result.safeMessage
 		if result.Message == "" {
-			result.Message = connectionCheckFailedMessage
+			result.Message = "Connection check failed. Verify the submitted settings and provider availability."
 		}
 	}
 	return AdminSettingsCheckResult{Success: result.Success, Message: result.Message}, nil

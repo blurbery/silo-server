@@ -115,7 +115,7 @@ func registerAdminSettingsWrite(reg *Registry) {
 		}
 		_ = json.Unmarshal(in.RawBody, &raw)
 		for _, value := range raw.Values {
-			if string(value) == adminCollectionNull {
+			if string(value) == "null" {
 				return nil, NewProblem(TypeValidationFailed, "Setting values cannot be null.")
 			}
 		}

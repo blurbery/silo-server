@@ -10,10 +10,6 @@ import (
 	"github.com/Silo-Server/silo-server/internal/userstore"
 )
 
-const (
-	collectionKind = "collection"
-)
-
 type CollectionPreconditions struct {
 	IfMatch     string `header:"If-Match"`
 	IfNoneMatch string `header:"If-None-Match"`
@@ -158,7 +154,7 @@ func (reg *Registry) prepareCollectionGuard(ctx context.Context, kind, id string
 	var err error
 	var tag EntityTag
 	switch kind {
-	case collectionKind:
+	case "collection":
 		var v handlers.PersonalCollectionEditorView
 		v, err = s.PersonalCollectionEditor(ctx, u, profileFrom(ctx), id)
 		if err == nil && v.Collection.CreatorProfileID != profileFrom(ctx) {

@@ -2,13 +2,11 @@ package scanqueue
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -270,29 +268,5 @@ func TestCreateOnRunningScopeIgnoresDirectAdminTriggers(t *testing.T) {
 	}
 	if followUp != nil {
 		t.Fatalf("expected no follow-up, got %#v", followUp)
-	}
-}
-
-// An insert that fails for any reason other than an active run owning the
-// scope is a real error. It must reach the caller rather than being replaced
-// by a lookup of the scope's active run.
-func TestCreateReturnsInsertErrorsOtherThanScopeConflict(t *testing.T) {
-	ctx, pool, repo, _ := openDirectRunTestRepository(t)
-
-	var missingFolderID int
-	if err := pool.QueryRow(ctx, `SELECT COALESCE(MAX(id), 0) + 1000 FROM media_folders`).Scan(&missingFolderID); err != nil {
-		t.Fatalf("pick missing folder id: %v", err)
-	}
-
-	run, created, err := repo.Create(ctx, CreateInput{LibraryID: missingFolderID, Mode: ModeSubtree, Path: "/show/s01", Trigger: "autoscan"})
-	if err == nil {
-		t.Fatalf("create for a missing folder succeeded: created=%v run=%#v", created, run)
-	}
-	if errors.Is(err, ErrScanRunNotFound) {
-		t.Fatalf("create error = %v, want the insert's foreign key error, not a not-found from a fallback lookup", err)
-	}
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != "23503" {
-		t.Fatalf("create error = %v, want a wrapped foreign key violation (23503)", err)
 	}
 }

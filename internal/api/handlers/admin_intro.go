@@ -286,7 +286,7 @@ func (h *AdminIntroHandler) refreshItemMarkers(ctx context.Context, itemID, acti
 		}
 	}()
 
-	return metadataQueueStatusQueued, nil
+	return markerRefreshQueued, nil
 }
 
 // runLocalItemAnalysis runs local analysis of an item of kind for kinds, logs

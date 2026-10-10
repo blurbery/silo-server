@@ -7,20 +7,6 @@ import (
 	"github.com/Silo-Server/silo-server/internal/recommendations"
 )
 
-const (
-	triggerRecommendationEmbeddingsOperation    = "triggerAdminRecommendationEmbeddings"
-	triggerRecommendationTasteProfilesOperation = "triggerAdminRecommendationTasteProfiles"
-	triggerRecommendationCowatchOperation       = "triggerAdminRecommendationCowatch"
-	triggerRecommendationRefreshOperation       = "triggerAdminRecommendationRefresh"
-)
-
-const (
-	recommendationEmbeddingsScope    = "embeddings"
-	recommendationTasteProfilesScope = "taste-profiles"
-	recommendationCowatchScope       = "cowatch"
-	recommendationsScope             = "recommendations"
-)
-
 // AdminRecommendationsService is the existing process-local recommendation worker.
 type AdminRecommendationsService interface {
 	StatusCounts(context.Context) (int, int, int, int, int, error)
@@ -60,14 +46,14 @@ func registerAdminRecommendations(reg *Registry) {
 		path, id string
 		start    func(AdminRecommendationsService) error
 	}{
-		{recommendationEmbeddingsScope, triggerRecommendationEmbeddingsOperation, AdminRecommendationsService.TriggerEmbeddings},
-		{recommendationTasteProfilesScope, triggerRecommendationTasteProfilesOperation, AdminRecommendationsService.TriggerTasteProfiles},
-		{recommendationCowatchScope, triggerRecommendationCowatchOperation, AdminRecommendationsService.TriggerCowatch},
-		{recommendationsScope, triggerRecommendationRefreshOperation, AdminRecommendationsService.TriggerRecommendations},
+		{"embeddings", "triggerAdminRecommendationEmbeddings", AdminRecommendationsService.TriggerEmbeddings},
+		{"taste-profiles", "triggerAdminRecommendationTasteProfiles", AdminRecommendationsService.TriggerTasteProfiles},
+		{"cowatch", "triggerAdminRecommendationCowatch", AdminRecommendationsService.TriggerCowatch},
+		{"recommendations", "triggerAdminRecommendationRefresh", AdminRecommendationsService.TriggerRecommendations},
 	} {
 		Register(reg, op(http.MethodPost, "/trigger/"+action.path, action.id, "Start process-local recommendation work without a durable job receipt."), func(ctx context.Context, _ *struct{}) (*AdminRecommendationStartedOutput, error) {
 			if reg.deps.AdminRecommendations == nil {
-				return nil, unavailable(recommendationsScope)
+				return nil, unavailable("recommendations")
 			}
 			if err := action.start(reg.deps.AdminRecommendations); err != nil {
 				return nil, NewProblem(TypeConflict, "This recommendation job is already running on this process.")
@@ -79,7 +65,7 @@ func registerAdminRecommendations(reg *Registry) {
 func (reg *Registry) getAdminRecommendationsStatus(ctx context.Context, _ *struct{}) (*AdminRecommendationsStatusOutput, error) {
 	w := reg.deps.AdminRecommendations
 	if w == nil {
-		return nil, unavailable(recommendationsScope)
+		return nil, unavailable("recommendations")
 	}
 	embedded, total, taste, cache, cowatch, err := w.StatusCounts(ctx)
 	if err != nil {

@@ -17,7 +17,6 @@ import (
 	"github.com/Silo-Server/silo-server/internal/access"
 	"github.com/Silo-Server/silo-server/internal/auth"
 	evt "github.com/Silo-Server/silo-server/internal/events"
-	"github.com/Silo-Server/silo-server/internal/models"
 	"github.com/Silo-Server/silo-server/internal/playback"
 )
 
@@ -86,9 +85,6 @@ func (f *controlSocketFixture) mint(t *testing.T, installation string) string {
 
 func (f *controlSocketFixture) dial(t *testing.T, ticket string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 	t.Helper()
-	f.handler.laneMu.Lock()
-	previousLane := f.handler.lanes[f.session.ID]
-	f.handler.laneMu.Unlock()
 	endpoint := "ws" + strings.TrimPrefix(f.server.URL, "http") + "/api/v2/playback/sessions/" + f.session.ID + "/control/ws"
 	dialer := websocket.Dialer{Subprotocols: []string{PlaybackControlSocketProtocol, eventsTicketProtocolPrefix + ticket}}
 	if headers == nil {
@@ -100,17 +96,6 @@ func (f *controlSocketFixture) dial(t *testing.T, ticket string, headers http.He
 	}
 	if resp != nil {
 		t.Cleanup(func() { _ = resp.Body.Close() })
-	}
-	if err == nil && conn != nil {
-		// The HTTP upgrade reaches the client before the handler registers its
-		// new hub connection. On reconnect the old session is already marked
-		// connected, so that flag cannot prove takeover has completed.
-		waitForCondition(t, func() bool {
-			f.handler.laneMu.Lock()
-			defer f.handler.laneMu.Unlock()
-			lane := f.handler.lanes[f.session.ID]
-			return lane != nil && lane != previousLane
-		}, "control socket did not take over its delivery lane")
 	}
 	return conn, resp, err
 }
@@ -432,38 +417,5 @@ func TestControlSocketTicketStoreBoundsAndValidation(t *testing.T) {
 	}
 	if _, err := store.Consume(ctx, value); !errors.Is(err, evt.ErrSocketTicket) {
 		t.Fatal("credential consumed twice")
-	}
-}
-
-func TestControlSocketV2SendsPersistedMarkersOnHelloAndReconnect(t *testing.T) {
-	f := newControlSocketFixture(t)
-	start, end := 4.0, 58.0
-	f.pb.fileResolver = mapPlaybackFileResolver{files: map[int]*models.MediaFile{
-		100: {ID: 100, IntroStart: &start, IntroEnd: &end},
-	}}
-	f.pb.MarkerUpdateNotifier = playback.NewMarkerUpdateNotifier(f.manager, f.hub)
-	for connection := range 2 {
-		conn, _, err := f.dial(t, f.mint(t, controlInstallation), nil) //nolint:bodyclose // dial registers response cleanup
-		if err != nil {
-			t.Fatal(err)
-		}
-		f.hello(t, conn)
-		if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
-			t.Fatal(err)
-		}
-		var event playback.EventEnvelope
-		if err := conn.ReadJSON(&event); err != nil {
-			t.Fatalf("connection %d marker snapshot: %v", connection, err)
-		}
-		var payload playback.MarkersUpdatedPayload
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			t.Fatal(err)
-		}
-		if payload.Intro == nil || payload.Intro.Start != start || payload.Intro.End != end {
-			t.Fatalf("connection %d lost persisted intro markers: %+v", connection, payload.Intro)
-		}
-		if err := conn.Close(); err != nil {
-			t.Fatal(err)
-		}
 	}
 }

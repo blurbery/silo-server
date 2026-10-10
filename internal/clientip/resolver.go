@@ -137,9 +137,9 @@ const (
 // On a WebSocket upgrade, Traefik sends "wss" or "ws" instead of "https" or
 // "http"; those name the same transport security and are accepted there only.
 func (r *Resolver) requestScheme(req *http.Request) string {
-	scheme := schemeHTTP
+	scheme := "http"
 	if req.TLS != nil {
-		scheme = schemeHTTPS
+		scheme = "https"
 	}
 	if !r.peerTrusted(req) {
 		return scheme
@@ -152,15 +152,15 @@ func (r *Resolver) requestScheme(req *http.Request) string {
 		return ""
 	}
 	switch values[0] {
-	case schemeHTTP, schemeHTTPS:
+	case "http", "https":
 		return values[0]
 	case forwardedProtoWS:
 		if isWebSocketUpgrade(req) {
-			return schemeHTTP
+			return "http"
 		}
 	case forwardedProtoWSS:
 		if isWebSocketUpgrade(req) {
-			return schemeHTTPS
+			return "https"
 		}
 	}
 	return ""

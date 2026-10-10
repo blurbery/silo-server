@@ -9,9 +9,8 @@ import (
 	"net/http/httptest"
 	"strconv"
 
-	"testing"
-
 	"github.com/Silo-Server/silo-server/internal/ai/llm"
+	"testing"
 )
 
 func TestAdminSettingsCheckServiceValidationAndSafeFailure(t *testing.T) {

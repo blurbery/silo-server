@@ -9,20 +9,16 @@ import (
 	"github.com/Silo-Server/silo-server/internal/httpstream"
 )
 
-const (
-	downloadsNotConfiguredMessage = "Downloads not configured"
-)
-
 // ServeDownloadFile is the shared frozen/v2 file lifecycle. Both transports
 // arrive with the same verified account/profile context; authorization and
 // proxy reservation remain in the existing resolver/serving service.
 func (h *DownloadHandler) ServeDownloadFile(w http.ResponseWriter, r *http.Request, id string, delegate bool) error {
 	if h == nil || h.svc == nil {
-		return &APIError{Status: 503, Message: downloadsNotConfiguredMessage}
+		return &APIError{Status: 503, Message: "Downloads not configured"}
 	}
 	userID := apimw.GetUserID(r.Context())
 	if userID == 0 {
-		return &APIError{Status: 401, Message: authenticationRequiredMessage}
+		return &APIError{Status: 401, Message: "Authentication required"}
 	}
 	profileID, deviceID, _, _ := managedIdentity(r)
 	filter := requestAccessFilter(r)
@@ -44,7 +40,7 @@ func (h *DownloadHandler) ServeDownloadFile(w http.ResponseWriter, r *http.Reque
 }
 func (h *DownloadHandler) ServeDownloadArtwork(w http.ResponseWriter, r *http.Request, id, kind string) error {
 	if h == nil || h.svc == nil {
-		return &APIError{Status: 503, Message: downloadsNotConfiguredMessage}
+		return &APIError{Status: 503, Message: "Downloads not configured"}
 	}
 	profile, device, _, _ := managedIdentity(r)
 	if profile == "" || device == "" {
@@ -54,7 +50,7 @@ func (h *DownloadHandler) ServeDownloadArtwork(w http.ResponseWriter, r *http.Re
 }
 func (h *DownloadHandler) ServeDownloadSubtitle(w http.ResponseWriter, r *http.Request, id, ref string) error {
 	if h == nil || h.svc == nil {
-		return &APIError{Status: 503, Message: downloadsNotConfiguredMessage}
+		return &APIError{Status: 503, Message: "Downloads not configured"}
 	}
 	user := apimw.GetUserID(r.Context())
 	profile, device, _, _ := managedIdentity(r)

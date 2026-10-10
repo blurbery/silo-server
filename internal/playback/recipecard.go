@@ -53,7 +53,6 @@ type RecipeCard struct {
 	// RemuxResumeLeadingPictureDrop restores the best-effort leading-picture
 	// drop for a seeked progressive remux after a restart.
 	RemuxResumeLeadingPictureDrop bool `json:"remux_resume_leading_picture_drop,omitempty"`
-	DropInitialLeadingPictures    bool `json:"drop_initial_leading_pictures,omitempty"`
 
 	// Client metadata mirrored from the session so admin views (client label,
 	// Jellyfin pill) survive reconstruction. Carried only by stored cards —
@@ -201,8 +200,6 @@ func NewRecipeCard(userID int, profileID string, mediaFileID int, transcodeNodeU
 		ToneMapDVRPUPresent:        opts.ToneMapDVRPUPresent,
 		VideoBitstreamFilter:       opts.VideoBitstreamFilter,
 		VideoSampleEntry:           opts.VideoSampleEntry,
-		RemuxDVMode:                opts.RemuxDVMode,
-		DropInitialLeadingPictures: opts.DropInitialLeadingPictures,
 		CopyVideoMPEGTS:            opts.CopyVideoMPEGTS,
 		SeekSeconds:                opts.SeekSeconds,
 		StreamOriginSeconds:        opts.StreamOriginSeconds,
@@ -305,8 +302,6 @@ func (c RecipeCard) TranscodeOpts(outputDir, ffmpegPath string, logSink FFmpegLo
 		ToneMapDVRPUPresent:        c.ToneMapDVRPUPresent,
 		VideoBitstreamFilter:       c.VideoBitstreamFilter,
 		VideoSampleEntry:           c.VideoSampleEntry,
-		RemuxDVMode:                c.RemuxDVMode,
-		DropInitialLeadingPictures: c.DropInitialLeadingPictures,
 		CopyVideoMPEGTS:            c.CopyVideoMPEGTS,
 		SeekSeconds:                c.SeekSeconds,
 		StreamOriginSeconds:        c.StreamOriginSeconds,
@@ -380,7 +375,6 @@ func (c RecipeCard) ToClaims() streamtoken.Claims {
 		TranscodeAudio:                c.TranscodeAudio,
 		RemuxDVMode:                   string(c.RemuxDVMode),
 		RemuxResumeLeadingPictureDrop: c.RemuxResumeLeadingPictureDrop,
-		DropInitialLeadingPictures:    c.DropInitialLeadingPictures,
 		TranscodeNode:                 c.TranscodeNodeURL,
 		TranscodeTransportID:          c.TranscodeTransportID,
 		RoutingNetworkProvider:        c.RoutingNetworkProvider,
@@ -484,7 +478,6 @@ func RecipeCardFromClaims(c *streamtoken.Claims) RecipeCard {
 		TranscodeAudio:                c.TranscodeAudio,
 		RemuxDVMode:                   RemuxDVMode(c.RemuxDVMode),
 		RemuxResumeLeadingPictureDrop: c.RemuxResumeLeadingPictureDrop,
-		DropInitialLeadingPictures:    c.DropInitialLeadingPictures,
 		InputPath:                     c.MediaPath,
 		OutputSubdir:                  c.OutputSubdir,
 		DVProfile:                     c.DVProfile,

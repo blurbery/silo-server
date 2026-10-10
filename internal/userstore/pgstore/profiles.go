@@ -340,7 +340,6 @@ func (s *PostgresUserStore) DeleteProfile(ctx context.Context, id string) error 
 		"user_favorites",
 		"user_watchlist",
 		"user_watch_progress",
-		"user_ratings",
 		"user_collection_sort_preferences",
 		"user_personal_collections",
 		"user_series_playback_preferences",

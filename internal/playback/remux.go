@@ -102,10 +102,11 @@ func resolveFFmpegPath(
 	return configured
 }
 
-// supportsDoviRPUFilter reports whether the given FFmpeg binary can produce a
-// clean HDR10 base layer from Profile 7: dovi_rpu strips DV metadata and
-// filter_units removes the interleaved enhancement-layer NAL units. Probed
-// once per binary path.
+// supportsDoviRPUFilter reports whether the given FFmpeg binary can run
+// DV7ToHDR10BitstreamFilter: the dovi_rpu bitstream filter (FFmpeg 7.1+) that
+// strips the Dolby Vision metadata, and filter_units, which removes a Profile
+// 7 enhancement layer interleaved in the video stream. Probed once per binary
+// path.
 func supportsDoviRPUFilter(bin string) bool {
 	doviRPUMu.Lock()
 	defer doviRPUMu.Unlock()
@@ -115,7 +116,7 @@ func supportsDoviRPUFilter(bin string) bool {
 	out, err := exec.Command(bin, "-hide_banner", "-bsfs").Output()
 	available := err == nil && bytes.Contains(out, []byte("dovi_rpu")) && bytes.Contains(out, []byte("filter_units"))
 	if !available {
-		slog.Warn("ffmpeg lacks the dovi_rpu/filter_units bitstream filters; validated Profile 7 HDR10 remux is disabled", "ffmpeg", bin)
+		slog.Warn("ffmpeg lacks the dovi_rpu or filter_units bitstream filter (dovi_rpu needs FFmpeg 7.1+); validated Profile 7 HDR10 remux is disabled", "ffmpeg", bin)
 	}
 	if doviRPUCache == nil {
 		doviRPUCache = make(map[string]bool)
@@ -183,7 +184,6 @@ const (
 	RemuxDVLegacyAutoV3   RemuxDVMode = "legacy_auto"
 	RemuxDVPreserveV3     RemuxDVMode = "preserve"
 	RemuxDVStripToHDR10V3 RemuxDVMode = "strip_to_hdr10"
-	RemuxDVStripToBaseV3  RemuxDVMode = "strip_to_compatible_base"
 	RemuxDVRejectP7V3     RemuxDVMode = "reject_profile_7"
 )
 
@@ -194,19 +194,18 @@ const (
 // When transcodeAudio is true, video is copied but audio is transcoded to
 // stereo AAC (handles cases like DTS/TrueHD that browsers cannot decode).
 // dvProfile is the file's Dolby Vision profile (0 = none). Profile 7 remuxes
-// strip DV metadata and the interleaved enhancement-layer NAL units, yielding
-// a clean HDR10 base layer (the Apple fallback for devices without a P7
+// run DV7ToHDR10BitstreamFilter: the video map drops a separate
+// enhancement-layer track, but a single-track source interleaves it as NAL
+// unit type 63, and its RPUs would dangle either way. The result is a clean
+// HDR10 base layer (the Apple-parity fallback for devices without a P7
 // decoder). Profile 8 RPUs stay: the base layer is self-contained and DV
 // clients can render it.
 func buildRemuxArgs(filePath, outputFormat string, seekSeconds float64, transcodeAudio bool, audioTrackIndex int, dvProfile int, tagSampleEntry, audioOnly bool) []string {
-	return buildRemuxArgsWithAudioV3(filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, dvProfile, tagSampleEntry, audioOnly, 0, 0, 0, false)
+	return buildRemuxArgsWithAudioV3(filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, dvProfile, tagSampleEntry, audioOnly, 0, 0, 0)
 }
 
-// buildRemuxArgsWithAudioV3 keeps the fork's argument order: its final flag
-// is the fork's frozen Firefox HEVC open-GOP resume recipe, which shares the
-// leading-picture drop below with upstream's best-effort resume request.
-func buildRemuxArgsWithAudioV3(filePath, outputFormat string, seekSeconds float64, transcodeAudio bool, audioTrackIndex int, dvProfile int, tagSampleEntry, audioOnly bool, sourceAudioChannels, targetAudioChannels, targetAudioBitrateKbps int, dropInitialLeadingPictures bool) []string {
-	return buildRemuxArgsWithLeadingPictureDropV3(filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, dvProfile, tagSampleEntry, audioOnly, sourceAudioChannels, targetAudioChannels, targetAudioBitrateKbps, dropInitialLeadingPictures)
+func buildRemuxArgsWithAudioV3(filePath, outputFormat string, seekSeconds float64, transcodeAudio bool, audioTrackIndex int, dvProfile int, tagSampleEntry, audioOnly bool, sourceAudioChannels, targetAudioChannels, targetAudioBitrateKbps int) []string {
+	return buildRemuxArgsWithLeadingPictureDropV3(filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, dvProfile, tagSampleEntry, audioOnly, sourceAudioChannels, targetAudioChannels, targetAudioBitrateKbps, false)
 }
 
 // buildRemuxArgsWithLeadingPictureDropV3 adds the resume leading-picture drop
@@ -296,6 +295,7 @@ func buildRemuxArgsWithLeadingPictureDropV3(filePath, outputFormat string, seekS
 		// keep the pre-v3 hev1 labeling their demuxers accept.
 		args = append(args, "-tag:v", "dvh1", "-strict", "unofficial")
 	}
+
 	if transcodeAudio {
 		channels, bitrateKbps := ResolveAACOutputV3(targetAudioChannels, targetAudioBitrateKbps)
 		// Video copy + AAC encode is effectively single-threaded work.
@@ -344,10 +344,10 @@ func StartRemux(ctx context.Context, filePath, outputFormat string, seekSeconds 
 // v3 callers must pass the configured playback path so the strip capability
 // promised by the planner's probe holds for the binary that actually runs.
 func StartRemuxWithDVMode(ctx context.Context, filePath, outputFormat string, seekSeconds float64, transcodeAudio bool, audioTrackIndex int, dvProfile int, mode RemuxDVMode, ffmpegPath string) (*RemuxSession, error) {
-	return startRemuxWithOptions(ctx, filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, dvProfile, mode, ffmpegPath, false, 0, 0, 0, false, false)
+	return startRemuxWithOptions(ctx, filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, dvProfile, mode, ffmpegPath, false, 0, 0, 0, false)
 }
 
-func startRemuxWithOptions(ctx context.Context, filePath, outputFormat string, seekSeconds float64, transcodeAudio bool, audioTrackIndex int, dvProfile int, mode RemuxDVMode, ffmpegPath string, audioOnly bool, sourceAudioChannels, targetAudioChannels, targetAudioBitrateKbps int, dropInitialLeadingPictures, dropResumeLeadingPictures bool) (*RemuxSession, error) {
+func startRemuxWithOptions(ctx context.Context, filePath, outputFormat string, seekSeconds float64, transcodeAudio bool, audioTrackIndex int, dvProfile int, mode RemuxDVMode, ffmpegPath string, audioOnly bool, sourceAudioChannels, targetAudioChannels, targetAudioBitrateKbps int, dropLeadingPictures bool) (*RemuxSession, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
 	bin := ResolveFFmpegPath(ffmpegPath)
@@ -357,14 +357,14 @@ func startRemuxWithOptions(ctx context.Context, filePath, outputFormat string, s
 	case "", RemuxDVLegacyAutoV3:
 		effectiveProfile = remuxDVProfile(dvProfile, supportsDoviRPUFilter(bin) &&
 			(dvProfile != 7 || sharedDVRPUProbe.CanStrip(ctx, bin, filePath)))
-	case RemuxDVStripToHDR10V3, RemuxDVStripToBaseV3:
+	case RemuxDVStripToHDR10V3:
 		if dvProfile != 7 && dvProfile != 8 {
 			cancel()
-			return nil, fmt.Errorf("profile 7 or 8 is required for Dolby Vision base-layer stripping")
+			return nil, fmt.Errorf("Dolby Vision HDR10 strip requires profile 7 or 8")
 		}
 		if !supportsDoviRPUFilter(bin) {
 			cancel()
-			return nil, fmt.Errorf("the Dolby Vision base-layer remux requires the dovi_rpu/filter_units bitstream filters")
+			return nil, fmt.Errorf("the Dolby Vision HDR10 remux requires the dovi_rpu and filter_units bitstream filters")
 		}
 		// The planner refuses this recipe for a source that fails the probe,
 		// so reaching here means a session or stream token minted before the
@@ -375,7 +375,7 @@ func startRemuxWithOptions(ctx context.Context, filePath, outputFormat string, s
 		// next start re-plans against the now-cached verdict.
 		if !sharedDVRPUProbe.CanStrip(ctx, bin, filePath) {
 			cancel()
-			return nil, fmt.Errorf("this source's Dolby Vision RPU cannot be stripped to its compatible base layer")
+			return nil, fmt.Errorf("this source's Dolby Vision RPU cannot be stripped to HDR10")
 		}
 		// buildRemuxArgs uses profile 7 as the explicit strip sentinel; the
 		// filter is equally required for a compatible profile 8 base layer.
@@ -402,13 +402,10 @@ func startRemuxWithOptions(ctx context.Context, filePath, outputFormat string, s
 		cancel()
 		return nil, fmt.Errorf("unknown remux Dolby Vision mode %q", mode)
 	}
-	// The fork's Firefox HEVC recipe is frozen into the plan with its required
-	// capability, so it always runs on a seeked copy. Upstream's resume request
-	// is best effort: a binary without the drop expression serves the plain
-	// copy rather than failing the route, and it is only probed when the filter
-	// would actually run. Either request adds the same filter once.
-	dropLeadingPictures := seekSeconds > 0 && !audioOnly &&
-		(dropInitialLeadingPictures || dropResumeLeadingPictures && supportsLeadingPictureDropFilter(bin))
+	// The leading-picture drop is best effort: a binary without the drop
+	// expression serves the plain copy rather than failing the route. Only
+	// probe when the filter would actually run.
+	dropLeadingPictures = dropLeadingPictures && seekSeconds > 0 && !audioOnly && supportsLeadingPictureDropFilter(bin)
 	args := buildRemuxArgsWithLeadingPictureDropV3(filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, effectiveProfile, tagSampleEntry, audioOnly, sourceAudioChannels, targetAudioChannels, targetAudioBitrateKbps, dropLeadingPictures)
 	cmd := exec.CommandContext(ctx, bin, args...)
 
@@ -499,9 +496,6 @@ type RemuxServeOptions struct {
 	ContentType string
 	// AudioOnly permits the otherwise-mandatory video map to be absent.
 	AudioOnly bool
-	// DropInitialLeadingPictures applies the frozen Firefox HEVC resume recipe
-	// only for a non-zero seek. Zero-start and audio-only remuxes are unchanged.
-	DropInitialLeadingPictures bool
 	// SourceAudioChannels identifies a real surround-to-stereo conversion so an
 	// already-stereo source keeps its authored level. TargetAudioChannels and
 	// TargetAudioBitrateKbps freeze the planned AAC output. Zero target values
@@ -565,7 +559,7 @@ func ServeRemuxWithOptions(w http.ResponseWriter, r *http.Request, filePath, out
 		return err
 	}
 
-	session, err := startRemuxWithOptions(r.Context(), filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, dvProfile, mode, ffmpegPath, opts.AudioOnly, opts.SourceAudioChannels, opts.TargetAudioChannels, opts.TargetAudioBitrateKbps, opts.DropInitialLeadingPictures, opts.DropResumeLeadingPictures)
+	session, err := startRemuxWithOptions(r.Context(), filePath, outputFormat, seekSeconds, transcodeAudio, audioTrackIndex, dvProfile, mode, ffmpegPath, opts.AudioOnly, opts.SourceAudioChannels, opts.TargetAudioChannels, opts.TargetAudioBitrateKbps, opts.DropResumeLeadingPictures)
 	if err != nil {
 		http.Error(w, "failed to start remux", http.StatusInternalServerError)
 		return err

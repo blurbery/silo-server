@@ -350,14 +350,31 @@ describe("useAudiobookPlayback", () => {
     });
   });
 
-  it("does not wait for the video-only capability probe before starting playback", async () => {
-    const probeResult = new Promise<MediaCapabilitiesDecodingInfo>(() => {});
+  it("waits for the capability probe before starting playback", async () => {
+    let resolveProbe!: (value: MediaCapabilitiesDecodingInfo) => void;
+    const probeResult = new Promise<MediaCapabilitiesDecodingInfo>((resolve) => {
+      resolveProbe = resolve;
+    });
     vi.stubGlobal("navigator", {
       userAgent: "test-browser",
       mediaCapabilities: { decodingInfo: vi.fn(() => probeResult) },
     });
 
     const { result } = renderAudiobookPlayback();
+    await act(async () => Promise.resolve());
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/playback/start")),
+    ).toHaveLength(0);
+
+    await act(async () => {
+      resolveProbe({
+        supported: false,
+        smooth: false,
+        powerEfficient: false,
+        keySystemAccess: null,
+      });
+      await probeResult;
+    });
     await flushAsyncWork();
     expect(result.current.streamUrl).toBe("/api/v2/stream/session-1?token=token");
     expect(

@@ -37,8 +37,6 @@ jobs:
     permissions:
       actions: write
       contents: read
-    # Fork: run this repository's copy so the fork-only checks below apply and
-    # upstream workflow changes arrive through syncs, not on their own.
-    uses: ./.github/workflows/trusted-linux-ci.yml
+    uses: Silo-Server/silo-server/.github/workflows/trusted-linux-ci.yml@main
     with:
       self_hosted: false

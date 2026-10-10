@@ -26,11 +26,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const (
-	statusClassHijacked = "hijacked"
-	apiKeyAuthClass     = "api_key"
-)
-
 // Observability for the v2 listener. Every v2 request is counted, timed and
 // logged once, here, with labels that are stable across releases and bounded
 // in cardinality: the operation ID (never the raw path), the method folded
@@ -150,7 +145,7 @@ func observe(next http.Handler) http.Handler {
 			if sw.status != 0 {
 				span.SetAttributes(attribute.Int("http.response.status_code", sw.status))
 			} else if sw.hijacked {
-				span.SetAttributes(attribute.String("http.response.outcome", statusClassHijacked))
+				span.SetAttributes(attribute.String("http.response.outcome", "hijacked"))
 			} else {
 				span.SetAttributes(attribute.String("http.response.outcome", "abandoned"))
 			}
@@ -238,7 +233,7 @@ func report(r *http.Request, o *observation, status int, hijacked bool, bodyByte
 	method := methodLabel(r.Method)
 	class := statusClass(status)
 	if status == 0 && hijacked {
-		class = statusClassHijacked
+		class = "hijacked"
 	}
 	requestsTotal.WithLabelValues(major, o.operationID, method, class, o.errorCode, o.authClass, telemetry.ClientLabel(name)).Inc()
 	requestDuration.WithLabelValues(major, o.operationID, method).Observe(elapsed.Seconds())
@@ -259,7 +254,7 @@ func report(r *http.Request, o *observation, status int, hijacked bool, bodyByte
 		labelAuthClass, o.authClass,
 		"duration_ms", elapsed.Milliseconds(),
 		"body_bytes", bodyBytes,
-		clientIPField, clientip.FromContext(r.Context()),
+		"client_ip", clientip.FromContext(r.Context()),
 	}
 	if name != "" {
 		attrs = append(attrs, "client_name", name)
@@ -355,11 +350,11 @@ func observeIdentity(ctx huma.Context, next func(huma.Context)) {
 func authClassFor(claims *auth.Claims) string {
 	switch claims.TokenType {
 	case auth.TokenTypeAPIKey:
-		return apiKeyAuthClass
+		return "api_key"
 	case auth.TokenTypePluginAccess:
 		return "plugin"
 	case auth.TokenTypeAccess:
-		return adminNodeSessionTiebreaker
+		return "session"
 	default:
 		return labelOther
 	}

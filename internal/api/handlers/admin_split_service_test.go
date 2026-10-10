@@ -3,10 +3,9 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"github.com/Silo-Server/silo-server/internal/models"
 	"testing"
 	"time"
-
-	"github.com/Silo-Server/silo-server/internal/models"
 )
 
 func TestAdminSplitDryRunRollbackAndCommit(t *testing.T) {

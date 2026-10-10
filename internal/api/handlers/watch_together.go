@@ -25,8 +25,6 @@ type WatchTogetherScopeResolver interface {
 	Resolve(ctx context.Context, input access.ResolveInput) (access.Scope, error)
 }
 
-const watchTogetherLobbyReadyMessageType = "lobby_ready"
-
 type WatchTogetherHandler struct {
 	Service       *watchtogether.Service
 	ScopeResolver WatchTogetherScopeResolver
@@ -980,7 +978,7 @@ func (h *WatchTogetherHandler) handleRoomClientMessage(
 			IsPaused:        msg.IsPaused,
 		})
 		return err
-	case watchTogetherLobbyReadyMessageType:
+	case "lobby_ready":
 		if !rc.includeMemberStatus {
 			return errors.New("unsupported room websocket message")
 		}

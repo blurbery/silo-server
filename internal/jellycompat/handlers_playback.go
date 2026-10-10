@@ -1734,9 +1734,6 @@ func (h *PlaybackHandler) startRemoteTranscodeWithToneMapMode(
 	if compatHLSCopiesVideo(source) {
 		reqBody.TargetCodecVideo = compatCopyCodec
 		reqBody.VideoSampleEntry, reqBody.VideoBitstreamFilter = compatCopyVideoRecipe(source, file.PrimaryDVProfile())
-		if reqBody.VideoSampleEntry == playback.VideoSampleEntryDVH1 {
-			reqBody.RemuxDVMode = string(playback.RemuxDVPreserveV3)
-		}
 		reqBody.CopyVideoMPEGTS = source.HLSRemuxMPEGTS
 		reqBody.CopyFMP4RecipeVersion = playback.CopyFMP4RecipeVersion
 	}
@@ -1941,7 +1938,6 @@ func (h *PlaybackHandler) startRemoteTranscodeWithToneMapMode(
 		SubtitleCodec:          reqBody.SubtitleCodec,
 		TargetBitrateKbps:      reqBody.TargetBitrateKbps,
 		VideoSampleEntry:       reqBody.VideoSampleEntry,
-		RemuxDVMode:            playback.RemuxDVMode(reqBody.RemuxDVMode),
 		VideoBitstreamFilter:   reqBody.VideoBitstreamFilter,
 		CopyVideoMPEGTS:        reqBody.CopyVideoMPEGTS,
 		SegmentDuration:        reqBody.SegmentDuration,

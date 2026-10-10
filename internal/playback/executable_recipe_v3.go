@@ -16,7 +16,6 @@ type ExecutableRecipeV3 struct {
 	// RemuxResumeLeadingPictureDrop is best effort, so a binary that predates
 	// it may ignore it without a recipe version change.
 	RemuxResumeLeadingPictureDrop bool                   `json:"remux_resume_leading_picture_drop,omitempty"`
-	DropInitialLeadingPictures    bool                   `json:"drop_initial_leading_pictures,omitempty"`
 	TargetVideoCodec              string                 `json:"target_video_codec,omitempty"`
 	TargetAudioCodec              string                 `json:"target_audio_codec,omitempty"`
 	TargetAudioChannels           int                    `json:"target_audio_channels,omitempty"`
@@ -77,7 +76,6 @@ func FreezeExecutableRecipeV3(result PlannerResultV3) ExecutableRecipeV3 {
 		PlayMethod:                    result.PlayMethod,
 		TranscodeAudio:                result.TranscodeAudio,
 		RemuxResumeLeadingPictureDrop: result.RemuxResumeLeadingPictureDrop,
-		DropInitialLeadingPictures:    result.DropInitialLeadingPictures,
 		TargetVideoCodec:              result.TargetVideoCodec,
 		TargetAudioCodec:              result.TargetAudioCodec,
 		TargetAudioChannels:           result.TargetAudioChannels,
@@ -165,7 +163,6 @@ func (r ExecutableRecipeV3) PlannerResult(plan *PlanV3) PlannerResultV3 {
 		PlayMethod:                    r.PlayMethod,
 		TranscodeAudio:                r.TranscodeAudio,
 		RemuxResumeLeadingPictureDrop: r.RemuxResumeLeadingPictureDrop,
-		DropInitialLeadingPictures:    r.DropInitialLeadingPictures,
 		TargetVideoCodec:              r.TargetVideoCodec,
 		TargetAudioCodec:              r.TargetAudioCodec,
 		SourceAudioChannels:           r.SourceAudioChannels,

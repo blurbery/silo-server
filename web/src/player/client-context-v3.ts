@@ -56,7 +56,7 @@ export function detectHLSSupport(): HLSSupportProbe {
         return { supported: true, native: true };
       }
     } catch {
-      // An unavailable or restricted media element is not a native-HLS claim.
+      // Fall through to the hls.js/MSE probe.
     }
   }
   if (typeof MediaSource === "undefined") return { supported: false, native: false };
@@ -72,11 +72,6 @@ export function detectHLSSupport(): HLSSupportProbe {
   }
 }
 
-/** Detects whether the media element itself can play HLS without hls.js. */
-export function detectNativeHLSSupport(): boolean {
-  return detectHLSSupport().native;
-}
-
 export interface WebCapabilityProbe {
   /** Container names the browser reported support for. */
   containers: string[];
@@ -84,8 +79,6 @@ export interface WebCapabilityProbe {
   codecsVideo: string[];
   /** Video codecs supported specifically by direct media-element playback. */
   progressiveCodecsVideo: string[];
-  /** Video codecs supported specifically by hls.js' MediaSource path. */
-  hlsCodecsVideo: string[];
   /** Audio codec names the browser reported support for. */
   codecsAudio: string[];
   /** Audio codecs supported specifically inside progressive MP4 delivery. */
@@ -96,12 +89,10 @@ export interface WebCapabilityProbe {
   hdr: boolean;
   /** Structured HDR formats supported by the active browser output path. */
   hdrDetails: HDRCapabilitiesV3;
-  /** Structured HDR formats supported by hls.js' MediaSource path. */
-  hlsHDRDetails: HDRCapabilitiesV3;
-  /** Whether HLS is available through either hls.js or the media element. */
+  /** Whether native HLS or hls.js can be used on this browser. */
   hls: boolean;
-  /** Whether the media element itself, rather than hls.js, owns HLS playback. */
-  nativeHls: boolean;
+  /** Whether HLS is handled by the browser's native media element. */
+  nativeHLS: boolean;
 }
 
 /**
@@ -111,9 +102,7 @@ export interface WebCapabilityProbe {
  * server treats the two lists identically.
  */
 export function buildClientCapabilitiesV3(probe: WebCapabilityProbe): ClientCodecCapabilitiesV3 {
-  const codecsVideo = Array.from(
-    new Set([...probe.codecsVideo, ...probe.progressiveCodecsVideo, ...probe.hlsCodecsVideo]),
-  );
+  const codecsVideo = Array.from(new Set([...probe.codecsVideo, ...probe.progressiveCodecsVideo]));
   return {
     video_evidence: "declared",
     audio_evidence: "declared",
@@ -163,11 +152,10 @@ export function buildDeliveriesV3(
 ): Partial<Record<DeliveryClassV3, DeliveryCapabilityV3>> {
   const nonProgressiveHDRDetails: HDRCapabilitiesV3 = {
     ...probe.hdrDetails,
-    // The Dolby Vision, HDR10, and HLG probes cover direct progressive playback
+    // The Dolby Vision and HDR10 probes cover direct progressive playback
     // through the media element after Silo normalizes the sample entry. They
     // say nothing about an untouched original or hls.js' MediaSource path.
     hdr10: false,
-    hlg: false,
     dolby_vision_profiles: [],
     dolby_vision_profile_levels: [],
   };
@@ -175,13 +163,10 @@ export function buildDeliveriesV3(
   delete nonProgressiveHDRDetails.hdr10_max_height;
   delete nonProgressiveHDRDetails.hdr10_max_frame_rate;
   delete nonProgressiveHDRDetails.hdr10_max_bitrate_kbps;
-  // Safari's native HLS and progressive playback both run through the media
-  // element. Chromium can expose a native-HLS probe while the player still
-  // uses hls.js, so only promote media-element evidence on Safari.
-  const nativeHLSPreferred = probe.nativeHls && isSafariBrowserV3(userAgent);
+  const nativeHLSPreferred = probe.nativeHLS && isSafariBrowserV3(userAgent);
   const progressiveHDRDetails = nativeHLSPreferred ? nonProgressiveHDRDetails : probe.hdrDetails;
-  const hlsHDRDetails = nativeHLSPreferred ? probe.hdrDetails : probe.hlsHDRDetails;
-  const hlsVideoCodecs = nativeHLSPreferred ? probe.progressiveCodecsVideo : probe.hlsCodecsVideo;
+  const hlsHDRDetails = nativeHLSPreferred ? probe.hdrDetails : nonProgressiveHDRDetails;
+  const hlsVideoCodecs = nativeHLSPreferred ? probe.progressiveCodecsVideo : probe.codecsVideo;
   return {
     original_http: buildDeliveryCapability(probe, {
       hdr_details: nonProgressiveHDRDetails,
@@ -197,7 +182,6 @@ export function buildDeliveriesV3(
       containers: ["hls"],
       video_codecs: hlsVideoCodecs,
       hdr_details: hlsHDRDetails,
-      features: probe.nativeHls ? ["native_hls_playback_v1"] : [],
     }),
   };
 }

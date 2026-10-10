@@ -17,10 +17,6 @@ import (
 	"github.com/Silo-Server/silo-server/internal/models"
 )
 
-const (
-	notConfiguredCode = "not_configured"
-)
-
 // Seams of the catalog-items section's actions and lookups: trailer refresh,
 // on-view description translation, people, and literary works. The v1
 // handlers and the v2 operations both call these; each returns *APIError for
@@ -190,7 +186,7 @@ func (h *MetadataAIHandler) TranslateOnView(ctx context.Context, filter catalog.
 	if err != nil {
 		switch {
 		case errors.Is(err, translation.ErrNotConfigured):
-			return nil, &APIError{Status: http.StatusServiceUnavailable, Code: notConfiguredCode,
+			return nil, &APIError{Status: http.StatusServiceUnavailable, Code: "not_configured",
 				Message: "On-view translation is not enabled on this server", cause: err}
 		case errors.Is(err, translation.ErrInvalidRequest):
 			return nil, &APIError{Status: http.StatusBadRequest, Code: policyErrorBadRequest, Message: err.Error(), cause: err}

@@ -19,13 +19,6 @@ import (
 	apimw "github.com/Silo-Server/silo-server/internal/api/middleware"
 )
 
-const (
-	authenticationDomain         = "auth"
-	unauthorizedCode             = "unauthorized"
-	mediaTypeApplicationWildcard = "application/*"
-	mediaTypeWildcard            = "*/*"
-)
-
 // Legacy v1 error codes the gates translate that have no v2 problem type of
 // their own (the others reuse the matching ProblemType's ID).
 const (
@@ -90,7 +83,7 @@ func gateChain(deps Dependencies, class Class, permission string, demoRestricted
 		return nil, ""
 	}
 	if deps.Auth == nil {
-		return nil, authenticationDomain
+		return nil, "auth"
 	}
 	chain := []func(http.Handler) http.Handler{deps.Auth.RequireAuth}
 	if demoRestricted {
@@ -256,7 +249,7 @@ func (d *denialWriter) problem() *Problem {
 	_ = json.Unmarshal(d.body.Bytes(), &legacy)
 	var p *Problem
 	switch legacy.Error {
-	case unauthorizedCode:
+	case "unauthorized":
 		p = unauthorizedProblem(d.reason)
 	case "profile_unverified":
 		// silo-apple and silo-android branch on this to start PIN entry, so it
@@ -339,7 +332,7 @@ func badRequestProblem(reason string) *Problem {
 			WithErrors(ProblemError{Location: locationProfileHeader, Code: codeRequired, Detail: "The X-Profile-Id header is required."})
 	case apimw.ReasonItemIDRequired:
 		return NewProblem(TypeValidationFailed, "The request did not pass validation; see errors.").
-			WithErrors(ProblemError{Location: locationPathID, Code: codeRequired, Detail: "The item id path parameter is required."})
+			WithErrors(ProblemError{Location: "path.id", Code: codeRequired, Detail: "The item id path parameter is required."})
 	default:
 		return NewProblem(TypeMalformedRequest, "The request could not be parsed.")
 	}
@@ -403,9 +396,9 @@ func acceptsRepresentation(accept, representation string) bool {
 		switch mt {
 		case representation:
 			specificity = 3
-		case mediaTypeApplicationWildcard:
+		case "application/*":
 			specificity = 2
-		case mediaTypeWildcard:
+		case "*/*":
 			specificity = 1
 		default:
 			continue
@@ -522,7 +515,7 @@ func contentEncodingOK(enc string) bool {
 		return true
 	}
 	for _, part := range strings.Split(enc, ",") {
-		if strings.ToLower(strings.TrimSpace(part)) != codingIdentity {
+		if strings.ToLower(strings.TrimSpace(part)) != "identity" {
 			return false
 		}
 	}

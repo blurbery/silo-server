@@ -2357,10 +2357,7 @@ func (s *DetailService) personCredits(ctx context.Context, people []models.ItemP
 	photoPaths := make([]string, len(people))
 	paths := make([]string, 0, len(people))
 	seen := make(map[string]struct{}, len(people))
-	// Without a requested size, ask plugins for their large headshot. The
-	// featured hint maps to TMDB's w185, which is softer than a cast card on a
-	// high-density screen; large maps to h632.
-	variant := imagesize.PluginVariantLarge
+	variant := imagesize.PluginVariantFeatured
 	if filter.ImageSize != imagesize.Unset {
 		variant = sizeToVariant(string(filter.ImageSize))
 	}

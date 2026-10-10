@@ -31,17 +31,17 @@ func AdminInvitationRefusalsAcceptance(catalogs []*Catalog) ([]*Catalog, error) 
 				status := http.StatusUnauthorized
 				switch s.ID {
 				case "adm_inv_list.admin_secondary_profile":
-					principal = Principal{Class: adminInvitationAdminPrincipal, Profile: inviteCodeDeleteSecondaryProfile}
+					principal = Principal{Class: adminInvitationAdminPrincipal, Profile: "admin_secondary"}
 					status = http.StatusForbidden
 				case "adm_inv_list.non_admin":
 					principal = Principal{Class: adminInvitationMemberPrincipal}
 					status = http.StatusForbidden
 				}
 				translated := original
-				translated.Path = adminInvitationInputV2Path
+				translated.Path = "/api/v2/admin/invitations"
 				if !reflect.DeepEqual(s.Request, original) || !reflect.DeepEqual(pair.Request, translated) ||
 					!reflect.DeepEqual(s.Principal, principal) || pair.Principal != nil ||
-					pair.Method != http.MethodGet || pair.OperationID != listAdminInvitationsOperation ||
+					pair.Method != http.MethodGet || pair.OperationID != "listAdminInvitations" ||
 					len(s.Then) != 0 || len(pair.Then) != 0 || len(s.Requires) != 0 || len(s.Settings) != 0 ||
 					s.Expect.Status != status || pair.Expect.Status != status {
 					return nil, fmt.Errorf("%s: unsupported administrator invitation refusal acceptance exchange", s.ID)

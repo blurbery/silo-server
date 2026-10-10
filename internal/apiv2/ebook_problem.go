@@ -2,7 +2,6 @@ package apiv2
 
 import (
 	"errors"
-
 	"github.com/Silo-Server/silo-server/internal/api/handlers"
 
 	catalogpkg "github.com/Silo-Server/silo-server/internal/catalog"

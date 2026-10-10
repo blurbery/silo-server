@@ -9,7 +9,7 @@ import {
   describePlaybackTransportError,
 } from "../playback-errors";
 import { isTransientPlayerRequestError, PlayerFetchError } from "../player-fetch";
-import { useCodecDetectionState } from "./useCodecDetection";
+import { useCodecDetection } from "./useCodecDetection";
 import {
   buildClientCapabilitiesV3,
   buildClientPlaybackContextV3,
@@ -373,7 +373,8 @@ export function usePlaybackSession(
   allowAlternateVersions = true,
 ): UsePlaybackSessionResult {
   const config = usePlayerConfig();
-  const { probe, settled: capabilityDetectionSettled } = useCodecDetectionState();
+  const probe = useCodecDetection();
+  const capabilitiesSettled = probe.settled;
   const clientCapabilities = useMemo(() => buildClientCapabilitiesV3(probe), [probe]);
   const clientPlaybackContext = useMemo(() => buildClientPlaybackContextV3(probe), [probe]);
   const capabilityRequestKey = useMemo(
@@ -433,11 +434,6 @@ export function usePlaybackSession(
   const planTransportShownRef = useRef(false);
   const switchingRef = useRef(false);
   const loadSequenceRef = useRef(0);
-  const loadInFlightSequenceRef = useRef<number | null>(null);
-  const pendingCapabilityRefreshRef = useRef(false);
-  const capabilityDetectionSettledRef = useRef(capabilityDetectionSettled);
-  const deferredSeekPositionRef = useRef<number | null>(null);
-  const [capabilityRefreshRevision, setCapabilityRefreshRevision] = useState(0);
 
   // v3 identity. `playback_attempt_id` spans one whole attempt chain (a start
   // and every replan that follows it); `plan_attempt_id` identifies the single
@@ -508,7 +504,6 @@ export function usePlaybackSession(
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
-  capabilityDetectionSettledRef.current = capabilityDetectionSettled;
 
   /**
    * Ends the running reconnect cycle, if any. `recovered` records when a cycle
@@ -642,17 +637,12 @@ export function usePlaybackSession(
       planTransportShownRef.current = false;
       endReconnect(true);
       const sessionId = plan.session_id ?? decision.session_id ?? sessionIdRef.current;
-      const replacingAdoptedPlan = hasAdoptedPlanRef.current;
       planAttemptIdRef.current = randomUUID();
       planRef.current = plan;
       sessionIdRef.current = sessionId ?? null;
       planRevisionRef.current += 1;
       hasAdoptedPlanRef.current = true;
       if (
-        (!replacingAdoptedPlan ||
-          (!pendingCapabilityRefreshRef.current &&
-            capabilityDetectionSettledRef.current &&
-            deferredSeekPositionRef.current === null)) &&
         Number.isFinite(plan.timeline.source_start_seconds) &&
         plan.timeline.source_start_seconds >= 0
       ) {
@@ -822,7 +812,6 @@ export function usePlaybackSession(
       const previousSessionId = sessionIdRef.current;
       const hasExistingSession = !!previousState.sessionId && !!previousState.streamUrl;
       const loadSequence = ++loadSequenceRef.current;
-      loadInFlightSequenceRef.current = loadSequence;
       const previousAttempt = {
         playbackAttemptId: playbackAttemptIdRef.current,
         planAttemptId: planAttemptIdRef.current,
@@ -1012,13 +1001,6 @@ export function usePlaybackSession(
         retirePreviousSession(nextError);
         return { kind: "failed", error: err };
       } finally {
-        if (loadInFlightSequenceRef.current === loadSequence) {
-          loadInFlightSequenceRef.current = null;
-          if (pendingCapabilityRefreshRef.current) {
-            pendingCapabilityRefreshRef.current = false;
-            setCapabilityRefreshRevision((revision) => revision + 1);
-          }
-        }
         endAdoption(loadSequence);
       }
     },
@@ -1039,9 +1021,7 @@ export function usePlaybackSession(
   loadSessionRef.current = loadSession;
 
   useEffect(() => {
-    if (!capabilityDetectionSettled) {
-      return;
-    }
+    if (!capabilitiesSettled) return;
     if (activeRequestKeyRef.current === requestKey) {
       return;
     }
@@ -1055,8 +1035,6 @@ export function usePlaybackSession(
       forceStartPosition: forceInitialPosition,
       intentAt,
     };
-    pendingCapabilityRefreshRef.current = false;
-    deferredSeekPositionRef.current = null;
     hasAdoptedPlanRef.current = false;
     awaitingInitialPlayerPositionRef.current = false;
     playbackPlayingRef.current = true;
@@ -1072,8 +1050,8 @@ export function usePlaybackSession(
       intentAt,
     });
   }, [
-    capabilityDetectionSettled,
     capabilityRequestKey,
+    capabilitiesSettled,
     fileId,
     forceInitialPosition,
     initialPosition,
@@ -1254,17 +1232,11 @@ export function usePlaybackSession(
         );
         if (!adopted && retireSessionOnRefusal) {
           const pending = pendingReplanRef.current;
-          const newerOutputProbePending =
-            pendingCapabilityRefreshRef.current || !capabilityDetectionSettledRef.current;
           const pendingCanValidateOutput =
             pending?.loadSequence === loadSequence &&
             pending.options.operation !== "seek_reanchor" &&
             pending.options.operation !== "seek_failure_recovery";
-          if (newerOutputProbePending) {
-            // Keep the currently playing route until the newest exact browser
-            // probes settle. Its output-change replan gets first chance to
-            // replace the stream without blanking playback or losing resume.
-          } else if (pending && pendingCanValidateOutput) {
+          if (pending && pendingCanValidateOutput) {
             // The output refusal proves the predecessor route is incompatible.
             // Let a queued planner-backed intent try the latest output evidence,
             // but require it to retire the session too if it is refused. Frozen
@@ -1350,37 +1322,18 @@ export function usePlaybackSession(
   issueReplanRef.current = replan;
 
   useEffect(() => {
-    if (activeRequestKeyRef.current !== requestKey) {
+    if (!capabilitiesSettled) return;
+    if (
+      activeRequestKeyRef.current !== requestKey ||
+      activeCapabilityRequestKeyRef.current === capabilityRequestKey
+    ) {
       return;
     }
-    if (!capabilityDetectionSettled) {
-      if (sessionIdRef.current || loadInFlightSequenceRef.current !== null) {
-        pendingCapabilityRefreshRef.current = true;
-      }
-      return;
-    }
-    if (activeCapabilityRequestKeyRef.current === capabilityRequestKey) {
-      pendingCapabilityRefreshRef.current = false;
-      const deferredSeekPosition = deferredSeekPositionRef.current;
-      deferredSeekPositionRef.current = null;
-      if (deferredSeekPosition !== null && planRef.current && sessionIdRef.current) {
-        void replan({ operation: "seek_reanchor", positionSeconds: deferredSeekPosition });
-      }
-      return;
-    }
+    activeCapabilityRequestKeyRef.current = capabilityRequestKey;
+
     const plan = planRef.current;
     const sessionId = sessionIdRef.current;
     if (!plan || !sessionId) {
-      if (loadInFlightSequenceRef.current !== null) {
-        // Capability probes settle asynchronously in Safari. Starting another
-        // session while the resume-aware start is still in flight lets both
-        // requests race through durable progress resolution; the zero-anchor
-        // replacement can then win. Let the first start finish and replan it
-        // once with the newest output evidence instead.
-        pendingCapabilityRefreshRef.current = true;
-        return;
-      }
-      activeCapabilityRequestKeyRef.current = capabilityRequestKey;
       const startIntent = startIntentRef.current;
       const resumeFromAdoptedPlan = hasAdoptedPlanRef.current;
       void loadSession({
@@ -1398,30 +1351,20 @@ export function usePlaybackSession(
       return;
     }
 
-    activeCapabilityRequestKeyRef.current = capabilityRequestKey;
-    pendingCapabilityRefreshRef.current = false;
-
-    const deferredSeekPosition = deferredSeekPositionRef.current;
-    deferredSeekPositionRef.current = null;
-
     if (!serverFeaturesRef.current.includes(FEATURE_OUTPUT_CHANGE_V3)) {
-      if (deferredSeekPosition !== null) {
-        void replan({ operation: "seek_reanchor", positionSeconds: deferredSeekPosition });
-      }
       return;
     }
 
     void replan(
       {
         operation: "output_change",
-        positionSeconds: deferredSeekPosition ?? playbackPositionRef.current,
+        positionSeconds: playbackPositionRef.current,
       },
       true,
     );
   }, [
-    capabilityDetectionSettled,
-    capabilityRefreshRevision,
     capabilityRequestKey,
+    capabilitiesSettled,
     fileId,
     loadSession,
     replan,
@@ -1484,19 +1427,11 @@ export function usePlaybackSession(
       // While the server is unreachable a transport failure says nothing about
       // the route; the reconnect replaces the transport anyway.
       if (reconnectRef.current.active) return;
-      const preservedPosition = playbackPositionRef.current;
-      const reportedPosition = Number.isFinite(currentPosition) ? Math.max(0, currentPosition) : 0;
-      const recoveryPosition =
-        (!Number.isFinite(currentPosition) ||
-          (awaitingInitialPlayerPositionRef.current && currentPosition === 0)) &&
-        preservedPosition > 0
-          ? preservedPosition
-          : reportedPosition;
       reportEvent("plan_failed", {
         failureClassification: failure.classification,
         ...(failure.message ? { diagnostics: { message: failure.message } } : {}),
       });
-      void replan({ operation: "failure_recovery", positionSeconds: recoveryPosition, failure });
+      void replan({ operation: "failure_recovery", positionSeconds: currentPosition, failure });
     },
     [replan, reportEvent],
   );
@@ -1707,16 +1642,9 @@ export function usePlaybackSession(
       playbackPositionRef.current = positionSeconds;
       awaitingInitialPlayerPositionRef.current = false;
       reportEvent("seek_reanchor_requested");
-      if (!capabilityDetectionSettled) {
-        // The settled output-change replan will carry this newest source
-        // position, so a stale-capability seek must not overtake it.
-        deferredSeekPositionRef.current = positionSeconds;
-        return Promise.resolve(true);
-      }
-      deferredSeekPositionRef.current = null;
       return replan({ operation: "seek_reanchor", positionSeconds });
     },
-    [capabilityDetectionSettled, replan, reportEvent],
+    [replan, reportEvent],
   );
 
   /**
@@ -1762,6 +1690,7 @@ export function usePlaybackSession(
     if (Number.isFinite(positionSeconds) && positionSeconds >= 0) {
       const isUninitializedPlayerZero =
         awaitingInitialPlayerPositionRef.current &&
+        !playing &&
         positionSeconds === 0 &&
         playbackPositionRef.current > 0;
       if (!isUninitializedPlayerZero) {

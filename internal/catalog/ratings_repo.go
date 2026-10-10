@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -111,7 +110,7 @@ func (r *RatingsRepo) Get(ctx context.Context, userID int, profileID, mediaItemI
 		WHERE user_id = $1 AND profile_id = $2 AND media_item_id = $3`,
 		userID, profileID, mediaItemID,
 	).Scan(&ur.UserID, &ur.ProfileID, &ur.MediaItemID, &ur.Rating, &ur.RatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {

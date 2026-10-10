@@ -20,44 +20,19 @@ func argsContainPair(args []string, a, b string) bool {
 	return false
 }
 
-// Profile 7 remuxes must remove both the DV metadata and the enhancement-layer
-// NAL units interleaved in the same video track. The result is a clean HDR10
-// base layer for devices without a P7 decoder.
+// A profile 7 remux keeps only the HDR10 base layer. A dual-track source's
+// enhancement layer is dropped by -map 0:V:0, but a single-track source
+// interleaves it in the same stream as NAL unit type 63, so the filter chain
+// removes those units as well as the RPUs. The result is a clean HDR10 stream,
+// which is both a correctness fix and the Apple-parity fallback for devices
+// without a P7 decoder.
 func TestBuildRemuxArgsStripsDolbyVisionRPUForProfile7(t *testing.T) {
 	args := buildRemuxArgs("/x.mkv", "mp4", 0, false, -1, 7, false, false)
-	if !argsContainPair(args, "-bsf:v", DV7ToHDR10BitstreamFilter) {
-		t.Fatalf("profile 7 remux must isolate the HDR10 base layer, args=%v", strings.Join(args, " "))
+	if !argsContainPair(args, "-bsf:v", "dovi_rpu=strip=1,filter_units=remove_types=63") {
+		t.Fatalf("profile 7 remux must strip DV RPUs and enhancement-layer units from the base layer, args=%v", strings.Join(args, " "))
 	}
 	if argsContainPair(args, "-tag:v", "hvc1") || argsContainPair(args, "-tag:v", "dvh1") || argsContainPair(args, "-strict", "unofficial") {
 		t.Fatalf("legacy strip consumers must keep hev1 labeling without DV signaling, args=%v", strings.Join(args, " "))
-	}
-}
-
-func TestBuildRemuxArgsNormalizesOnlyResumedFlaggedVideo(t *testing.T) {
-	combined := DropInitialLeadingPicturesBitstreamFilter + "," + DV7ToHDR10BitstreamFilter
-	resumed := buildRemuxArgsWithAudioV3("/movie.mkv", "mp4", 983.178, true, 0, 7, true, false, 0, 2, 192, true)
-	if !argsContainPair(resumed, "-bsf:v", combined) {
-		t.Fatalf("resumed Firefox HEVC filter chain = %s, want %q", strings.Join(resumed, " "), combined)
-	}
-
-	zeroStart := buildRemuxArgsWithAudioV3("/movie.mkv", "mp4", 0, true, 0, 7, true, false, 0, 2, 192, true)
-	if !argsContainPair(zeroStart, "-bsf:v", DV7ToHDR10BitstreamFilter) || argsContainPair(zeroStart, "-bsf:v", combined) {
-		t.Fatalf("zero-start remux changed its filter recipe: %s", strings.Join(zeroStart, " "))
-	}
-
-	unflagged := buildRemuxArgsWithAudioV3("/movie.mkv", "mp4", 983.178, true, 0, 7, true, false, 0, 2, 192, false)
-	if !argsContainPair(unflagged, "-bsf:v", DV7ToHDR10BitstreamFilter) || strings.Contains(strings.Join(unflagged, " "), DropInitialLeadingPicturesBitstreamFilter) {
-		t.Fatalf("unflagged remux changed its filter recipe: %s", strings.Join(unflagged, " "))
-	}
-
-	preservedDV := buildRemuxArgsWithAudioV3("/movie.mkv", "mp4", 983.178, false, 0, 8, true, false, 0, 0, 0, true)
-	if !argsContainPair(preservedDV, "-bsf:v", DropInitialLeadingPicturesBitstreamFilter) || strings.Contains(strings.Join(preservedDV, " "), DV7ToHDR10BitstreamFilter) {
-		t.Fatalf("Profile 8 preserve resume did not get only the leading-picture filter: %s", strings.Join(preservedDV, " "))
-	}
-
-	audioOnly := buildRemuxArgsWithAudioV3("/book.m4b", "mp4", 983.178, true, 0, 0, false, true, 0, 2, 192, true)
-	if strings.Contains(strings.Join(audioOnly, " "), DropInitialLeadingPicturesBitstreamFilter) {
-		t.Fatalf("audio-only remux received a video filter: %s", strings.Join(audioOnly, " "))
 	}
 }
 
@@ -70,7 +45,7 @@ func TestBuildRemuxArgsExcludesAttachedPictures(t *testing.T) {
 }
 
 func TestBuildRemuxArgsHonorsPlannedAACOutput(t *testing.T) {
-	args := buildRemuxArgsWithAudioV3("/book.m4b", "mp4", 0, true, -1, 0, false, true, 2, 1, 96, false)
+	args := buildRemuxArgsWithAudioV3("/book.m4b", "mp4", 0, true, -1, 0, false, true, 2, 1, 96)
 	if !argsContainPair(args, "-ac", "1") || !argsContainPair(args, "-b:a", "96k") || !argsContainPair(args, "-af", aacTimestampNormalizeFilterV3) {
 		t.Fatalf("planned mono bitrate missing from remux args: %s", strings.Join(args, " "))
 	}
@@ -98,7 +73,7 @@ func TestBuildRemuxArgsBoostsOnlySurroundToStereoAAC(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			args := buildRemuxArgsWithAudioV3("/movie.mkv", "mp4", 0, tt.transcodeAudio, -1, 0, false, false, tt.sourceChannels, tt.targetChannels, 0, false)
+			args := buildRemuxArgsWithAudioV3("/movie.mkv", "mp4", 0, tt.transcodeAudio, -1, 0, false, false, tt.sourceChannels, tt.targetChannels, 0)
 			gotBoost := argsContainPair(args, "-af", wantFilter)
 			if gotBoost != tt.wantBoost {
 				t.Fatalf("downmix boost present=%t, want %t; args=%s", gotBoost, tt.wantBoost, strings.Join(args, " "))
@@ -123,7 +98,7 @@ func TestBuildRemuxArgsNormalizesAACAcrossSeekAnchors(t *testing.T) {
 
 	for _, anchor := range anchors {
 		t.Run(anchor.name, func(t *testing.T) {
-			args := buildRemuxArgsWithAudioV3("/movie.mkv", "mp4", anchor.seek, true, 0, 0, false, false, 2, 2, 192, false)
+			args := buildRemuxArgsWithAudioV3("/movie.mkv", "mp4", anchor.seek, true, 0, 0, false, false, 2, 2, 192)
 			if !argsContainPair(args, "-af", aacTimestampNormalizeFilterV3) {
 				t.Fatalf("AAC timestamp normalization missing at seek %.3f: %s", anchor.seek, strings.Join(args, " "))
 			}
@@ -135,7 +110,8 @@ func TestBuildRemuxArgsNormalizesAACAcrossSeekAnchors(t *testing.T) {
 			}
 		})
 	}
-	codecCopy := buildRemuxArgsWithAudioV3("/movie.mkv", "mp4", 600, false, 0, 0, false, false, 2, 2, 192, false)
+
+	codecCopy := buildRemuxArgsWithAudioV3("/movie.mkv", "mp4", 600, false, 0, 0, false, false, 2, 2, 192)
 	if slices.Contains(codecCopy, "-af") {
 		t.Fatalf("codec-copy remux unexpectedly received an audio filter: %s", strings.Join(codecCopy, " "))
 	}
@@ -167,23 +143,12 @@ func TestRemuxDVProfileFallsBackWithoutFilterSupport(t *testing.T) {
 	}
 }
 
-func TestSupportsDoviRPUFilterRequiresEnhancementLayerFilter(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "ffmpeg")
-	script := "#!/bin/sh\nif [ \"$2\" = \"-bsfs\" ]; then echo dovi_rpu; fi\n"
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake ffmpeg: %v", err)
-	}
-	if supportsDoviRPUFilter(bin) {
-		t.Fatal("Profile 7 HDR10 fallback was advertised without filter_units")
-	}
-}
-
 // Profile 8 base layers are self-contained: the RPU stays valid without an
 // enhancement layer and DV-capable clients can render it. Never strip.
 func TestBuildRemuxArgsKeepsRPUForProfile8AndPlainFiles(t *testing.T) {
 	for _, profile := range []int{0, 5, 8} {
 		args := buildRemuxArgs("/x.mkv", "mp4", 0, false, -1, profile, false, false)
-		if argsContainPair(args, "-bsf:v", DV7ToHDR10BitstreamFilter) {
+		if strings.Contains(strings.Join(args, " "), "dovi_rpu") || strings.Contains(strings.Join(args, " "), "filter_units") {
 			t.Fatalf("profile %d remux must not strip DV RPUs, args=%v", profile, strings.Join(args, " "))
 		}
 		if argsContainPair(args, "-tag:v", "dvh1") || argsContainPair(args, "-strict", "unofficial") {
@@ -210,14 +175,6 @@ func TestStartRemuxRejectsUnknownModeForAllProfiles(t *testing.T) {
 	}
 }
 
-func TestStartRemuxCompatibleBaseModeRejectsProfilesWithoutCompatibleRecipe(t *testing.T) {
-	for _, profile := range []int{0, 5, 9} {
-		if _, err := StartRemuxWithDVMode(t.Context(), "/nonexistent.mkv", "mp4", 0, false, -1, profile, RemuxDVStripToBaseV3, ""); err == nil {
-			t.Fatalf("compatible-base mode accepted profile %d", profile)
-		}
-	}
-}
-
 func TestBuildRemuxArgsDelaysMoovForCopiedAtmosConfiguration(t *testing.T) {
 	args := buildRemuxArgs("/x.mkv", "mp4", 0, false, -1, 8, false, false)
 	if !argsContainPair(args, "-movflags", "frag_keyframe+delay_moov+default_base_moof") {
@@ -236,7 +193,7 @@ func writeProbeAwareFFmpeg(t *testing.T) (bin, argLog string) {
 	argLog = filepath.Join(dir, "args")
 	script := "#!/bin/sh\n" +
 		"case \"$*\" in\n" +
-		"  *-bsfs*) echo dovi_rpu; echo filter_units; exit 0;;\n" +
+		"  *-bsfs*) printf 'dovi_rpu\\nfilter_units\\n'; exit 0;;\n" +
 		"  *'-f null'*) echo '[dovi_rpu @ 0x55] Failed to read unit 1 (type 39).' >&2; exit 0;;\n" +
 		"esac\n" +
 		"echo \"$*\" >> " + argLog + "\n" +
@@ -257,7 +214,7 @@ func writeRecordingFFmpeg(t *testing.T) (bin, argLog string) {
 	argLog = filepath.Join(dir, "args")
 	script := "#!/bin/sh\n" +
 		"case \"$*\" in\n" +
-		"  *-bsfs*) echo dovi_rpu; echo filter_units; exit 0;;\n" +
+		"  *-bsfs*) printf 'dovi_rpu\\nfilter_units\\n'; exit 0;;\n" +
 		"  *'-f null'*) exit 0;;\n" +
 		"esac\n" +
 		"echo \"$*\" >> " + argLog + "\n" +
@@ -304,8 +261,8 @@ func TestExplicitStripModeTagsHVC1(t *testing.T) {
 			t.Fatalf("strip remux refused profile %d: %v", profile, err)
 		}
 		recorded := recordedRemuxArgs(t, session, argLog)
-		if !strings.Contains(recorded, DV7ToHDR10BitstreamFilter) || !strings.Contains(recorded, "-tag:v hvc1") {
-			t.Fatalf("explicit strip must map to the base-layer filter + hvc1 for profile %d: %s", profile, recorded)
+		if !strings.Contains(recorded, "dovi_rpu=strip=1,filter_units=remove_types=63") || !strings.Contains(recorded, "-tag:v hvc1") {
+			t.Fatalf("explicit strip must map to dovi_rpu + filter_units + hvc1 for profile %d: %s", profile, recorded)
 		}
 		if strings.Contains(recorded, "dvh1") || strings.Contains(recorded, "-strict unofficial") {
 			t.Fatalf("stripped output must not carry DV signaling for profile %d: %s", profile, recorded)

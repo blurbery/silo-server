@@ -3372,8 +3372,8 @@
         "outcome": "playable",
         "delivery": "server_remux_progressive",
         "decision_reason": "container_normalization",
-        "plan_id": "plan:17ef9326c1b17247d988feeb65bee4e5",
-        "plan_attempt_key": "v3:4398b7a1eba9029d",
+        "plan_id": "plan:b0fabdf793bdfddfe228437da393616f",
+        "plan_attempt_key": "v3:11afdf62d282fb34",
         "selected_tracks": {
           "audio": {
             "id": "file:42:audio:0",
@@ -3407,7 +3407,7 @@
           {
             "name": "server_dv7_to_hdr10",
             "executor": "server",
-            "recipe_version": "3",
+            "recipe_version": "2",
             "validated_claims": [
               "dolby_vision_metadata_removed",
               "hdr10_base_layer_preserved",
@@ -3585,7 +3585,6 @@
         "video_level": 153,
         "bit_depth": 10,
         "color_range": "tv",
-        "color_transfer": "smpte2084",
         "width": 3840,
         "height": 2160,
         "frame_rate": 23.976023976023978,

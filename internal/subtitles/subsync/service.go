@@ -146,9 +146,6 @@ func NewService(d Deps) *Service {
 	return s
 }
 
-// autoSyncOffValue is the stored setting value that turns automatic sync off.
-const autoSyncOffValue = "false"
-
 // AutoSyncEnabled reports whether new subtitles are synced automatically.
 // It is on unless the setting says otherwise.
 func (s *Service) AutoSyncEnabled(ctx context.Context) bool {
@@ -156,7 +153,7 @@ func (s *Service) AutoSyncEnabled(ctx context.Context) bool {
 		return true
 	}
 	value, err := s.settings.Get(ctx, SettingAutoSync)
-	return err != nil || value != autoSyncOffValue
+	return err != nil || value != "false"
 }
 
 // Request starts a sync of the subtitle, or returns the job already running.

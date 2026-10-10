@@ -14,49 +14,44 @@ import (
 func TestRecipeCardRoundTripOpts(t *testing.T) {
 	revision := tonemap.SourceRevision{MediaFileID: 77, FileSize: 100, FileModifiedUnixNano: 200, StreamSignature: "stream"}
 	opts := TranscodeOpts{
-		InputPath:                  "/media/movie.mkv",
-		OutputDir:                  "/tmp/silo-transcode/abc",
-		SessionID:                  "abc",
-		SourceVideoCodec:           "hevc",
-		SourceVideoProfile:         "Main 10",
-		SourceVideoBitDepth:        10,
-		SoftwareVideoDecode:        true,
-		ToneMapPolicy:              tonemap.PolicyHardwareThenSoftware,
-		ToneMapMode:                tonemap.ModeHardware,
-		ToneMapSourceKind:          tonemap.SourcePQ,
-		ToneMapFilter:              "tonemap_vaapi",
-		ToneMapRecipeVersion:       TransformationHDRToSDRToneMapRecipeVersionV3,
-		ToneMapPreflightRequired:   true,
-		ToneMapSourceRevision:      revision,
-		ToneMapDVConfigPresent:     true,
-		ToneMapDVBLCompatIDPresent: true,
-		ToneMapDVBLPresent:         true,
-		ToneMapDVRPUPresent:        true,
-		VideoBitstreamFilter:       DV7ToHDR10BitstreamFilter,
-		DropInitialLeadingPictures: true,
-		VideoSampleEntry:           VideoSampleEntryHEV1V3,
-		RemuxDVMode:                RemuxDVStripToHDR10V3,
-		SeekSeconds:                900,
-		StreamOriginSeconds:        896,
-		CopySeekAnchorResolved:     true,
-		TargetResolution:           "1080p",
-		TargetCodecVideo:           "copy",
-		TargetCodecAudio:           "aac",
-		SourceAudioChannels:        6,
-		TargetAudioChannels:        1,
-		TargetAudioBitrateKbps:     96,
-		SegmentDuration:            2,
-		StartSegmentNumber:         450,
-		HWAccel:                    "qsv",
-		HWDevice:                   "/dev/dri/renderD128",
-		SubtitleTrackIndex:         3,
-		SubtitleBurnIn:             true,
-		SubtitleCodec:              "hdmv_pgs_subtitle",
-		AudioTrackIndex:            1,
-		TargetBitrateKbps:          8000,
-		TotalDuration:              7200,
-		FastStart:                  true,
-		ThrottleSeconds:            180,
+		InputPath:                "/media/movie.mkv",
+		OutputDir:                "/tmp/silo-transcode/abc",
+		SessionID:                "abc",
+		SourceVideoCodec:         "hevc",
+		SourceVideoProfile:       "Main 10",
+		SourceVideoBitDepth:      10,
+		SoftwareVideoDecode:      true,
+		ToneMapPolicy:            tonemap.PolicyHardwareThenSoftware,
+		ToneMapMode:              tonemap.ModeHardware,
+		ToneMapSourceKind:        tonemap.SourcePQ,
+		ToneMapFilter:            "tonemap_vaapi",
+		ToneMapRecipeVersion:     TransformationHDRToSDRToneMapRecipeVersionV3,
+		ToneMapPreflightRequired: true,
+		ToneMapSourceRevision:    revision,
+		ToneMapDVConfigPresent:   true, ToneMapDVBLCompatIDPresent: true, ToneMapDVBLPresent: true, ToneMapDVRPUPresent: true,
+		VideoBitstreamFilter:   DV7ToHDR10BitstreamFilter,
+		VideoSampleEntry:       VideoSampleEntryDVH1,
+		SeekSeconds:            900,
+		StreamOriginSeconds:    896,
+		CopySeekAnchorResolved: true,
+		TargetResolution:       "1080p",
+		TargetCodecVideo:       "h264",
+		TargetCodecAudio:       "aac",
+		SourceAudioChannels:    6,
+		TargetAudioChannels:    1,
+		TargetAudioBitrateKbps: 96,
+		SegmentDuration:        2,
+		StartSegmentNumber:     450,
+		HWAccel:                "qsv",
+		HWDevice:               "/dev/dri/renderD128",
+		SubtitleTrackIndex:     3,
+		SubtitleBurnIn:         true,
+		SubtitleCodec:          "hdmv_pgs_subtitle",
+		AudioTrackIndex:        1,
+		TargetBitrateKbps:      8000,
+		TotalDuration:          7200,
+		FastStart:              true,
+		ThrottleSeconds:        180,
 	}
 
 	card := NewRecipeCard(42, "profile-1", 77, "", opts)
@@ -84,7 +79,7 @@ func TestRecipeCardRoundTripOpts(t *testing.T) {
 	if got.AudioTrackIndex != 1 || got.SubtitleTrackIndex != 3 {
 		t.Errorf("track indices wrong: audio=%d sub=%d", got.AudioTrackIndex, got.SubtitleTrackIndex)
 	}
-	if got.TargetCodecVideo != "copy" || got.TargetBitrateKbps != 8000 {
+	if got.TargetCodecVideo != "h264" || got.TargetBitrateKbps != 8000 {
 		t.Errorf("encode params wrong: %+v", got)
 	}
 	if got.SourceAudioChannels != 6 || got.TargetAudioChannels != 1 || got.TargetAudioBitrateKbps != 96 {
@@ -96,14 +91,8 @@ func TestRecipeCardRoundTripOpts(t *testing.T) {
 	if got.VideoBitstreamFilter != DV7ToHDR10BitstreamFilter {
 		t.Errorf("VideoBitstreamFilter = %q", got.VideoBitstreamFilter)
 	}
-	if !got.DropInitialLeadingPictures {
-		t.Error("DropInitialLeadingPictures lost in round trip")
-	}
-	if got.VideoSampleEntry != VideoSampleEntryHEV1V3 {
+	if got.VideoSampleEntry != VideoSampleEntryDVH1 {
 		t.Errorf("VideoSampleEntry = %q", got.VideoSampleEntry)
-	}
-	if got.RemuxDVMode != RemuxDVStripToHDR10V3 {
-		t.Errorf("RemuxDVMode = %q", got.RemuxDVMode)
 	}
 	if !got.SoftwareVideoDecode {
 		t.Error("SoftwareVideoDecode lost in round trip")
@@ -288,7 +277,7 @@ func TestReconstructSessionRestoresClientMetadata(t *testing.T) {
 	tm := NewTranscodeManager()
 	tm.Sessions = NewSessionManager(0, 0)
 
-	card := NewRecipeCard(42, "profile-1", 77, "", TranscodeOpts{SessionID: "sess-jf", InputPath: "/media/movie.mkv", SourceVideoCodec: "hevc", TargetCodecVideo: "copy", DropInitialLeadingPictures: true, HWAccel: "qsv", ToneMapMode: tonemap.ModeHardware})
+	card := NewRecipeCard(42, "profile-1", 77, "", TranscodeOpts{SessionID: "sess-jf", InputPath: "/media/movie.mkv", HWAccel: "qsv", ToneMapMode: tonemap.ModeHardware})
 	card.ClientName = "  Findroid  "
 	card.ClientVersion = "  0.15  "
 	card.ClientBuild = "  20260814\x00  "
@@ -304,9 +293,6 @@ func TestReconstructSessionRestoresClientMetadata(t *testing.T) {
 	}
 	if !session.TranscodeAudio {
 		t.Fatal("TranscodeAudio must be restored from the card (aac default re-encodes)")
-	}
-	if !session.DropInitialLeadingPictures {
-		t.Fatal("DropInitialLeadingPictures must survive session reconstruction")
 	}
 	if session.TranscodeHWAccel != "qsv" || session.ToneMapMode != tonemap.ModeHardware {
 		t.Fatalf("execution facts not restored: hw=%q tone_map=%q", session.TranscodeHWAccel, session.ToneMapMode)
@@ -363,46 +349,41 @@ func TestRecipeCardLegacyDecodeHasEmptyPlayMethod(t *testing.T) {
 func TestRecipeCardClaimsRoundTrip(t *testing.T) {
 	revision := tonemap.SourceRevision{MediaFileID: 77, FileSize: 100, FileModifiedUnixNano: 200, StreamSignature: "stream"}
 	card := NewRecipeCard(42, "profile-1", 77, "http://node:9000", TranscodeOpts{
-		InputPath:                  "/media/movie.mkv",
-		SessionID:                  "abc",
-		SourceVideoCodec:           "hevc",
-		SourceVideoProfile:         "Main 10",
-		SourceVideoBitDepth:        10,
-		SoftwareVideoDecode:        true,
-		ToneMapPolicy:              tonemap.PolicySoftwareOnly,
-		ToneMapMode:                tonemap.ModeSoftware,
-		ToneMapSourceKind:          tonemap.SourceHLG,
-		ToneMapFilter:              "tonemapx",
-		ToneMapRecipeVersion:       TransformationHDRToSDRToneMapRecipeVersionV3,
-		ToneMapPreflightRequired:   true,
-		ToneMapSourceRevision:      revision,
-		ToneMapDVConfigPresent:     true,
-		ToneMapDVBLCompatIDPresent: true,
-		ToneMapDVBLPresent:         true,
-		ToneMapDVRPUPresent:        true,
-		VideoBitstreamFilter:       DV7ToHDR10BitstreamFilter,
-		DropInitialLeadingPictures: true,
-		VideoSampleEntry:           VideoSampleEntryHEV1V3,
-		RemuxDVMode:                RemuxDVStripToHDR10V3,
-		SeekSeconds:                900,
-		StreamOriginSeconds:        896,
-		CopySeekAnchorResolved:     true,
-		TargetResolution:           "1080p",
-		TargetCodecVideo:           "copy",
-		TargetCodecAudio:           "aac",
-		SourceAudioChannels:        8,
-		TargetAudioChannels:        6,
-		TargetAudioBitrateKbps:     320,
-		SegmentDuration:            2,
-		StartSegmentNumber:         450,
-		SubtitleTrackIndex:         3,
-		SubtitleBurnIn:             true,
-		SubtitleCodec:              "hdmv_pgs_subtitle",
-		AudioTrackIndex:            1,
-		TargetBitrateKbps:          8000,
-		TotalDuration:              7200,
-		FastStart:                  true,
-		ThrottleSeconds:            180,
+		InputPath:                "/media/movie.mkv",
+		SessionID:                "abc",
+		SourceVideoCodec:         "hevc",
+		SourceVideoProfile:       "Main 10",
+		SourceVideoBitDepth:      10,
+		SoftwareVideoDecode:      true,
+		ToneMapPolicy:            tonemap.PolicySoftwareOnly,
+		ToneMapMode:              tonemap.ModeSoftware,
+		ToneMapSourceKind:        tonemap.SourceHLG,
+		ToneMapFilter:            "tonemapx",
+		ToneMapRecipeVersion:     TransformationHDRToSDRToneMapRecipeVersionV3,
+		ToneMapPreflightRequired: true,
+		ToneMapSourceRevision:    revision,
+		ToneMapDVConfigPresent:   true, ToneMapDVBLCompatIDPresent: true, ToneMapDVBLPresent: true, ToneMapDVRPUPresent: true,
+		VideoBitstreamFilter:   DV7ToHDR10BitstreamFilter,
+		VideoSampleEntry:       VideoSampleEntryDVH1,
+		SeekSeconds:            900,
+		StreamOriginSeconds:    896,
+		CopySeekAnchorResolved: true,
+		TargetResolution:       "1080p",
+		TargetCodecVideo:       "h264",
+		TargetCodecAudio:       "aac",
+		SourceAudioChannels:    8,
+		TargetAudioChannels:    6,
+		TargetAudioBitrateKbps: 320,
+		SegmentDuration:        2,
+		StartSegmentNumber:     450,
+		SubtitleTrackIndex:     3,
+		SubtitleBurnIn:         true,
+		SubtitleCodec:          "hdmv_pgs_subtitle",
+		AudioTrackIndex:        1,
+		TargetBitrateKbps:      8000,
+		ThrottleSeconds:        180,
+		TotalDuration:          7200,
+		FastStart:              true,
 	})
 	card.RoutingWorkload = "video_transcode"
 	card.RoutingExecution = "transcode"
@@ -428,9 +409,7 @@ func TestRecipeCardClaimsRoundTrip(t *testing.T) {
 		got.ToneMapRecipeVersion != card.ToneMapRecipeVersion || got.ToneMapPreflightRequired != card.ToneMapPreflightRequired || got.ToneMapSourceRevision != revision ||
 		got.ToneMapDVConfigPresent != card.ToneMapDVConfigPresent || got.ToneMapDVBLCompatIDPresent != card.ToneMapDVBLCompatIDPresent || got.ToneMapDVBLPresent != card.ToneMapDVBLPresent || got.ToneMapDVRPUPresent != card.ToneMapDVRPUPresent ||
 		got.VideoBitstreamFilter != card.VideoBitstreamFilter ||
-		got.DropInitialLeadingPictures != card.DropInitialLeadingPictures ||
 		got.VideoSampleEntry != card.VideoSampleEntry ||
-		got.RemuxDVMode != card.RemuxDVMode ||
 		got.SeekSeconds != card.SeekSeconds || got.StreamOriginSeconds != card.StreamOriginSeconds ||
 		got.CopySeekAnchorResolved != card.CopySeekAnchorResolved || got.TargetResolution != card.TargetResolution ||
 		got.TargetCodecVideo != card.TargetCodecVideo || got.TargetCodecAudio != card.TargetCodecAudio ||

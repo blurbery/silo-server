@@ -128,7 +128,7 @@ func registerDirectDownloads(reg *Registry) {
 		{http.MethodHead, directDownloadProxyPath, "headDirectDownloadProxy", handlers.Proxy, true},
 	} {
 		params := []*huma.Param{
-			{Name: playbackParamFileID, In: directParamQuery, Required: true, Schema: &huma.Schema{Type: huma.TypeString, Pattern: "^[1-9][0-9]*$"}},
+			{Name: "file_id", In: directParamQuery, Required: true, Schema: &huma.Schema{Type: huma.TypeString, Pattern: "^[1-9][0-9]*$"}},
 			{Name: directDownloadFormat, In: directParamQuery, Schema: &huma.Schema{Type: huma.TypeString, Enum: []any{"", directOriginalFormat}}},
 			{Name: directAccountToken, In: directParamQuery, Description: "Existing account bearer fallback for browser navigation without authorization headers. Does not grant profile or file authority, so on an account with a PIN-protected or access-restricted profile it needs X-Profile-Id like any other account credential; browsers use dl instead.", Schema: &huma.Schema{Type: huma.TypeString}},
 			{Name: directLinkToken, In: directParamQuery, Description: "Direct-download link token from POST /api/v2/direct-download/links, used in place of any other credential. It authorizes only the file_id it was minted for, as the profile that minted it, while its login session stays valid; it is refused with 401 once expired and 403 for another file. Any X-Profile-Id or X-Profile-Token header is ignored. Do not combine with token.", Schema: &huma.Schema{Type: huma.TypeString}},
@@ -186,11 +186,11 @@ func parseDirectDownloadQuery(r *http.Request) (string, *Problem) {
 	if err != nil {
 		return "", err
 	}
-	id, p := ID(values.Get(playbackParamFileID)).positive("query.file_id")
+	id, p := ID(values.Get("file_id")).positive("query.file_id")
 	if p != nil {
 		return "", p
 	}
-	if strconv.Itoa(id) != values.Get(playbackParamFileID) {
+	if strconv.Itoa(id) != values.Get("file_id") {
 		return "", validationProblem("query.file_id", "invalid", "Expected a canonical positive integer identifier.")
 	}
 	if format := values.Get(directDownloadFormat); format != "" && format != directOriginalFormat {
@@ -205,7 +205,7 @@ func urlParseDirectQuery(r *http.Request) (url.Values, *Problem) {
 		return nil, validationProblem("query.parameters", "invalid", "Invalid download query.")
 	}
 	for key, v := range values {
-		if key != playbackParamFileID && key != directDownloadFormat && key != directAccountToken && key != directLinkToken {
+		if key != "file_id" && key != directDownloadFormat && key != directAccountToken && key != directLinkToken {
 			return nil, validationProblem("query.parameters", "unknown", "Unknown download query parameter.")
 		}
 		if len(v) != 1 {

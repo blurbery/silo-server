@@ -13,10 +13,6 @@ import (
 	"github.com/Silo-Server/silo-server/internal/userstore"
 )
 
-const (
-	successStatus = "success"
-)
-
 // The progress domain: a profile's watch progress.
 
 // ProgressEntry is one item's watch position for the acting profile.
@@ -170,7 +166,7 @@ func (reg *Registry) syncProgress(ctx context.Context, in *ProgressSyncInput) (*
 	}
 	out := &ProgressSyncOutput{Body: ProgressSyncBatchResult{Items: make([]ProgressSyncResult, 0, len(results)), Summary: BulkSummary{Total: len(results)}}}
 	for i, r := range results {
-		item := ProgressSyncResult{BulkCorrelation: BulkCorrelation{Index: i, ClientRef: in.Body.Items[i].ClientRef}, MediaItemID: in.Body.Items[i].MediaItemID, Status: successStatus}
+		item := ProgressSyncResult{BulkCorrelation: BulkCorrelation{Index: i, ClientRef: in.Body.Items[i].ClientRef}, MediaItemID: in.Body.Items[i].MediaItemID, Status: "success"}
 		if r.Status == "ok" {
 			out.Body.Summary.Succeeded++
 		} else {

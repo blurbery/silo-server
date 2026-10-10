@@ -3,9 +3,8 @@ package apiv2
 import (
 	"context"
 	"encoding/json"
-	"testing"
-
 	"github.com/Silo-Server/silo-server/internal/api/handlers"
+	"testing"
 )
 
 type fakeAdminUnmatched struct{ calls int }

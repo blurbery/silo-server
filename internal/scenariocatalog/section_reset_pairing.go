@@ -30,9 +30,9 @@ func SectionResetAcceptance(catalogs []*Catalog) ([]*Catalog, error) {
 					return nil, fmt.Errorf("%s: four required scope/profile read-after steps missing", scenario.ID)
 				}
 				for i, step := range then {
-					principal := deviceRemovalProfilePrincipal
+					principal := "profile"
 					if i >= 2 {
-						principal = adminInvitationCreateMemberPrincipal
+						principal = "primary_profile"
 					}
 					library := i%2 == 1
 					if step.OperationID != "listProfileSectionOverrides" || step.Method != http.MethodGet || step.Request.Path != "/api/v2/profile/sections" || step.Principal == nil || step.Principal.Class != principal || len(step.Expect.Body) == 0 {

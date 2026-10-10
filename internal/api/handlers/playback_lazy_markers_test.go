@@ -522,43 +522,6 @@ func TestMaybeQueueLazyPlaybackMarkersOnlineModeWithProviderDoesNotRunLocalAnaly
 	}
 }
 
-func TestMaybeQueueLazyPlaybackMarkersOnlineRetriesPartialSkipMarkers(t *testing.T) {
-	start := 10.0
-	end := 60.0
-	file := lazyMarkerTestFile()
-	file.IntroStart = &start
-	file.IntroEnd = &end
-
-	calls := make(chan *models.MediaFile, 1)
-	registry := markers.NewRegistry(slog.Default())
-	if err := registry.Register(fakePlaybackMarkerProvider{}); err != nil {
-		t.Fatalf("register provider: %v", err)
-	}
-	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0), &fakePlaybackMarkerFileResolver{file: file})
-	handler.SettingsRepo = testPlaybackSettingsRepo{values: map[string]string{
-		markers.SettingLazyPlayback: "true",
-		markers.SettingMode:         "online",
-	}}
-	handler.IntroRepository = fakePlaybackIntroEligibility{eligible: true}
-	handler.MarkerRegistry = registry
-	handler.MarkerPopulation = playbackMarkerPopulationFunc(func(_ context.Context, file *models.MediaFile) (*models.MediaFile, bool, error) {
-		calls <- file
-		return file, false, nil
-	})
-	handler.MarkerLazyContext = context.Background()
-
-	handler.maybeQueueLazyPlaybackMarkers(context.Background(), &playback.Session{ID: "session-1"}, file)
-
-	select {
-	case got := <-calls:
-		if got.ID != file.ID {
-			t.Fatalf("population file ID = %d, want %d", got.ID, file.ID)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("partial markers did not trigger online lookup")
-	}
-}
-
 func TestMaybeQueueLazyPlaybackMarkersAnalyzerSuccessWithoutMarkerDoesNotEmitUpdate(t *testing.T) {
 	analyzer := &fakePlaybackIntroAnalyzer{started: make(chan struct{}, 1)}
 	file := lazyMarkerTestFile()
@@ -611,47 +574,6 @@ func lazyMarkerTestFile() *models.MediaFile {
 		EpisodeID:     "episode-1",
 		MediaFolderID: 7,
 		Duration:      1800,
-	}
-}
-
-func TestHasCompletePlaybackSkipMarkers(t *testing.T) {
-	start := 10.0
-	introEnd := 60.0
-	creditsStart := 1700.0
-	creditsEnd := 1800.0
-
-	tests := []struct {
-		name string
-		file *models.MediaFile
-		want bool
-	}{
-		{name: "nil file", file: nil, want: false},
-		{
-			name: "intro only remains eligible",
-			file: &models.MediaFile{IntroStart: &start, IntroEnd: &introEnd},
-			want: false,
-		},
-		{
-			name: "credits only remains eligible",
-			file: &models.MediaFile{CreditsStart: &creditsStart, CreditsEnd: &creditsEnd},
-			want: false,
-		},
-		{
-			name: "both skip markers stop lookup",
-			file: &models.MediaFile{
-				IntroStart: &start, IntroEnd: &introEnd,
-				CreditsStart: &creditsStart, CreditsEnd: &creditsEnd,
-			},
-			want: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := hasCompletePlaybackSkipMarkers(tt.file); got != tt.want {
-				t.Fatalf("hasCompletePlaybackSkipMarkers() = %v, want %v", got, tt.want)
-			}
-		})
 	}
 }
 

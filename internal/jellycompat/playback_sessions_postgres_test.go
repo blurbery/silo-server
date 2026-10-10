@@ -32,7 +32,6 @@ func TestNegotiatedSessionAdvisoryLockKeyIsPinnedAndSeparatesRepresentativeInput
 		}
 	}
 
-	invalidUTF8 := string([]byte{0xff, 0xfe, 0xfd})
 	testCases := []struct {
 		name           string
 		compatToken    string
@@ -46,7 +45,6 @@ func TestNegotiatedSessionAdvisoryLockKeyIsPinnedAndSeparatesRepresentativeInput
 		{name: "delimiter in device", compatToken: "a", clientDeviceID: "b\x00c", routeItemID: "d"},
 		{name: "reordered components", compatToken: "device", clientDeviceID: "token", routeItemID: "route"},
 		{name: "empty components", compatToken: "", clientDeviceID: "", routeItemID: ""},
-		{name: "invalid UTF-8 bytes", compatToken: invalidUTF8, clientDeviceID: "device", routeItemID: "route"},
 		{
 			name:           "long components",
 			compatToken:    strings.Repeat("t", 4096),
@@ -106,7 +104,7 @@ func TestAcquireNegotiatedSessionAdvisoryLockBridgesLegacyThenBigint(t *testing.
 	recorder := &negotiatedSessionAdvisoryLockRecorder{}
 	err := acquireNegotiatedSessionAdvisoryLock(
 		context.Background(), recorder,
-		"token\x00with-delimiter", string([]byte{'d', 0xff, 'v'}), "route\x00item",
+		"token\x00with-delimiter", "device", "route\x00item",
 	)
 	if err != nil {
 		t.Fatalf("acquire advisory lock: %v", err)
@@ -175,13 +173,13 @@ func BenchmarkNegotiatedSessionAdvisoryLockKey(b *testing.B) {
 		{
 			name:           "typical",
 			compatToken:    strings.Repeat("a", 64),
-			clientDeviceID: "android-tv-living-room",
+			clientDeviceID: "android-tv-device",
 			routeItemID:    "01J8Y2KJ0B9AZ7Q48H1S6X3CME",
 		},
 		{
-			name:           "embedded-NUL-and-invalid-UTF8",
+			name:           "embedded-NUL",
 			compatToken:    "token\x00with\x00separators",
-			clientDeviceID: string([]byte{'d', 0xff, 'v'}),
+			clientDeviceID: "device",
 			routeItemID:    "route\x00item",
 		},
 		{

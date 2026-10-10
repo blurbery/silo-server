@@ -108,10 +108,7 @@ func TestS3DialsOverlapAndLateCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, _ := c.Do(req)
-	if resp != nil {
-		_ = resp.Body.Close()
-	}
+	_, _ = c.Do(req)
 	// Background dial callbacks can arrive after Do returns, even when no
 	// GotConn follows (cancellation or a subsequent TLS handshake failure).
 	trace.ConnectDone("tcp", "late", nil)

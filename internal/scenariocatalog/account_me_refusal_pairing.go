@@ -6,8 +6,6 @@ import (
 	"reflect"
 )
 
-const accountMeV2Path = "/api/v2/account/me"
-
 // RequiredAccountMeRefusalScenarios is the complete reserved frozen cohort.
 var RequiredAccountMeRefusalScenarios = []string{"me.no_token", "me.bad_token"}
 
@@ -31,10 +29,10 @@ func AccountMeRefusalAcceptance(catalogs []*Catalog) ([]*Catalog, error) {
 					original.Headers = map[string]*string{accountMeAuthorizationHeader: new("Bearer not-a-jwt")}
 				}
 				translated := original
-				translated.Path = accountMeV2Path
+				translated.Path = "/api/v2/account/me"
 				if !reflect.DeepEqual(s.Request, original) || !reflect.DeepEqual(pair.Request, translated) ||
 					!reflect.DeepEqual(s.Principal, Principal{Class: accountMePublicPrincipal}) || pair.Principal != nil ||
-					pair.Method != http.MethodGet || pair.OperationID != currentAccountOperation ||
+					pair.Method != http.MethodGet || pair.OperationID != "getCurrentUser" ||
 					len(s.Then) != 0 || len(pair.Then) != 0 || len(s.Requires) != 0 || len(s.Settings) != 0 ||
 					s.Expect.Status != http.StatusUnauthorized || pair.Expect.Status != http.StatusUnauthorized {
 					return nil, fmt.Errorf("%s: unsupported account refusal acceptance exchange", s.ID)

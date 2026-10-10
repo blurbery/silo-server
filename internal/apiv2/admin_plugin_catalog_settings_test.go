@@ -2,10 +2,9 @@ package apiv2
 
 import (
 	"context"
+	"github.com/Silo-Server/silo-server/internal/plugins"
 	"net/http"
 	"testing"
-
-	"github.com/Silo-Server/silo-server/internal/plugins"
 )
 
 type fakePluginCatalogSettings struct {

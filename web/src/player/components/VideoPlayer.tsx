@@ -1930,10 +1930,6 @@ export function VideoPlayer({
     let autoplayAttempts = 0;
     let autoplayRetryTimer: ReturnType<typeof setTimeout> | null = null;
     let nativeHLSMetadataHandler: (() => void) | null = null;
-    const skipFirefoxProgressiveInitialSeek =
-      isFirefoxBrowser &&
-      plan.delivery === "server_remux_progressive" &&
-      plan.timeline.stream_origin_seconds > 0;
 
     mediaRecoveryAttemptsRef.current = 0;
     setError(null);
@@ -2192,16 +2188,13 @@ export function VideoPlayer({
           }
         }
       } else {
-        // A resumed copy remux is already cut by the server at the preceding
-        // keyframe and its timeline offset maps player time back to media time.
-        // Firefox rejects a second non-zero seek inside this live, chunked fMP4
-        // because the response is not byte-range seekable. Attach and play it
-        // exactly like the known-good zero-start path; at worst playback begins
-        // in the short keyframe pre-roll immediately before the saved position.
+        // Direct play — set video src directly. Starting playback goes through
+        // the same readiness gate as HLS rather than calling play() against a
+        // src that has not loaded yet: a play issued at HAVE_NOTHING is racing
+        // the load algorithm that is about to seek to the resume position, and
+        // the spec has that algorithm reject it.
         video.src = effectiveStreamUrl;
-        if (!skipFirefoxProgressiveInitialSeek) {
-          video.currentTime = effectiveInitialPosition;
-        }
+        video.currentTime = effectiveInitialPosition;
         attemptAutoplayWhenReady();
       }
     }
@@ -2228,11 +2221,8 @@ export function VideoPlayer({
   }, [
     effectiveStreamUrl,
     effectiveInitialPosition,
-    isFirefoxBrowser,
     isHlsStream,
     isPlayerReady,
-    plan.delivery,
-    plan.timeline.stream_origin_seconds,
     planRevision,
     plannedBitrateKbps,
     plannedDynamicRange,

@@ -126,6 +126,10 @@ vi.mock("@/components/CastCarousel", () => ({
   default: () => <div />,
 }));
 
+vi.mock("@/components/CrewList", () => ({
+  default: () => <div />,
+}));
+
 vi.mock("@/components/DownloadVersionPicker", () => ({
   default: () => <div />,
 }));

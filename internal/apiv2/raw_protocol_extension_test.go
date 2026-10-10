@@ -105,7 +105,7 @@ func TestRawProtocolWebSocketRealUpgradeAndAuthorization(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			defer func() { _ = conn.Close() }()
+			defer conn.Close()
 			defer close(completed)
 			_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 			kind, payload, err := conn.ReadMessage()
@@ -140,13 +140,13 @@ func TestRawProtocolWebSocketRealUpgradeAndAuthorization(t *testing.T) {
 		headers := http.Header{"Authorization": {"Bearer " + tc.token}, "X-Profile-Id": {tc.profile}}
 		conn, response, err := dialer.Dial(url, headers)
 		if conn != nil {
-			_ = conn.Close()
+			conn.Close()
 			t.Fatal("unauthorized upgrade succeeded")
 		}
 		if err == nil || response == nil {
 			t.Fatal("expected handshake rejection", err)
 		}
-		_ = response.Body.Close()
+		response.Body.Close()
 		if response.StatusCode != tc.status || calls.Load() != 0 {
 			t.Fatal(response.StatusCode, calls.Load())
 		}
@@ -155,8 +155,7 @@ func TestRawProtocolWebSocketRealUpgradeAndAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = conn.Close() }()
-	defer func() { _ = response.Body.Close() }()
+	defer conn.Close()
 	if response.StatusCode != 101 || response.Header.Get("Upgrade") != "websocket" || response.Header.Get("Sec-WebSocket-Accept") == "" {
 		t.Fatal(response.StatusCode, response.Header)
 	}

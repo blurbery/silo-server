@@ -1,12 +1,11 @@
 package handlers
 
 import (
+	"github.com/jackc/pgx/v5/pgxpool"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestAdminUnmatchedSQLPageAndBridge(t *testing.T) {

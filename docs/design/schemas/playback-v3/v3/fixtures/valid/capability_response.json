@@ -49,19 +49,11 @@
     {
       "name": "server_dv7_to_hdr10",
       "executor": "server",
-      "recipe_version": "3",
+      "recipe_version": "2",
       "validated_claims": [
         "dolby_vision_metadata_removed",
         "hdr10_base_layer_preserved",
         "enhancement_layer_discarded"
-      ]
-    },
-    {
-      "name": "server_dv8_to_compatible_base",
-      "executor": "server",
-      "recipe_version": "2",
-      "validated_claims": [
-        "dolby_vision_metadata_removed"
       ]
     },
     {

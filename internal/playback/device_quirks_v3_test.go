@@ -80,61 +80,6 @@ func TestAFTKRTEAC3HLSCorrectionTranscodesAudioOnly(t *testing.T) {
 	}
 }
 
-func TestAndroidMobileBluetoothEAC3FallbackCopiesVideoAndAdaptsAudio(t *testing.T) {
-	file := &models.MediaFile{
-		ID: 42, FilePath: "/media/eac3.mkv", Container: "mkv", CodecVideo: "h264", CodecAudio: "eac3",
-		Resolution: "1080p", Bitrate: 5918, AudioChannels: 6,
-		VideoTracks: []models.VideoTrack{{Codec: "h264", Profile: "High", Level: 40, Width: 1920, Height: 1080, FrameRate: "24000/1001", Bitrate: 5918, BitDepth: 8, VideoRange: "SDR", VideoRangeType: "SDR"}},
-		AudioTracks: []models.AudioTrack{{Codec: "eac3", Channels: 6, Layout: "5.1(side)"}},
-	}
-	req := validStartRequestV3()
-	req.ClientFeatures = append(req.ClientFeatures, FeatureDeviceQuirksV3)
-	req.ClientPlaybackContext.FormFactor = "mobile"
-	req.ClientPlaybackContext.Device = DeviceContextV3{Platform: "android", Manufacturer: "Samsung", Model: "SM-S938B"}
-	req.ClientPlaybackContext.Output = OutputContextV3{
-		SinkType: "bluetooth",
-		AudioPassthrough: &AudioPassthroughV3{
-			MaxChannels:       10,
-			PassthroughCodecs: []string{},
-		},
-		OutputContextID: "3",
-	}
-	req.Capabilities.Containers = []string{"mkv"}
-	req.Capabilities.CodecsAudio = []string{"aac", "eac3"}
-	req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "h264", Profiles: []string{"high"}, Levels: []int{40}, BitDepths: []int{8}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 120_000, Hardware: true}}
-	req.ClientPlaybackContext.Deliveries[DeliveryClassProgressiveV3] = DeliveryCapabilityV3{}
-
-	input := PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true}, Registry: testTransformationRegistryV3()}
-	direct := PlanPlaybackV3(input)
-	if direct.Plan == nil || direct.Plan.Delivery != DeliveryOriginalHTTPV3 {
-		t.Fatalf("direct = %s", ExplainPlannerResultV3(direct))
-	}
-	input.AttemptedKeys = []string{direct.Plan.PlanAttemptKey}
-	fallback := PlanPlaybackV3(input)
-	if fallback.Plan == nil || fallback.Plan.Delivery != DeliveryRemuxHLSV3 || fallback.PlayMethod != PlayRemux || fallback.TargetVideoCodec != "copy" || !fallback.TranscodeAudio || fallback.TargetAudioCodec != "aac" {
-		t.Fatalf("fallback = %s", ExplainPlannerResultV3(fallback))
-	}
-	if fallback.Plan.EffectiveRecipe.VideoCodec != "h264" || fallback.Plan.EffectiveRecipe.AudioCodec != "aac" {
-		t.Fatalf("fallback recipe = %#v", fallback.Plan.EffectiveRecipe)
-	}
-	if len(fallback.Plan.Transformations) != 1 || fallback.Plan.Transformations[0].Name != TransformationAudioToAACV3 {
-		t.Fatalf("fallback transformations = %#v", fallback.Plan.Transformations)
-	}
-	if len(fallback.Plan.AppliedQuirks) != 1 || fallback.Plan.AppliedQuirks[0].ID != QuirkAndroidMobileEAC3BluetoothV3 {
-		t.Fatalf("fallback quirks = %#v", fallback.Plan.AppliedQuirks)
-	}
-
-	req.ClientPlaybackContext.Output.SinkType = "Speaker"
-	if quirk, ok := hlsEAC3AudioCorrectionV3(SourceDescriptorFromFileV3(file, 0), req); ok || quirk != nil {
-		t.Fatalf("speaker route received Bluetooth correction: %#v", quirk)
-	}
-	req.ClientPlaybackContext.Output.SinkType = "bluetooth"
-	req.ClientPlaybackContext.FormFactor = "tv"
-	if quirk, ok := hlsEAC3AudioCorrectionV3(SourceDescriptorFromFileV3(file, 0), req); ok || quirk != nil {
-		t.Fatalf("Android TV route received mobile correction: %#v", quirk)
-	}
-}
-
 func TestFireTVDV8HDR10PlusCorrectionRequiresAdvertisedRuntime(t *testing.T) {
 	file := detailedFixtureFileV3()
 	file.VideoTracks[0].DVProfile = 8
@@ -160,44 +105,6 @@ func TestFireTVDV8HDR10PlusCorrectionRequiresAdvertisedRuntime(t *testing.T) {
 	withoutRuntime := PlanPlaybackV3(PlannerInputV3{Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0, Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: false}, Registry: testTransformationRegistryV3()})
 	if withoutRuntime.Plan == nil || len(withoutRuntime.Plan.AppliedQuirks) != 0 || len(withoutRuntime.Plan.RuntimeCorrections) != 0 {
 		t.Fatalf("unadvertised correction applied: %#v", withoutRuntime.Plan)
-	}
-}
-
-func TestFirefoxHEVCOpenGOPQuirkIsExact(t *testing.T) {
-	source := SourceDescriptorV3{VideoCodec: "hevc"}
-	request := validStartRequestV3()
-	request.ClientPlaybackContext.Device = DeviceContextV3{
-		Platform: "web",
-		PlatformDetails: map[string]string{
-			"user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0",
-		},
-	}
-
-	quirk, ok := firefoxHEVCOpenGOPQuirkV3(source, request)
-	if !ok || quirk == nil || quirk.ID != QuirkFirefoxHEVCOpenGOPV3 {
-		t.Fatalf("Firefox HEVC quirk = %#v, ok=%v", quirk, ok)
-	}
-
-	for _, test := range []struct {
-		name      string
-		platform  string
-		userAgent string
-		codec     string
-	}{
-		{name: "Safari", platform: "web", userAgent: "Mozilla/5.0 Version/19.0 Safari/605.1.15", codec: "hevc"},
-		{name: "Chromium", platform: "web", userAgent: "Mozilla/5.0 Chrome/140.0.0.0 Safari/537.36", codec: "hevc"},
-		{name: "SeaMonkey", platform: "web", userAgent: "Mozilla/5.0 Gecko/20100101 Firefox/128.0 SeaMonkey/2.53", codec: "hevc"},
-		{name: "Firefox H264", platform: "web", userAgent: "Mozilla/5.0 Firefox/153.0", codec: "h264"},
-		{name: "non-web", platform: "android", userAgent: "Mozilla/5.0 Firefox/153.0", codec: "hevc"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			candidate := request
-			candidate.ClientPlaybackContext.Device.Platform = test.platform
-			candidate.ClientPlaybackContext.Device.PlatformDetails = map[string]string{"user_agent": test.userAgent}
-			if quirk, ok := firefoxHEVCOpenGOPQuirkV3(SourceDescriptorV3{VideoCodec: test.codec}, candidate); ok || quirk != nil {
-				t.Fatalf("unexpected quirk = %#v, ok=%v", quirk, ok)
-			}
-		})
 	}
 }
 
@@ -239,84 +146,6 @@ func TestFirefoxMatroskaAACTimingQuirkIsExact(t *testing.T) {
 	}
 }
 
-func TestWindowsWebAudioNormalizationQuirkIsExact(t *testing.T) {
-	request := validStartRequestV3()
-	request.ClientPlaybackContext.Device = DeviceContextV3{
-		Platform: "web",
-		PlatformDetails: map[string]string{
-			"user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0",
-		},
-	}
-	quirk, ok := windowsWebAudioNormalizationQuirkV3(SourceDescriptorV3{AudioCodec: "eac3"}, request)
-	if !ok || quirk == nil || quirk.ID != QuirkWindowsWebAudioNormalizeV3 || quirk.Action != "audio_only_transcode" {
-		t.Fatalf("Windows web audio normalization quirk = %#v, ok=%v", quirk, ok)
-	}
-	request.ClientPlaybackContext.Device.PlatformDetails["user_agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0"
-	quirk, ok = windowsWebAudioNormalizationQuirkV3(SourceDescriptorV3{AudioCodec: "aac"}, request)
-	if !ok || quirk == nil || quirk.ID != QuirkWindowsWebAudioNormalizeV3 {
-		t.Fatalf("Windows Firefox AAC quirk = %#v, ok=%v", quirk, ok)
-	}
-	request.ClientPlaybackContext.Device.PlatformDetails["user_agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Edg/151.0.0.0"
-
-	for _, test := range []struct {
-		name      string
-		platform  string
-		userAgent string
-		codec     string
-	}{
-		{name: "Windows AAC", platform: "web", userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Edg/151.0.0.0", codec: "aac"},
-		{name: "Windows no codec", platform: "web", userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Edg/151.0.0.0"},
-		{name: "macOS Edge", platform: "web", userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Edg/151.0.0.0", codec: "eac3"},
-		{name: "Android app", platform: "android", userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", codec: "eac3"},
-		{name: "missing UA", platform: "web", codec: "eac3"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			candidate := request
-			candidate.ClientPlaybackContext.Device.Platform = test.platform
-			candidate.ClientPlaybackContext.Device.PlatformDetails = map[string]string{"user_agent": test.userAgent}
-			if got, eligible := windowsWebAudioNormalizationQuirkV3(SourceDescriptorV3{AudioCodec: test.codec}, candidate); eligible || got != nil {
-				t.Fatalf("unexpected quirk = %#v, eligible=%v", got, eligible)
-			}
-		})
-	}
-}
-
-func TestAndroidFirefoxWebAudioNormalizationQuirkIsExact(t *testing.T) {
-	request := validStartRequestV3()
-	request.ClientPlaybackContext.Device = DeviceContextV3{
-		Platform: "web",
-		PlatformDetails: map[string]string{
-			"user_agent": "Mozilla/5.0 (Android 16; Mobile; rv:154.0) Gecko/154.0 Firefox/154.0",
-		},
-	}
-	quirk, ok := androidFirefoxWebAudioNormalizationQuirkV3(SourceDescriptorV3{AudioCodec: "eac3"}, request)
-	if !ok || quirk == nil || quirk.ID != QuirkAndroidFirefoxWebAudioNormalizeV3 || quirk.Action != "audio_only_transcode" {
-		t.Fatalf("Android Firefox web audio normalization quirk = %#v, ok=%v", quirk, ok)
-	}
-
-	for _, test := range []struct {
-		name      string
-		platform  string
-		userAgent string
-		codec     string
-	}{
-		{name: "native AAC", platform: "web", userAgent: "Mozilla/5.0 (Android 16; Mobile; rv:154.0) Gecko/154.0 Firefox/154.0", codec: "aac"},
-		{name: "Android Chrome", platform: "web", userAgent: "Mozilla/5.0 (Linux; Android 16; Pixel 10) AppleWebKit/537.36 Chrome/151.0.0.0 Mobile Safari/537.36", codec: "eac3"},
-		{name: "desktop Firefox", platform: "web", userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:154.0) Gecko/20100101 Firefox/154.0", codec: "eac3"},
-		{name: "native Android app", platform: "android", userAgent: "Mozilla/5.0 (Android 16; Mobile; rv:154.0) Gecko/154.0 Firefox/154.0", codec: "eac3"},
-		{name: "missing codec", platform: "web", userAgent: "Mozilla/5.0 (Android 16; Mobile; rv:154.0) Gecko/154.0 Firefox/154.0"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			candidate := request
-			candidate.ClientPlaybackContext.Device.Platform = test.platform
-			candidate.ClientPlaybackContext.Device.PlatformDetails = map[string]string{"user_agent": test.userAgent}
-			if got, eligible := androidFirefoxWebAudioNormalizationQuirkV3(SourceDescriptorV3{AudioCodec: test.codec}, candidate); eligible || got != nil {
-				t.Fatalf("unexpected quirk = %#v, eligible=%v", got, eligible)
-			}
-		})
-	}
-}
-
 func TestPlanAttemptKeyV3DeviceQuirkIsStable(t *testing.T) {
 	width, height, bitrate := 3840, 2160, 60_000
 	plan := PlanV3{
@@ -327,7 +156,7 @@ func TestPlanAttemptKeyV3DeviceQuirkIsStable(t *testing.T) {
 		AppliedQuirks:      []AppliedQuirkV3{{ID: QuirkFireTVDV8HDR10PlusV3, RegistryRevision: DeviceQuirkRegistryRevisionV3, Action: "client_runtime_correction"}},
 		RuntimeCorrections: []string{ClientDV8HDR10PlusSanitizerV3},
 	}
-	if got := PlanAttemptKeyV3(plan, "9", nil); got != "v3:392b54d763d3fe72" {
+	if got := PlanAttemptKeyV3(plan, "9", nil); got != "v3:32a3a37d71bc4f43" {
 		t.Fatalf("key = %q", got)
 	}
 }

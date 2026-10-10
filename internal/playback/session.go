@@ -41,7 +41,6 @@ type Session struct {
 	// RemuxResumeLeadingPictureDrop freezes the planner's best-effort request
 	// to drop open-GOP leading pictures from a seeked progressive remux.
 	RemuxResumeLeadingPictureDrop bool
-	DropInitialLeadingPictures    bool
 	ClientIP                      string // resolved client IP for the playback session
 	StreamLocation                string // local/remote policy classification fixed at playback negotiation
 	ClientName                    string // reported playback client name, when available
@@ -131,7 +130,6 @@ type SessionStreamState struct {
 	TranscodeAudio                bool
 	RemuxDVMode                   RemuxDVMode
 	RemuxResumeLeadingPictureDrop bool
-	DropInitialLeadingPictures    bool
 	ClientIP                      string
 	ClientName                    string
 	ClientVersion                 string
@@ -610,7 +608,7 @@ func (m *SessionManager) StartSessionWithFilesContext(
 			// genuine concurrency-limit denial in the logs.
 			slog.WarnContext(ctx, "playback admission decider error; denying session", "component", "playback",
 				"user_id", userID, "method", method, "error", err)
-			return nil, fmt.Errorf("%w: %w", ErrPlaybackAdmissionUnavailable, err)
+			return nil, admissionDenyError("")
 		}
 		if !decision.Allowed {
 			return nil, admissionDenyError(decision.ReasonCode)
@@ -936,7 +934,7 @@ func (m *SessionManager) CheckReplacementAllowed(ctx context.Context, sessionID 
 			// genuine concurrency-limit denial in the logs.
 			slog.WarnContext(ctx, "playback replacement admission decider error; denying replacement", "component", "playback",
 				"user_id", userID, "session", sessionID, "method", method, "error", err)
-			return fmt.Errorf("%w: %w", ErrPlaybackAdmissionUnavailable, err)
+			return ErrPlaybackNotAllowed
 		}
 		if !decision.Allowed {
 			return admissionDenyError(decision.ReasonCode)
@@ -951,7 +949,7 @@ func (m *SessionManager) CheckReplacementAllowed(ctx context.Context, sessionID 
 		}
 		m.mu.Unlock()
 	}
-	return ErrPlaybackAdmissionUnavailable
+	return ErrPlaybackNotAllowed
 }
 
 // CancelReplacementReservation releases a protocol-v3 capacity reservation
@@ -1089,15 +1087,9 @@ func applySessionStreamStateLocked(s *Session, state SessionStreamState) {
 		// later remux request fails the profile check. Legacy partial updates
 		// never carry a mode and must not clobber one.
 		s.RemuxDVMode = state.RemuxDVMode
-		s.DropInitialLeadingPictures = state.DropInitialLeadingPictures
 		s.RemuxResumeLeadingPictureDrop = state.RemuxResumeLeadingPictureDrop
-	} else {
-		if state.RemuxDVMode != "" {
-			s.RemuxDVMode = state.RemuxDVMode
-		}
-		if state.DropInitialLeadingPictures {
-			s.DropInitialLeadingPictures = true
-		}
+	} else if state.RemuxDVMode != "" {
+		s.RemuxDVMode = state.RemuxDVMode
 	}
 	s.ClientIP = state.ClientIP
 	if value := normalizeClientMetadataValue(state.ClientName, 128); value != "" {
@@ -1150,7 +1142,6 @@ func snapshotSessionStreamStateLocked(s *Session) SessionStreamState {
 		TranscodeAudio:                s.TranscodeAudio,
 		RemuxDVMode:                   s.RemuxDVMode,
 		RemuxResumeLeadingPictureDrop: s.RemuxResumeLeadingPictureDrop,
-		DropInitialLeadingPictures:    s.DropInitialLeadingPictures,
 		ClientIP:                      s.ClientIP,
 		ClientName:                    s.ClientName,
 		ClientVersion:                 s.ClientVersion,
@@ -1194,7 +1185,6 @@ func restoreSessionStreamStateLocked(s *Session, state SessionStreamState) {
 	s.TranscodeAudio = state.TranscodeAudio
 	s.RemuxDVMode = state.RemuxDVMode
 	s.RemuxResumeLeadingPictureDrop = state.RemuxResumeLeadingPictureDrop
-	s.DropInitialLeadingPictures = state.DropInitialLeadingPictures
 	s.ClientIP = state.ClientIP
 	s.ClientName = state.ClientName
 	s.ClientVersion = state.ClientVersion

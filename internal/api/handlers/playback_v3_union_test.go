@@ -137,7 +137,7 @@ func TestHLSPlanningRegistryV3UnionsPooledNodeCapabilities(t *testing.T) {
 	presetLocalRegistryV3(handler, playback.NewTransformationRegistryV3([]playback.TransformationSpecV3{
 		{Name: "video_to_h264", RecipeVersion: "2"},
 		{Name: "audio_to_aac", RecipeVersion: playback.TransformationAudioToAACRecipeVersionV3},
-		{Name: "server_dv7_to_hdr10", RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3},
+		{Name: "server_dv7_to_hdr10", RecipeVersion: "1"},
 	}))
 	handler.NodePlanner = enumeratingNodePlannerV3{urls: []string{remote.URL}}
 
@@ -1946,22 +1946,16 @@ func TestPlanRequiresServerTransformationsV3(t *testing.T) {
 	}
 }
 
-// Fork: only the current server_dv7_to_hdr10 recipe gets the filter chain. A
-// plan frozen at an older recipe still freezes the HDR10 strip mode, and
-// StartTranscode refuses a strip mode without the validated chain
-// (TestStartTranscodeRefusesDVStripWithoutTheValidatedChain), so the plan fails
-// instead of copying Dolby Vision without any strip.
-func TestVideoBitstreamFilterForPlanV3OnlyUsesTheCurrentRecipe(t *testing.T) {
-	current := &playback.PlanV3{Transformations: []playback.TransformationV3{{Name: playback.TransformationServerDV7HDR10V3, Executor: playback.ExecutorServerV3, RecipeVersion: playback.TransformationServerDV7HDR10RecipeVersionV3}}}
-	if got := videoBitstreamFilterForPlanV3(current); got != playback.DV7ToHDR10BitstreamFilter {
-		t.Fatalf("current recipe filter = %q, want %q", got, playback.DV7ToHDR10BitstreamFilter)
-	}
-	stale := &playback.PlanV3{Transformations: []playback.TransformationV3{{Name: playback.TransformationServerDV7HDR10V3, Executor: playback.ExecutorServerV3, RecipeVersion: "1"}}}
-	if got := videoBitstreamFilterForPlanV3(stale); got != "" {
-		t.Fatalf("stale recipe filter = %q, want none", got)
-	}
-	if got := remuxDVModeForPlanV3(stale); got != playback.RemuxDVStripToHDR10V3 {
-		t.Fatalf("stale recipe DV mode = %q, want %q so the transcode refuses it", got, playback.RemuxDVStripToHDR10V3)
+// A plan frozen at an older server_dv7_to_hdr10 recipe still asks for the
+// current filter chain. An executor still on that recipe rejects the chain,
+// and a current one refuses the old recipe version, so the plan fails instead
+// of copying Dolby Vision without any strip.
+func TestVideoBitstreamFilterForPlanV3UsesTheCurrentChainForEveryRecipe(t *testing.T) {
+	for _, version := range []string{"1", playback.TransformationServerDV7HDR10RecipeVersionV3} {
+		plan := &playback.PlanV3{Transformations: []playback.TransformationV3{{Name: playback.TransformationServerDV7HDR10V3, Executor: playback.ExecutorServerV3, RecipeVersion: version}}}
+		if got := videoBitstreamFilterForPlanV3(plan); got != playback.DV7ToHDR10BitstreamFilter {
+			t.Fatalf("recipe %s filter = %q, want %q", version, got, playback.DV7ToHDR10BitstreamFilter)
+		}
 	}
 	clientSide := &playback.PlanV3{Transformations: []playback.TransformationV3{{Name: playback.TransformationServerDV7HDR10V3, Executor: playback.ExecutorClientV3, RecipeVersion: "1"}}}
 	if got := videoBitstreamFilterForPlanV3(clientSide); got != "" {

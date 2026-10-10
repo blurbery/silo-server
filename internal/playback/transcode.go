@@ -47,20 +47,8 @@ type TranscodeOpts struct {
 	SourceVideoCodec     string
 	SourceVideoProfile   string
 	SourceVideoBitDepth  int
-	VideoBitstreamFilter string // validated copy-mode BSF, e.g. DV7ToHDR10BitstreamFilter
-	// DropInitialLeadingPictures enables the Firefox HEVC open-GOP resume
-	// normalization. It is typed so callers cannot inject an arbitrary FFmpeg
-	// bitstream-filter expression through a signed reconstruction recipe.
-	DropInitialLeadingPictures bool
-	// VideoSampleEntry is the exact HEVC MP4/fMP4 sample entry selected by the
-	// protocol-v3 plan (hvc1 or dvh1). It is carried independently from
-	// the Dolby transform so native Apple HLS packaging cannot leak into a
-	// MediaSource route after reconstruction or failover.
-	VideoSampleEntry string
-	// RemuxDVMode freezes the Dolby Vision treatment selected by protocol v3.
-	// VideoSampleEntry separately freezes the container label the client probe
-	// validated.
-	RemuxDVMode RemuxDVMode
+	VideoBitstreamFilter string // validated copy-mode BSF: DV7ToHDR10BitstreamFilter
+	VideoSampleEntry     string // allowlisted copy-HLS sample entry: dvh1 or hvc1
 	// CopyVideoMPEGTS packages copied video in MPEG-TS instead of fMP4. It is
 	// durable because the segment extension and bytes must survive restarts.
 	CopyVideoMPEGTS bool
@@ -164,16 +152,12 @@ type TranscodeOpts struct {
 	PrepareProgressSink PrepareProgressSink
 }
 
-// DV7ToHDR10BitstreamFilter turns a single-track, dual-layer Profile 7 stream
-// into its plain HDR10 base layer during a copy-mode remux. dovi_rpu removes
-// the Dolby Vision configuration/RPUs; filter_units removes the interleaved
-// UNSPEC63 enhancement-layer NAL units that stream mapping cannot separate.
+// DV7ToHDR10BitstreamFilter turns a Dolby Vision stream into its plain HDR10
+// base layer during a copy-mode remux. dovi_rpu removes the Dolby Vision
+// configuration and RPUs. A single-track Profile 7 stream also interleaves its
+// enhancement layer as NAL unit type 63 in the same video stream, which stream
+// mapping cannot separate, so filter_units removes those units.
 const DV7ToHDR10BitstreamFilter = "dovi_rpu=strip=1,filter_units=remove_types=63"
-
-// DropInitialLeadingPicturesBitstreamFilter removes only non-key HEVC packets
-// whose presentation timestamp precedes the first packet in a resumed copy.
-// The escaped comma is part of one FFmpeg argv token.
-const DropInitialLeadingPicturesBitstreamFilter = `noise=drop=lt(pts\,startpts)*not(key)`
 
 // CopyFMP4RecipeVersion identifies the byte-affecting copy-video HLS recipe.
 // Remote starts attest it so rolling clusters never silently mix the old
@@ -186,7 +170,7 @@ const (
 )
 
 func validVideoSampleEntry(value string) bool {
-	return value == "" || value == VideoSampleEntryHEV1V3 || value == VideoSampleEntryDVH1 || value == VideoSampleEntryHVC1
+	return value == "" || value == VideoSampleEntryDVH1 || value == VideoSampleEntryHVC1
 }
 
 // VideoSampleEntryForDVCopy returns the sample entry a copy-video HLS session
@@ -214,7 +198,6 @@ const (
 	transcodeResolution720p  = "720p"
 	transcodeResolution1080p = "1080p"
 	transcodeResolution2160p = "2160p"
-	qsvHWMapFilter           = "hwmap=derive_device=qsv"
 	// vaapiHWDeviceAlias names the VAAPI device every non-QSV hardware command
 	// line declares; filter graphs and probes reference it by this alias.
 	vaapiHWDeviceAlias = "hw"
@@ -371,10 +354,6 @@ const (
 
 // StartTranscode launches an ffmpeg process that produces HLS segments.
 func StartTranscode(ctx context.Context, opts TranscodeOpts) (*TranscodeSession, error) {
-	if opts.DropInitialLeadingPictures &&
-		(!strings.EqualFold(opts.TargetCodecVideo, "copy") || !strings.EqualFold(opts.SourceVideoCodec, "hevc")) {
-		return nil, fmt.Errorf("initial leading-picture normalization requires HEVC video copy")
-	}
 	if !validVideoSampleEntry(opts.VideoSampleEntry) ||
 		opts.VideoSampleEntry != "" && !strings.EqualFold(opts.TargetCodecVideo, "copy") &&
 			(opts.VideoSampleEntry != VideoSampleEntryHVC1 || !strings.EqualFold(opts.TargetCodecVideo, transcodeCodecHEVC)) {
@@ -386,44 +365,6 @@ func StartTranscode(ctx context.Context, opts TranscodeOpts) (*TranscodeSession,
 	if opts.VideoBitstreamFilter != "" &&
 		(opts.VideoBitstreamFilter != DV7ToHDR10BitstreamFilter || !strings.EqualFold(opts.TargetCodecVideo, "copy")) {
 		return nil, fmt.Errorf("unsupported video bitstream filter recipe")
-	}
-	sampleEntry := strings.ToLower(strings.TrimSpace(opts.VideoSampleEntry))
-	switch sampleEntry {
-	case "":
-		// Legacy recipes let FFmpeg choose its existing default.
-	case VideoSampleEntryHEV1V3, VideoSampleEntryHVC1V3, VideoSampleEntryDVH1V3:
-		hevcCopy := strings.EqualFold(opts.TargetCodecVideo, "copy") && strings.EqualFold(opts.SourceVideoCodec, "hevc")
-		// An HEVC encode may also be tagged hvc1, which native HLS players
-		// such as Android Media3 require (upstream #841).
-		hevcEncodeHVC1 := sampleEntry == VideoSampleEntryHVC1V3 && strings.EqualFold(opts.TargetCodecVideo, transcodeCodecHEVC)
-		if !hevcCopy && !hevcEncodeHVC1 {
-			return nil, fmt.Errorf("video sample entry requires HEVC video copy or an HEVC encode")
-		}
-	default:
-		return nil, fmt.Errorf("unsupported video sample entry")
-	}
-	opts.VideoSampleEntry = sampleEntry
-	switch opts.RemuxDVMode {
-	case "":
-		if sampleEntry == VideoSampleEntryDVH1V3 {
-			return nil, fmt.Errorf("dvh1 sample entry requires Dolby Vision preserve mode")
-		}
-	case RemuxDVStripToHDR10V3, RemuxDVStripToBaseV3:
-		if opts.VideoBitstreamFilter != DV7ToHDR10BitstreamFilter || !strings.EqualFold(opts.TargetCodecVideo, "copy") {
-			return nil, fmt.Errorf("dolby vision base-layer HLS requires the validated copy recipe")
-		}
-		if sampleEntry != VideoSampleEntryHEV1V3 && sampleEntry != VideoSampleEntryHVC1V3 {
-			return nil, fmt.Errorf("dolby vision base-layer HLS requires an HEVC sample entry")
-		}
-	case RemuxDVPreserveV3:
-		if opts.VideoBitstreamFilter != "" || !strings.EqualFold(opts.TargetCodecVideo, "copy") {
-			return nil, fmt.Errorf("dolby vision preserve HLS requires unfiltered video copy")
-		}
-		if sampleEntry != VideoSampleEntryDVH1V3 {
-			return nil, fmt.Errorf("dolby vision preserve HLS requires the dvh1 sample entry")
-		}
-	default:
-		return nil, fmt.Errorf("unsupported dolby vision HLS mode")
 	}
 	if opts.SegmentDuration <= 0 {
 		opts.SegmentDuration = defaultSegmentDuration
@@ -863,8 +804,18 @@ func buildFFmpegArgs(opts TranscodeOpts) []string {
 	// Video codec and encoding settings.
 	if isVideoCopy {
 		args = append(args, "-c:v", "copy")
-		if bitstreamFilter := copyVideoBitstreamFilter(opts); bitstreamFilter != "" {
-			args = append(args, "-bsf:v", bitstreamFilter)
+		videoBitstreamFilter := ""
+		if strings.EqualFold(opts.SourceVideoCodec, transcodeCodecHEVC) || strings.EqualFold(opts.SourceVideoCodec, "h265") {
+			videoBitstreamFilter = "hevc_mp4toannexb"
+		}
+		if opts.VideoBitstreamFilter == DV7ToHDR10BitstreamFilter {
+			if videoBitstreamFilter != "" {
+				videoBitstreamFilter += ","
+			}
+			videoBitstreamFilter += opts.VideoBitstreamFilter
+		}
+		if videoBitstreamFilter != "" {
+			args = append(args, "-bsf:v", videoBitstreamFilter)
 		}
 	} else {
 		args = appendVideoArgs(args, opts)
@@ -942,21 +893,6 @@ func buildFFmpegArgs(opts TranscodeOpts) []string {
 	args = append(args, manifestPath)
 
 	return args
-}
-
-func copyVideoBitstreamFilter(opts TranscodeOpts) string {
-	filters := make([]string, 0, 3)
-	if strings.EqualFold(opts.SourceVideoCodec, transcodeCodecHEVC) || strings.EqualFold(opts.SourceVideoCodec, "h265") {
-		filters = append(filters, "hevc_mp4toannexb")
-	}
-	if opts.DropInitialLeadingPictures && opts.SeekSeconds > 0 &&
-		strings.EqualFold(opts.TargetCodecVideo, "copy") && strings.EqualFold(opts.SourceVideoCodec, "hevc") {
-		filters = append(filters, DropInitialLeadingPicturesBitstreamFilter)
-	}
-	if opts.VideoBitstreamFilter == DV7ToHDR10BitstreamFilter {
-		filters = append(filters, DV7ToHDR10BitstreamFilter)
-	}
-	return strings.Join(filters, ",")
 }
 
 // resolveEffectiveTranscodeHWAccel returns the backend that will actually execute the recipe.
@@ -1518,7 +1454,7 @@ func toneMappedTextSubtitleFilter(opts TranscodeOpts) string {
 	}
 	switch opts.HWAccel {
 	case transcodeHWQSV:
-		return softwareToneMapUploadFilter(opts) + tonemap.QSVFilter(opts.ToneMapSourceKind) + ",hwdownload,format=nv12," + cpuTail + ",format=nv12,hwupload," + qsvHWMapFilter + ":mode=read+write,format=qsv," + tonemap.HDRMetadataRemovalFilter()
+		return softwareToneMapUploadFilter(opts) + tonemap.QSVFilter(opts.ToneMapSourceKind) + ",hwdownload,format=nv12," + cpuTail + ",format=nv12,hwupload,hwmap=derive_device=qsv:mode=read+write,format=qsv," + tonemap.HDRMetadataRemovalFilter()
 	case transcodeHWVAAPI:
 		return softwareToneMapUploadFilter(opts) + tonemap.VAAPIFilter(opts.ToneMapSourceKind) + ",hwdownload,format=nv12," + cpuTail + ",format=nv12,hwupload," + tonemap.HDRMetadataRemovalFilter()
 	case transcodeHWNVENC:
@@ -1824,7 +1760,7 @@ func softwareDecodedBitmapBurnInGraph(opts TranscodeOpts, subInput string, qsv b
 	}
 	filters += ",format=nv12,hwupload"
 	if qsv {
-		filters += "," + qsvHWMapFilter + ",format=qsv"
+		filters += ",hwmap=derive_device=qsv,format=qsv"
 	}
 	return "[0:v:0]format=yuv420p[vmain];[vmain]" + filters + "[vout]"
 }
@@ -1857,13 +1793,13 @@ func appendSubtitleBurnInArgs(args []string, opts TranscodeOpts) []string {
 	switch opts.HWAccel {
 	case "qsv":
 		if opts.SoftwareVideoDecode {
-			vf := "format=yuv420p," + cpuFilters + ",format=nv12,hwupload," + qsvHWMapFilter + ",format=qsv"
+			vf := "format=yuv420p," + cpuFilters + ",format=nv12,hwupload,hwmap=derive_device=qsv,format=qsv"
 			return append(args, "-vf", vf)
 		}
 		// VAAPI→QSV pipeline: download from VAAPI surface to CPU, apply subtitle
 		// and scale filters, convert to nv12 (required by hwupload for VAAPI
 		// surfaces), upload back to VAAPI, then map to QSV for the encoder.
-		vf := hwSurfaceToCPUFilter(opts) + "," + cpuFilters + ",format=nv12,hwupload," + qsvHWMapFilter + ",format=qsv"
+		vf := hwSurfaceToCPUFilter(opts) + "," + cpuFilters + ",format=nv12,hwupload,hwmap=derive_device=qsv,format=qsv"
 		args = append(args, "-vf", vf)
 	case "vaapi":
 		if opts.SoftwareVideoDecode {
@@ -1927,7 +1863,7 @@ func qsvScaleFilter(res string) string {
 }
 
 func qsvScaleFilterWithMapMode(res, mapMode string) string {
-	hwmap := qsvHWMapFilter
+	hwmap := "hwmap=derive_device=qsv"
 	if mapMode != "" {
 		hwmap += ":mode=" + mapMode
 	}
@@ -1953,7 +1889,7 @@ func qsvSoftwareDecodeFilter(res string) string {
 	// upload, matching the proven text-subtitle path; uploading first and then
 	// invoking scale_vaapi can leave the VAAPI/QSV graph alive without ever
 	// producing its initial HLS window.
-	return cpuFilters + "format=nv12,hwupload," + qsvHWMapFilter + ",format=qsv"
+	return cpuFilters + "format=nv12,hwupload,hwmap=derive_device=qsv,format=qsv"
 }
 
 // vaapiScaleFilter keeps VAAPI frames in hardware and converts them to a

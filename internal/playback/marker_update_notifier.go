@@ -18,18 +18,12 @@ type markerUpdateSessionLookup interface {
 
 // MarkerUpdateNotifier publishes live marker updates to active playback sessions.
 type MarkerUpdateNotifier struct {
-	sessions  markerUpdateSessionLookup
-	hub       *RealtimeHub
-	sourceID  string
-	fileLocks [64]sync.Mutex
+	sessions markerUpdateSessionLookup
+	hub      *RealtimeHub
+	sourceID string
 
 	mu      sync.RWMutex
 	publish func(context.Context, string) error
-}
-
-// MarkerSnapshotFileLoader reads the persisted markers for a reconnecting session.
-type MarkerSnapshotFileLoader interface {
-	GetByID(context.Context, int) (*models.MediaFile, error)
 }
 
 // markerUpdateSnapshot carries enough data to deliver an update without reading
@@ -79,10 +73,7 @@ func (n *MarkerUpdateNotifier) UseEventBus(
 			return
 		}
 		snapshot.Segments = models.EffectiveMarkerSegments(&models.MediaFile{MarkerSegments: snapshot.Segments})
-		lock := n.fileLock(snapshot.FileID)
-		lock.Lock()
 		n.dispatch(ctx, snapshot)
-		lock.Unlock()
 	}); err != nil {
 		return err
 	}
@@ -90,65 +81,10 @@ func (n *MarkerUpdateNotifier) UseEventBus(
 	return nil
 }
 
-// SendSessionSnapshot sends the current marker state after the control socket is ready.
-func (n *MarkerUpdateNotifier) SendSessionSnapshot(ctx context.Context, sessionID string, file *models.MediaFile) {
-	if n == nil || n.hub == nil || sessionID == "" || file == nil || file.ID <= 0 {
-		return
-	}
-	lock := n.fileLock(file.ID)
-	lock.Lock()
-	defer lock.Unlock()
-	n.sendSessionSnapshotLocked(ctx, sessionID, file)
-}
-
-// SendSessionSnapshotFromLoader orders the persisted read and send with updates.
-func (n *MarkerUpdateNotifier) SendSessionSnapshotFromLoader(ctx context.Context, sessionID string, fileID int, loader MarkerSnapshotFileLoader) error {
-	if n == nil || n.hub == nil || sessionID == "" || fileID <= 0 || loader == nil {
-		return nil
-	}
-	lock := n.fileLock(fileID)
-	lock.Lock()
-	defer lock.Unlock()
-	file, err := loader.GetByID(ctx, fileID)
-	if err != nil || file == nil {
-		return err
-	}
-	n.sendSessionSnapshotLocked(ctx, sessionID, file)
-	return nil
-}
-
-func (n *MarkerUpdateNotifier) fileLock(fileID int) *sync.Mutex {
-	return &n.fileLocks[uint(fileID)%uint(len(n.fileLocks))]
-}
-
-func (n *MarkerUpdateNotifier) sendSessionSnapshotLocked(ctx context.Context, sessionID string, file *models.MediaFile) {
-	segments := models.EffectiveMarkerSegments(file)
-	firstRange := func(kind string) *TimeRangePayload {
-		for _, segment := range segments {
-			if segment.Kind == kind {
-				return &TimeRangePayload{Start: segment.StartSeconds, End: segment.EndSeconds}
-			}
-		}
-		return nil
-	}
-	event, err := NewMarkersUpdatedEvent(sessionID, file.ID,
-		firstRange("intro"), firstRange("credits"), firstRange("recap"), firstRange("preview"), segments...)
-	if err != nil {
-		slog.WarnContext(ctx, "failed to encode markers updated realtime event", "component", "playback", "session_id", sessionID, "file_id", file.ID, "error", err)
-		return
-	}
-	if err := n.hub.Send(sessionID, event); err != nil && !errors.Is(err, ErrRealtimeConnectionNotFound) {
-		slog.WarnContext(ctx, "failed to deliver markers updated realtime event", "component", "playback", "session_id", sessionID, "file_id", file.ID, "error", err)
-	}
-}
-
 func (n *MarkerUpdateNotifier) MarkersUpdated(ctx context.Context, file *models.MediaFile) {
 	if n == nil || file == nil || file.ID <= 0 || ctx.Err() != nil {
 		return
 	}
-	lock := n.fileLock(file.ID)
-	lock.Lock()
-	defer lock.Unlock()
 
 	snapshot := markerUpdateSnapshot{
 		SourceID: n.sourceID,

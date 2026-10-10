@@ -8,10 +8,6 @@ import (
 	catalogpkg "github.com/Silo-Server/silo-server/internal/catalog"
 )
 
-const (
-	ebookFormatEPUB = "epub"
-)
-
 // EbookProgressService is shared with the legacy reader transport.
 type EbookProgressService interface {
 	ReaderCapability(context.Context) handlers.EbookReaderCapability
@@ -138,10 +134,10 @@ func (reg *Registry) getEbookCapability(ctx context.Context, _ *CapabilityInput)
 	if view.Progress || view.Config || view.Files || view.Annotations {
 		state = StateAvailable
 	}
-	return &EbookCapabilityOutput{CacheControl: cacheControlPrivateNoCache, Body: EbookCapability{
+	return &EbookCapabilityOutput{CacheControl: "private, no-cache", Body: EbookCapability{
 		Capability:         Capability{State: state},
 		GuardedAnnotations: view.Annotations, ReaderFiles: view.Files, GuardedConfig: view.Config, OrderedProgress: view.Progress, KindleConversion: view.KindleConversion,
-		SourceFormats: []string{"mobi", "azw", "azw3"}, ServedFormat: ebookFormatEPUB,
-		Header: handlers.ConversionHeader, HeaderFailedValue: adminCollectionSyncFailed,
+		SourceFormats: []string{"mobi", "azw", "azw3"}, ServedFormat: "epub",
+		Header: handlers.ConversionHeader, HeaderFailedValue: "failed",
 	}}, nil
 }

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -115,7 +117,7 @@ func (r *PersonRepository) FindOrCreate(ctx context.Context, p models.Person) (i
 // Anything that is not a cached key is still replaceable by a real image: an
 // empty column, the "-" no-photo sentinel, and a provider URL that never made
 // it through the cache. Keeping URLs replaceable is what stops a person with
-// no external id — PersonRefreshDue skips them, so no refresh will ever
+// no external id — FindRefreshCandidates skips them, so no refresh will ever
 // revisit the row — from being stuck with a dead URL forever. The
 // LIKE '%://%' test for "not a cached key" is the same one the artwork GC
 // trigger and the image cache sweep use.
@@ -607,29 +609,46 @@ func (r *PersonRepository) SearchAlphabetical(ctx context.Context, query string,
 
 // SearchScoped ranks exact names first and restricts people to credits in the
 // selected media scope and viewer access before applying the limit. Empty scope
-// includes accessible credits across all media types.
+// includes accessible credits across all media types. Every query word must
+// start a word of the name, so "hacks" finds "Lark Hackshaw" but not
+// "Chad Thackston", while a partial last word still serves typeahead.
 func (r *PersonRepository) SearchScoped(ctx context.Context, query string, limit int, mediaScope string, filter AccessFilter) ([]models.Person, error) {
 	return r.search(ctx, strings.TrimSpace(query), limit, mediaScope, filter, true)
 }
 
-// search runs a name search over the people the viewer can see. rankExact
-// puts exact name matches first, as v2 search does.
-func (r *PersonRepository) search(ctx context.Context, query string, limit int, mediaScope string, filter AccessFilter, rankExact bool) ([]models.Person, error) {
+// search runs a name search over the people the viewer can see. scoped
+// selects the v2 rules: word-start matching with exact names first. Without
+// it the query matches anywhere in the name, as the v1 bridge search does.
+func (r *PersonRepository) search(ctx context.Context, query string, limit int, mediaScope string, filter AccessFilter, scoped bool) ([]models.Person, error) {
 	if limit <= 0 {
 		limit = 20
 	}
-	args := []any{query, limit}
-	argIdx := 3
-	where := "name ILIKE '%' || $1 || '%' AND " + personCreditVisibleSQL("people.id", MediaScopeItemTypes(mediaScope), personCreditScope{}, filter, &args, &argIdx)
+	// The query binds only where the SQL reads it: Postgres cannot type an
+	// unreferenced parameter, which a scoped empty query would leave.
+	args := []any{limit}
+	argIdx := 2
+	var conditions []string
+	if scoped {
+		conditions = personNameWordStartConditions(query, &args, &argIdx)
+	} else {
+		conditions = []string{fmt.Sprintf("name ILIKE '%%' || $%d || '%%'", argIdx)}
+		args = append(args, query)
+		argIdx++
+	}
+	conditions = append(conditions, personCreditVisibleSQL("people.id", MediaScopeItemTypes(mediaScope), personCreditScope{}, filter, &args, &argIdx))
+	where := strings.Join(conditions, " AND ")
 	order := "name ASC, id ASC"
-	if rankExact && query != "" {
-		order = "(LOWER(name) = LOWER($1)) DESC, " + order
+	if scoped && query != "" {
+		// Words match however they are spaced, so a name equal to the query
+		// as typed or with its whitespace collapsed counts as exact.
+		order = fmt.Sprintf("(LOWER(name) IN (LOWER($%d), LOWER($%d))) DESC, ", argIdx, argIdx+1) + order
+		args = append(args, query, strings.Join(strings.Fields(query), " "))
 	}
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, name, sort_name, bio, birth_date, death_date, birthplace, homepage,
 			photo_path, photo_source_path, photo_thumbhash, tmdb_id, imdb_id, tvdb_id, plex_guid, created_at, updated_at,
 			metadata_refresh_attempted_at
-		FROM people WHERE `+where+` ORDER BY `+order+` LIMIT $2`, args...,
+		FROM people WHERE `+where+` ORDER BY `+order+` LIMIT $1`, args...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("search people: %w", err)
@@ -648,6 +667,46 @@ func (r *PersonRepository) search(ctx context.Context, query string, limit int, 
 		people = append(people, p)
 	}
 	return people, rows.Err()
+}
+
+// maxPersonSearchWords caps the distinct query words people search matches
+// on, so a long query cannot add predicates without bound.
+const maxPersonSearchWords = 8
+
+// personNameWordStartConditions matches people whose name has, for every
+// distinct whitespace-separated word of query, a word starting with it. A word
+// starts at the beginning of the name or after a character that is not a
+// letter or digit, so "luc" finds "Jean-Luc" and "brien" finds "O'Brien"; a
+// query word that opens with punctuation, like "'brien", carries its own
+// boundary. Each word also carries a substring ILIKE, which lets
+// idx_people_name_trgm narrow the rows the regex checks. Both predicates leave
+// case folding to the database: ~* folds one character at a time and Go's
+// lowercasing ignores the collation, so either would drop matches ILIKE keeps
+// (a name spelled "GROẞ" for "groß", a Turkish dotted I). An empty query adds
+// no conditions.
+func personNameWordStartConditions(query string, args *[]any, argIdx *int) []string {
+	var conditions []string
+	seen := map[string]bool{}
+	for _, word := range strings.Fields(query) {
+		// Only identical words repeat: case pairs depend on the collation.
+		if seen[word] {
+			continue
+		}
+		if len(seen) == maxPersonSearchWords {
+			break
+		}
+		seen[word] = true
+		pattern := escapeRegexLiteral(word)
+		if first, _ := utf8.DecodeRuneInString(word); unicode.IsLetter(first) || unicode.IsDigit(first) {
+			pattern = "(^|[^[:alnum:]])" + pattern
+		}
+		conditions = append(conditions,
+			fmt.Sprintf(`name ILIKE $%d ESCAPE '\'`, *argIdx),
+			fmt.Sprintf("LOWER(name) ~ LOWER($%d)", *argIdx+1))
+		*args = append(*args, "%"+escapeLikeLiteral(word)+"%", pattern)
+		*argIdx += 2
+	}
+	return conditions
 }
 
 // personCreditVisibleSQL renders an EXISTS predicate that holds when the person
@@ -1179,7 +1238,8 @@ func (r *PersonRepository) MarkRefreshAttempt(ctx context.Context, id int64) err
 	return nil
 }
 
-// Person metadata refresh policy for on-demand detail lookups.
+// Person metadata refresh policy. FindRefreshCandidates (SQL) and
+// PersonRefreshDue (Go) are two views of the same rule; keep them in sync.
 const (
 	// PersonMetadataStaleAfter is how long complete person metadata is trusted
 	// before another provider lookup is attempted.
@@ -1188,14 +1248,14 @@ const (
 	// PersonRefreshRetryAfter bounds how often one person may be sent to a
 	// provider. It applies to every candidate, so a person the providers simply
 	// have no bio or birth date for is retried on this cadence instead of on
-	// every page view.
+	// every sweep.
 	PersonRefreshRetryAfter = 7 * 24 * time.Hour
 )
 
 // PersonMetadataIncomplete reports whether a provider could still fill in
 // metadata Silo does not have. A photo_path of "-" is the "provider has no
 // photo" sentinel — an answer, not a gap — so it counts as complete, matching
-// the on-demand refresh policy.
+// the SQL predicate in FindRefreshCandidates.
 func PersonMetadataIncomplete(person models.Person) bool {
 	return person.Bio == "" || person.PhotoPath == "" || person.BirthDate == nil
 }
@@ -1204,7 +1264,8 @@ func PersonMetadataIncomplete(person models.Person) bool {
 // carry an external id, no lookup has been attempted within
 // PersonRefreshRetryAfter, and their metadata is either incomplete or older
 // than PersonMetadataStaleAfter. Callers that already hold the row use this
-// to decide whether a page view should enqueue enrichment.
+// instead of re-querying; the worker sweep uses FindRefreshCandidates, which
+// encodes the same rule in SQL.
 func PersonRefreshDue(person models.Person, now time.Time) bool {
 	if person.TmdbID == "" && person.ImdbID == "" && person.TvdbID == "" {
 		return false
@@ -1215,6 +1276,58 @@ func PersonRefreshDue(person models.Person, now time.Time) bool {
 	}
 	return PersonMetadataIncomplete(person) ||
 		person.UpdatedAt.Before(now.Add(-PersonMetadataStaleAfter))
+}
+
+// FindRefreshCandidates returns people who are due for a provider metadata
+// lookup, least recently touched first. See PersonRefreshDue for the rule.
+//
+// Gating on metadata_refresh_attempted_at rather than on updated_at is what
+// keeps this from becoming a hot loop: a person the providers cannot complete
+// is retried once per PersonRefreshRetryAfter instead of on every sweep, while
+// a person nobody has ever looked up is eligible immediately, so freshly
+// ingested credits are backfilled without waiting out a staleness window.
+func (r *PersonRepository) FindRefreshCandidates(ctx context.Context, limit int) ([]int64, error) {
+	if limit <= 0 {
+		return []int64{}, nil
+	}
+
+	now := time.Now()
+	rows, err := r.pool.Query(ctx, `
+		SELECT id
+		FROM people
+		WHERE
+			(tmdb_id <> '' OR imdb_id <> '' OR tvdb_id <> '')
+			AND (metadata_refresh_attempted_at IS NULL OR metadata_refresh_attempted_at < $2)
+			AND (
+				COALESCE(bio, '') = ''
+				OR COALESCE(photo_path, '') = ''
+				OR birth_date IS NULL
+				OR updated_at < $3
+			)
+		ORDER BY GREATEST(updated_at, COALESCE(metadata_refresh_attempted_at, updated_at)) ASC, id ASC
+		LIMIT $1`,
+		limit,
+		now.Add(-PersonRefreshRetryAfter),
+		now.Add(-PersonMetadataStaleAfter),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query refresh candidates: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make([]int64, 0, limit)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan refresh candidate: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate refresh candidates: %w", err)
+	}
+
+	return ids, nil
 }
 
 // ListForItem returns all people credited on a media item, ordered by sort_order.

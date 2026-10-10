@@ -78,7 +78,7 @@ func subscriptionMutationProblem(err error) *Problem {
 }
 func subscriptionOutput(row *downloads.Subscription) *DownloadSubscriptionOutput {
 	out := downloadSubscriptionOf(row)
-	return &DownloadSubscriptionOutput{ETag: out.ETag, CacheControl: cacheControlPrivateNoCache, Body: out}
+	return &DownloadSubscriptionOutput{ETag: out.ETag, CacheControl: "private, no-cache", Body: out}
 }
 func (reg *Registry) createDownloadSubscription(ctx context.Context, in *DownloadSubscriptionCreateInput) (*DownloadSubscriptionOutput, error) {
 	if reg.deps.DownloadSubscriptionMutations == nil {

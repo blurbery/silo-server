@@ -12,6 +12,12 @@
 ./internal/recommendations TestRecentCompletedItemIDsGroupsSeriesBeforeLimit
 ./internal/sections TestCompatibilityRecentlyAddedReturnsFlatDistinctSeries
 ./internal/scanner TestFileRepositoryPreservesFirstSeenScanProvenance
+./internal/scanner TestMatroskaTrackBackfillRecordsTrackNumbers
+./internal/scanner TestMatroskaTrackBackfillStopsOnStalledStorage
+./internal/scanner TestMatroskaTrackBackfillStopsOnIntermittentStalls
+./internal/scanner TestMatroskaTrackBackfillReadsEachFileOnce
+./internal/scanner TestScanStateCarriesProbeRejectionDB
+./internal/scanner TestRescanKeepsProbeFactsOfARejectedUnchangedFileDB
 ./migrations TestScanRunForeignKeysHaveLeadingIndexesDB
 
 # Series air-date sort keys advance when a known episode airs.
@@ -19,12 +25,10 @@
 
 # Section and Smart collection rule fields and operators compile to working SQL.
 ./internal/catalog TestRuleFieldsFilterCatalogDB
+./internal/api/handlers TestCatalogProfileSectionsDB
 
-# A scan request that lands on an active scope reuses it or owes it a follow-up,
-# and insert failures other than that conflict reach the caller.
-./internal/scanqueue TestCreateOnRunningScopeOwesFollowUpEnqueuedOnComplete
-./internal/scanqueue TestCreateOnRunningScopeIgnoresDirectAdminTriggers
-./internal/scanqueue TestCreateReturnsInsertErrorsOtherThanScopeConflict
+# Scan membership reconciliation retries a transaction Postgres aborts as a deadlock victim.
+./internal/catalog TestFolderMembershipReconciliationRetriesDeadlockDB
 
 # Profile history and account/invitation persistence.
 ./internal/api/handlers TestEbookProgressEventsPostgres
@@ -35,6 +39,7 @@
 ./internal/auth TestLoginIdentitySpaceDB
 ./internal/auth TestLoginSessionActivityAndAdminRevocationDB
 ./internal/auth TestJellyfinSessionDeleteFailureRollsBackRevocationPostgres
+./internal/jellycompat TestApplyListFileFieldsDB
 ./internal/jellycompat TestLoginAccountNameWithHashDB
 ./internal/jellycompat TestRevokedCompatSessionStaysDeletedPostgres
 ./internal/invitations TestLinkInvitationLifecycleDB
@@ -70,6 +75,9 @@
 ./internal/notifications TestEmailVerificationDispatchRetriesUncertainSendOnceWithSameMessage
 ./internal/notifications TestEmailVerificationDispatchStopsAfterSecondUncertainty
 
+# Recommendation candidate scans stay within pgvector's hnsw.ef_search range.
+./internal/recommendations TestFindTasteProfileCandidatesWithGenresAboveEfSearchMaximumDB
+
 # Image cache jobs run again for artwork the target no longer holds.
 ./internal/metadata TestEnqueueRequeuesSucceededJobOnlyWhenAskedDB
 
@@ -86,6 +94,9 @@
 ./internal/metadata TestArtworkRevisionGCBatchHealRechecksRetrackBetweenSurfaces
 ./internal/metadata TestArtworkRevisionGCRunRetainsPartialDeletionForHealing
 ./internal/metadata TestArtworkRevisionGCBatchRechecksOwnershipAndReferences
+./internal/metadata TestArtworkRevisionGCDormantSweep
+./internal/metadata TestArtworkRevisionGCDormantSweepCycles
+./internal/metadata TestArtworkRevisionGCDormantCycleEndsWhileRowsArrive
 
 # Persisted notification, request, marker and preview contracts.
 ./internal/markers TestPopulationSyncResumesAfterQuotaAcrossRuns
@@ -143,3 +154,19 @@
 
 # Admin top-activity leaderboards count playback, not marked-watched rows.
 ./internal/api/handlers TestAdminTopActivityCountsPlaybackNotMarks
+
+# Transactional administrator audit details and rollback isolation.
+./internal/activitylog TestMutationCommitRollbackAndHistoryDB
+
+# Online partitioned audit indexes preserve writers and resume canceled builds.
+./internal/partman TestOnlinePartitionIndexesKeepWritersAvailableDB
+
+./internal/downloads TestLocalDownloadCanceledWritePersistsFailureDB
+
+# Rating sources keep their merge rules, and a trigger keeps the TMDB vote pair
+# discovery rows rank by in step with the 'tmdb' source.
+./internal/catalog TestRatingSourceRepositoryUpsertPostgres
+./internal/catalog TestRatingSourceRepositorySyncsTMDBVotesPostgres
+
+# Watch-provider events carry catalog titles to plugins.
+./internal/watchsync TestGetMediaTitlesDB

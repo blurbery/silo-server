@@ -24,7 +24,6 @@ const (
 	audioCodecMP3       = "mp3"
 	audioCodecAC3       = "ac3"
 	audioCodecEAC3      = "eac3"
-	audioCodecALAC      = "alac"
 	subtitleCodecTextV3 = "text"
 )
 
@@ -155,7 +154,7 @@ var preparedMP4AudioCodecs = map[string]bool{
 	audioCodecMP3:   true,
 	audioCodecAC3:   true,
 	audioCodecEAC3:  true,
-	audioCodecALAC:  true,
+	"alac":          true,
 }
 
 // preparedAudioCopyable reports whether an audio track may be stream-copied

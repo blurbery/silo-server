@@ -26,7 +26,6 @@ const (
 	tailSilenceNoiseDB  = -50
 	tailSilenceSeconds  = 0.5
 	maxTailKeyframes    = 5000
-	codecMJPEG          = "mjpeg"
 	tailKeyframeSeconds = 30.0
 )
 
@@ -42,7 +41,7 @@ const (
 // allIntraVideoCodecs make every frame a keyframe, so a keyframes-only pass
 // would decode the whole tail. Their files are mostly masters and captures.
 var allIntraVideoCodecs = map[string]struct{}{
-	"prores": {}, codecMJPEG: {}, "dnxhd": {}, "ffv1": {}, "rawvideo": {}, "v210": {}, "utvideo": {}, "huffyuv": {},
+	"prores": {}, "mjpeg": {}, "dnxhd": {}, "ffv1": {}, "rawvideo": {}, "v210": {}, "utvideo": {}, "huffyuv": {},
 }
 
 // creditsTailParams are the parameters that shape a credits tail payload.

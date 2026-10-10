@@ -14,7 +14,6 @@ import (
 	"github.com/Silo-Server/silo-server/internal/catalog"
 	"github.com/Silo-Server/silo-server/internal/models"
 	"github.com/Silo-Server/silo-server/internal/playback"
-	"github.com/Silo-Server/silo-server/internal/tonemap"
 	"github.com/Silo-Server/silo-server/internal/userstore"
 )
 
@@ -149,7 +148,7 @@ func AdminPlaybackSessionFeatures() playbackSessionsCapabilitiesResponse {
 		IsJellyfinClient:          true,
 		TranscodeHWAccel:          true,
 		ToneMapMode:               true,
-		ToneMapModeValues:         []string{string(tonemap.ModeHardware), string(tonemap.ModeSoftware)},
+		ToneMapModeValues:         []string{"hardware", "software"},
 		ClientBuild:               true,
 		ClientChannel:             true,
 		TargetAudioChannels:       true,

@@ -434,9 +434,6 @@ func TestApplyCompatAudioSelectionRejectsUnsupportedLocalHLSRemuxAudioCopy(t *te
 	t.Cleanup(func() { _ = live.Close() })
 
 	playSession, _ := store.Get("play-1")
-	if playSession.Recipe == nil || playSession.Recipe.RemuxDVMode != playback.RemuxDVPreserveV3 {
-		t.Fatalf("persisted local recipe = %#v, want Dolby Vision preserve mode", playSession.Recipe)
-	}
 	_, _, restarted, err := handler.applyCompatAudioSelection(t.Context(), playSession, source.ID, unsupportedStreamIndex, 12)
 	if !errors.Is(err, errCompatHLSRemuxAudioUnsupported) || restarted {
 		t.Fatalf("selection = restarted %t error %v, want unsupported remux audio", restarted, err)
@@ -446,10 +443,9 @@ func TestApplyCompatAudioSelectionRejectsUnsupportedLocalHLSRemuxAudioCopy(t *te
 		t.Fatalf("persisted stream index = %d, want %d", got, defaultStreamIndex)
 	}
 	if opts := live.Opts(); opts.AudioTrackIndex != 0 || opts.TargetCodecVideo != compatCopyCodec ||
-		opts.TargetCodecAudio != compatCopyCodec || opts.VideoSampleEntry != playback.VideoSampleEntryDVH1 ||
-		opts.RemuxDVMode != playback.RemuxDVPreserveV3 {
-		t.Fatalf("live recipe = track %d video %q audio %q sample entry %q DV mode %q, want original copy/copy/dvh1/preserve recipe",
-			opts.AudioTrackIndex, opts.TargetCodecVideo, opts.TargetCodecAudio, opts.VideoSampleEntry, opts.RemuxDVMode)
+		opts.TargetCodecAudio != compatCopyCodec || opts.VideoSampleEntry != playback.VideoSampleEntryDVH1 {
+		t.Fatalf("live recipe = track %d video %q audio %q sample entry %q, want original copy/copy/dvh1 recipe",
+			opts.AudioTrackIndex, opts.TargetCodecVideo, opts.TargetCodecAudio, opts.VideoSampleEntry)
 	}
 	if len(manager.audioTrackCalls) != 0 {
 		t.Fatalf("upstream selection calls = %#v, want none", manager.audioTrackCalls)

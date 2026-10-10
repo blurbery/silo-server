@@ -9,10 +9,8 @@ import {
   buildClientPlaybackContextV3,
   buildDeliveriesV3,
   detectHLSSupport,
-  detectNativeHLSSupport,
   type WebCapabilityProbe,
 } from "./client-context-v3";
-import type { HDRCapabilitiesV3 } from "./protocol-v3";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -26,7 +24,6 @@ describe("detectHLSSupport", () => {
     });
 
     expect(detectHLSSupport()).toEqual({ supported: true, native: true });
-    expect(detectNativeHLSSupport()).toBe(true);
   });
 
   it("falls back to the hls.js Media Source Extensions probe", () => {
@@ -36,7 +33,6 @@ describe("detectHLSSupport", () => {
     vi.stubGlobal("MediaSource", { isTypeSupported: () => true });
 
     expect(detectHLSSupport()).toEqual({ supported: true, native: false });
-    expect(detectNativeHLSSupport()).toBe(false);
   });
 });
 
@@ -46,7 +42,6 @@ describe("buildDeliveriesV3", () => {
       containers: ["mp4"],
       codecsVideo: ["h264"],
       progressiveCodecsVideo: ["h264"],
-      hlsCodecsVideo: ["h264"],
       codecsAudio: ["aac"],
       progressiveCodecsAudio: ["aac"],
       maxResolution: "1080p",
@@ -58,15 +53,8 @@ describe("buildDeliveriesV3", () => {
         dolby_vision_profiles: [],
         dolby_vision_profile_levels: [],
       },
-      hlsHDRDetails: {
-        hdr10: false,
-        hdr10_plus: false,
-        hlg: false,
-        dolby_vision_profiles: [],
-        dolby_vision_profile_levels: [],
-      },
       hls: true,
-      nativeHls: false,
+      nativeHLS: false,
     });
 
     for (const delivery of Object.values(deliveries)) {
@@ -85,7 +73,6 @@ describe("structured HDR capabilities", () => {
     containers: ["mp4"],
     codecsVideo: ["hevc"],
     progressiveCodecsVideo: ["hevc"],
-    hlsCodecsVideo: ["hevc"],
     codecsAudio: ["eac3"],
     progressiveCodecsAudio: ["eac3"],
     maxResolution: "2160p",
@@ -101,19 +88,8 @@ describe("structured HDR capabilities", () => {
       dolby_vision_profiles: [8],
       dolby_vision_profile_levels: [{ profile: 8, max_level: 6, bl_compatibility_ids: [1] }],
     },
-    hlsHDRDetails: {
-      hdr10: true,
-      hdr10_plus: false,
-      hlg: false,
-      hdr10_max_width: 3840,
-      hdr10_max_height: 2160,
-      hdr10_max_frame_rate: 24,
-      hdr10_max_bitrate_kbps: 80_000,
-      dolby_vision_profiles: [],
-      dolby_vision_profile_levels: [],
-    },
     hls: true,
-    nativeHls: false,
+    nativeHLS: false,
   };
 
   it("publishes the structured formats in both device and active-output contexts", () => {
@@ -121,30 +97,12 @@ describe("structured HDR capabilities", () => {
     expect(buildClientPlaybackContextV3(probe).output.hdr_details).toEqual(probe.hdrDetails);
   });
 
-  it("scopes exact HDR evidence to each delivery engine", () => {
-    const deliveries = buildDeliveriesV3(probe);
-    expect(deliveries.progressive?.hdr_details).toEqual(probe.hdrDetails);
-    const nonProgressiveHDRDetails: HDRCapabilitiesV3 = {
-      ...probe.hdrDetails,
-      hdr10: false,
-      dolby_vision_profiles: [],
-      dolby_vision_profile_levels: [],
-    };
-    delete nonProgressiveHDRDetails.hdr10_max_width;
-    delete nonProgressiveHDRDetails.hdr10_max_height;
-    delete nonProgressiveHDRDetails.hdr10_max_frame_rate;
-    delete nonProgressiveHDRDetails.hdr10_max_bitrate_kbps;
-    expect(deliveries.original_http?.hdr_details).toEqual(nonProgressiveHDRDetails);
-    expect(deliveries.hls?.hdr_details).toEqual(probe.hlsHDRDetails);
-  });
-
-  it("publishes exact media-element HDR evidence to native HLS", () => {
-    const deliveries = buildDeliveriesV3({ ...probe, nativeHls: true }, safariUA);
+  it("scopes normalized HDR sample entries to native HLS", () => {
+    const deliveries = buildDeliveriesV3({ ...probe, nativeHLS: true }, safariUA);
 
     expect(deliveries.progressive?.hdr_details?.dolby_vision_profiles).toEqual([]);
     expect(deliveries.hls?.hdr_details).toEqual(probe.hdrDetails);
-    expect(deliveries.hls?.video_codecs).toEqual(probe.progressiveCodecsVideo);
-    expect(deliveries.hls?.features).toContain("native_hls_playback_v1");
+    expect(deliveries.hls?.video_codecs).toContain("hevc");
     expect(deliveries.original_http?.hdr_details?.hdr10).toBe(false);
     expect(deliveries.original_http?.hdr_details?.dolby_vision_profiles).toEqual([]);
   });
@@ -152,17 +110,9 @@ describe("structured HDR capabilities", () => {
   it("keeps Chromium native-HLS evidence scoped to its hls.js engine", () => {
     const chromiumProbe = {
       ...probe,
-      nativeHls: true,
+      nativeHLS: true,
       codecsVideo: ["h264"],
       progressiveCodecsVideo: ["h264", "hevc"],
-      hlsCodecsVideo: ["h264"],
-      hlsHDRDetails: {
-        ...probe.hlsHDRDetails,
-        hdr10: false,
-        hlg: false,
-        dolby_vision_profiles: [],
-        dolby_vision_profile_levels: [],
-      },
     };
 
     const deliveries = buildDeliveriesV3(chromiumProbe, chromeUA);
@@ -174,10 +124,10 @@ describe("structured HDR capabilities", () => {
   });
 
   it("keeps normalized HDR sample entries on progressive without native HLS", () => {
-    const deliveries = buildDeliveriesV3({ ...probe, nativeHls: false });
+    const deliveries = buildDeliveriesV3({ ...probe, nativeHLS: false });
 
     expect(deliveries.progressive?.hdr_details).toEqual(probe.hdrDetails);
-    expect(deliveries.hls?.hdr_details).toEqual(probe.hlsHDRDetails);
+    expect(deliveries.hls?.hdr_details?.dolby_vision_profiles).toEqual([]);
     expect(deliveries.original_http?.hdr_details?.hdr10).toBe(false);
     expect(deliveries.original_http?.hdr_details?.dolby_vision_profiles).toEqual([]);
   });
@@ -187,7 +137,6 @@ describe("structured HDR capabilities", () => {
       ...probe,
       codecsVideo: ["h264"],
       progressiveCodecsVideo: ["h264", "hevc"],
-      hlsCodecsVideo: ["h264"],
     };
 
     expect(buildClientCapabilitiesV3(progressiveOnlyProbe).codecs_video).toEqual(["h264", "hevc"]);

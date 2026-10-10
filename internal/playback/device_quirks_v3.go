@@ -3,15 +3,11 @@ package playback
 import "strings"
 
 const (
-	QuirkFireTVAFTKRTHigh10V3              = "android.fire_tv.aftkrt.h264_high10_l52_v1"
-	QuirkFireTVAFTKRTEAC3HLSV3             = "android.fire_tv.aftkrt.eac3_7_1_hls_audio_adapt_v1"
-	QuirkAndroidMobileEAC3BluetoothV3      = "android.mobile.eac3_bluetooth_hls_audio_adapt_v1"
-	QuirkFireTVDV8HDR10PlusV3              = "android.fire_tv.dv8_hdr10plus_sei_v1"
-	QuirkFirefoxHEVCOpenGOPV3              = "web.firefox.hevc_open_gop_resume_v1"
-	QuirkFirefoxMatroskaAACTimingV3        = "web.firefox.matroska_aac_timestamps_v1"
-	QuirkWindowsWebAudioNormalizeV3        = "web.windows.audio_normalization_v1"
-	QuirkAndroidFirefoxWebAudioNormalizeV3 = "web.android.firefox.audio_normalization_v1"
-	legacyAndroidMedia3HLSBuildV3          = "15"
+	QuirkFireTVAFTKRTHigh10V3       = "android.fire_tv.aftkrt.h264_high10_l52_v1"
+	QuirkFireTVAFTKRTEAC3HLSV3      = "android.fire_tv.aftkrt.eac3_7_1_hls_audio_adapt_v1"
+	QuirkFireTVDV8HDR10PlusV3       = "android.fire_tv.dv8_hdr10plus_sei_v1"
+	QuirkFirefoxMatroskaAACTimingV3 = "web.firefox.matroska_aac_timestamps_v1"
+	legacyAndroidMedia3HLSBuildV3   = "15"
 )
 
 func high10DecodeOverrideV3(source SourceDescriptorV3, request StartRequestV3) (*AppliedQuirkV3, bool) {
@@ -41,19 +37,8 @@ func high10DecodeOverrideV3(source SourceDescriptorV3, request StartRequestV3) (
 }
 
 func hlsEAC3AudioCorrectionV3(source SourceDescriptorV3, request StartRequestV3) (*AppliedQuirkV3, bool) {
-	if !deviceQuirkProtocolAvailableV3(request) || !strings.EqualFold(source.AudioCodec, "eac3") {
-		return nil, false
-	}
-	if isAndroidMobileBluetoothOutputV3(request) && source.AudioChannels >= 6 {
-		quirk := AppliedQuirkV3{
-			ID:               QuirkAndroidMobileEAC3BluetoothV3,
-			RegistryRevision: DeviceQuirkRegistryRevisionV3,
-			Action:           "audio_only_transcode",
-			Reason:           "Android mobile cannot reliably decode multichannel E-AC-3 on the observed Bluetooth output route; preserve video and adapt audio to AAC.",
-		}
-		return &quirk, true
-	}
-	if !isAmazonModelV3(request, "AFTKRT") || source.AudioChannels != 8 {
+	if !deviceQuirkProtocolAvailableV3(request) || !isAmazonModelV3(request, "AFTKRT") ||
+		!strings.EqualFold(source.AudioCodec, "eac3") || source.AudioChannels != 8 {
 		return nil, false
 	}
 	quirk := AppliedQuirkV3{
@@ -63,16 +48,6 @@ func hlsEAC3AudioCorrectionV3(source SourceDescriptorV3, request StartRequestV3)
 		Reason:           "AFTKRT cannot reliably consume eight-channel E-AC-3 from an HLS MPEG-TS route.",
 	}
 	return &quirk, true
-}
-
-func isAndroidMobileBluetoothOutputV3(request StartRequestV3) bool {
-	device := request.ClientPlaybackContext.Device
-	output := request.ClientPlaybackContext.Output
-	return strings.EqualFold(device.Platform, "android") &&
-		strings.EqualFold(request.ClientPlaybackContext.FormFactor, "mobile") &&
-		strings.EqualFold(output.SinkType, "bluetooth") &&
-		output.AudioPassthrough != nil &&
-		len(output.AudioPassthrough.PassthroughCodecs) == 0
 }
 
 // usesFirstPartyAndroidMedia3HLSV3 identifies the exact legacy Silo Android
@@ -99,25 +74,6 @@ func dv8HDR10PlusRuntimeCorrectionV3(source SourceDescriptorV3, request StartReq
 	return &quirk, true
 }
 
-// firefoxHEVCOpenGOPQuirkV3 marks copied HEVC remux recipes whose resumed
-// byte stream needs its initial open-GOP leading pictures normalized. Firefox
-// rejects those pre-key pictures after a demuxer seek even though it decodes
-// the same MKV from the beginning. The serving layer executes the filter only
-// for a non-zero seek, but the plan freezes the quirk from the first start so a
-// later seek reanchor cannot lose the byte recipe.
-func firefoxHEVCOpenGOPQuirkV3(source SourceDescriptorV3, request StartRequestV3) (*AppliedQuirkV3, bool) {
-	if !isFirefoxWebV3(request) || !strings.EqualFold(source.VideoCodec, "hevc") {
-		return nil, false
-	}
-	quirk := AppliedQuirkV3{
-		ID:               QuirkFirefoxHEVCOpenGOPV3,
-		RegistryRevision: DeviceQuirkRegistryRevisionV3,
-		Action:           "server_copy_bitstream_normalization",
-		Reason:           "Firefox HEVC resume requires initial open-GOP leading pictures to be removed after a server-side seek.",
-	}
-	return &quirk, true
-}
-
 // firefoxMatroskaAACTimingQuirkV3 prevents millisecond-rounded Matroska AAC
 // packet timestamps from being copied into MP4/fMP4. Firefox treats those
 // sub-frame gaps as missing audio and inserts silence, which is heard as
@@ -136,67 +92,6 @@ func firefoxMatroskaAACTimingQuirkV3(source SourceDescriptorV3, request StartReq
 		Reason:           "Firefox requires Matroska AAC timestamps to be normalized before MP4 or HLS packaging.",
 	}
 	return &quirk, true
-}
-
-// windowsWebAudioNormalizationQuirkV3 keeps video on a source-preserving route
-// while giving Windows browsers one stable audio contract. Every non-AAC
-// source codec is decoded server-side and re-encoded with the timestamp-
-// normalizing AAC recipe. Windows Firefox also normalizes AAC because its
-// audio path is the strictest target; other browsers keep native AAC.
-func windowsWebAudioNormalizationQuirkV3(source SourceDescriptorV3, request StartRequestV3) (*AppliedQuirkV3, bool) {
-	codec := normalizeCodecV3(source.AudioCodec)
-	if !isWindowsWebV3(request) || codec == "" || (codec == audioCodecAACV3 && !isFirefoxWebV3(request)) {
-		return nil, false
-	}
-	quirk := AppliedQuirkV3{
-		ID:               QuirkWindowsWebAudioNormalizeV3,
-		RegistryRevision: DeviceQuirkRegistryRevisionV3,
-		Action:           "audio_only_transcode",
-		Reason:           "Windows web playback normalizes source audio to timestamp-corrected AAC while preserving copied video; Firefox also normalizes native AAC.",
-	}
-	return &quirk, true
-}
-
-// androidFirefoxWebAudioNormalizationQuirkV3 gives Firefox on Android the
-// timestamp-normalized AAC recipe for non-AAC source audio. The observed
-// mobile route crackles while directly decoding E-AC-3, but native AAC remains
-// unchanged unless the more specific Matroska AAC timing quirk applies.
-func androidFirefoxWebAudioNormalizationQuirkV3(source SourceDescriptorV3, request StartRequestV3) (*AppliedQuirkV3, bool) {
-	codec := normalizeCodecV3(source.AudioCodec)
-	if !isAndroidFirefoxWebV3(request) || codec == "" || codec == audioCodecAACV3 {
-		return nil, false
-	}
-	quirk := AppliedQuirkV3{
-		ID:               QuirkAndroidFirefoxWebAudioNormalizeV3,
-		RegistryRevision: DeviceQuirkRegistryRevisionV3,
-		Action:           "audio_only_transcode",
-		Reason:           "Firefox on Android normalizes non-AAC source audio to timestamp-corrected AAC stereo while preserving copied video.",
-	}
-	return &quirk, true
-}
-
-func webAudioNormalizationQuirkV3(source SourceDescriptorV3, request StartRequestV3) (*AppliedQuirkV3, bool) {
-	if quirk, ok := windowsWebAudioNormalizationQuirkV3(source, request); ok {
-		return quirk, true
-	}
-	return androidFirefoxWebAudioNormalizationQuirkV3(source, request)
-}
-
-func isWindowsWebV3(request StartRequestV3) bool {
-	device := request.ClientPlaybackContext.Device
-	if !strings.EqualFold(device.Platform, "web") {
-		return false
-	}
-	userAgent := strings.ToLower(strings.TrimSpace(device.PlatformDetails["user_agent"]))
-	return strings.Contains(userAgent, "windows nt")
-}
-
-func isAndroidFirefoxWebV3(request StartRequestV3) bool {
-	if !isFirefoxWebV3(request) {
-		return false
-	}
-	userAgent := strings.ToLower(strings.TrimSpace(request.ClientPlaybackContext.Device.PlatformDetails["user_agent"]))
-	return strings.Contains(userAgent, "android")
 }
 
 // firefoxMacOSHEVCResumeLeadingPictureDropV3 reports whether a progressive
@@ -220,15 +115,6 @@ func isFirefoxWebV3(request StartRequestV3) bool {
 	}
 	userAgent := strings.ToLower(strings.TrimSpace(device.PlatformDetails["user_agent"]))
 	return strings.Contains(userAgent, "firefox/") && !strings.Contains(userAgent, "seamonkey/")
-}
-
-func applyFirefoxHEVCOpenGOPQuirkV3(plan *PlanV3, source SourceDescriptorV3, request StartRequestV3) bool {
-	quirk, ok := firefoxHEVCOpenGOPQuirkV3(source, request)
-	if !ok {
-		return false
-	}
-	appendAppliedQuirkV3(plan, *quirk, "")
-	return true
 }
 
 func applyCopiedVideoQuirksV3(plan *PlanV3, source SourceDescriptorV3, request StartRequestV3, high10 *AppliedQuirkV3) {

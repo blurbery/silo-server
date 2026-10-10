@@ -2,10 +2,9 @@ package apiv2
 
 import (
 	"context"
+	"github.com/Silo-Server/silo-server/internal/jellycompat"
 	"strings"
 	"testing"
-
-	"github.com/Silo-Server/silo-server/internal/jellycompat"
 )
 
 type fakeAdminJellyfinStatus struct{ calls int }

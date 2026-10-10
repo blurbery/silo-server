@@ -69,12 +69,9 @@ type Claims struct {
 	// use it to strip dangling profile 7 RPUs. Absent in older tokens, which
 	// decodes as 0 (no strip — the pre-existing behavior).
 	DVProfile int `json:"dvp,omitempty"`
-	// RemuxDVMode freezes whether a remux preserves Dolby Vision or removes it
-	// for a validated HDR10/HLG/SDR base layer. Empty is legacy auto behavior.
+	// RemuxDVMode freezes whether a Profile 7 remux preserves or strips DV
+	// metadata. Empty is the legacy auto behavior for old tokens.
 	RemuxDVMode string `json:"dvm,omitempty"`
-	// DropInitialLeadingPictures enables the bounded HEVC open-GOP resume
-	// normalization selected by the signed server-side playback recipe.
-	DropInitialLeadingPictures bool `json:"dilp,omitempty"`
 	// RemuxResumeLeadingPictureDrop asks a seeked progressive remux to drop
 	// open-GOP leading pictures when the executing FFmpeg supports it. It is
 	// best effort, so a node that predates the claim serves the plain copy.
@@ -181,9 +178,6 @@ func (c *Claims) StartedAt() (time.Time, StartedAtSource) {
 
 // Sign creates a signed JWT string from the given claims.
 func Sign(c Claims, secret string, ttl time.Duration) (string, error) {
-	if secret == "" {
-		return "", fmt.Errorf("stream token secret is empty")
-	}
 	now := time.Now()
 	c.RegisteredClaims = jwt.RegisteredClaims{
 		ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
@@ -195,11 +189,8 @@ func Sign(c Claims, secret string, ttl time.Duration) (string, error) {
 
 // Verify parses and validates a stream token JWT string.
 func Verify(tokenString, secret string) (*Claims, error) {
-	if secret == "" {
-		return nil, fmt.Errorf("stream token secret is empty")
-	}
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (any, error) {
-		if token.Method != jwt.SigningMethodHS256 {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return []byte(secret), nil

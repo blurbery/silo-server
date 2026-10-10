@@ -87,9 +87,6 @@ func (h *PlaybackHandler) maybeQueueLazyPlaybackMarkers(
 	hasOnline := h.hasOnlineMarkerProviders()
 	shouldRunLocal := lazyEnabled && markers.ShouldRunLocal(mode)
 	shouldRunOnline := (mode == markers.ModeOnline || mode == markers.ModeBoth) && hasOnline
-	if shouldRunOnline && hasCompletePlaybackSkipMarkers(file) {
-		shouldRunOnline = false
-	}
 
 	if shouldRunOnline {
 		// Online providers work for any enabled library (movies and series alike).
@@ -212,12 +209,7 @@ func (h *PlaybackHandler) runLazyPlaybackMarkers(
 		onDemand := onlineMarkersOnDemand(ctx, h.SettingsRepo)
 		effective, overlaid, err := h.MarkerPopulation.Populate(ctx, file)
 		if err != nil {
-			slog.Warn("playback lazy markers: online fetch failed",
-				"session_id", sessionID,
-				"file_id", file.ID,
-				"episode_id", file.EpisodeID,
-				"mode", mode,
-				"error", err.Error())
+			slog.WarnContext(ctx, "playback marker lookup failed", "file_id", file.ID, "error", err)
 		}
 		if effective != nil {
 			file = effective
@@ -344,20 +336,6 @@ func (h *PlaybackHandler) notifyPlaybackMarkers(
 		"file_id", file.ID,
 		"episode_id", file.EpisodeID,
 		"mode", mode)
-}
-
-// hasCompletePlaybackSkipMarkers reports whether the two playback skip
-// segments supplied by online marker providers are already populated. A
-// partial online result must remain eligible: TheIntroDB can gain a missing
-// intro or credits marker after the first playback, and the next fresh
-// playback session is the inexpensive opportunity to fill it for every user.
-// Provider-side caching prevents repeated external requests for a recent miss.
-func hasCompletePlaybackSkipMarkers(file *models.MediaFile) bool {
-	if file == nil {
-		return false
-	}
-	return file.IntroStart != nil && file.IntroEnd != nil &&
-		file.CreditsStart != nil && file.CreditsEnd != nil
 }
 
 // hasAnyMarker reports whether the file has at least one populated marker

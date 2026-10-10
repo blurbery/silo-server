@@ -4,11 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/Silo-Server/silo-server/internal/autoscan"
 	"net/url"
 	"strings"
 	"testing"
-
-	"github.com/Silo-Server/silo-server/internal/autoscan"
 )
 
 type fakeAdminAutoscanAvailableSources struct {

@@ -4,16 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http/httptest"
-	"strings"
-	"testing"
-	"time"
-
 	"github.com/Silo-Server/silo-server/internal/catalog"
 	"github.com/Silo-Server/silo-server/internal/metadata"
 	"github.com/Silo-Server/silo-server/internal/models"
 	"github.com/Silo-Server/silo-server/internal/netguard"
 	"github.com/go-chi/chi/v5"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
 )
 
 type curationImageItems map[string]*models.MediaItem

@@ -8,8 +8,6 @@ import (
 	"strings"
 )
 
-const listAdminInvitationsOperation = "listAdminInvitations"
-
 const adminInvitationLifecycleRevokeOperation = "revokeAdminInvitation"
 const adminInvitationLifecycleGuestEmail = "fixture-guest@silo.example.test"
 
@@ -34,7 +32,7 @@ func AdminInvitationLifecycleAcceptance(catalogs []*Catalog) ([]*Catalog, error)
 		method, route, operation string
 		start, end               int
 	}{
-		{http.MethodGet, adminInvitationCreateLegacyPath, listAdminInvitationsOperation, 0, 6},
+		{http.MethodGet, adminInvitationCreateLegacyPath, "listAdminInvitations", 0, 6},
 		{http.MethodPost, adminInvitationCreateLegacyPath, adminInvitationRoleOperation, 6, 11},
 		{http.MethodPost, adminInvitationResendLegacyPath, adminInvitationEmailConflictResendOperation, 11, 14},
 		{http.MethodDelete, adminInvitationRevokeLegacyPath, adminInvitationLifecycleRevokeOperation, 14, 18},
@@ -58,7 +56,7 @@ func AdminInvitationLifecycleAcceptance(catalogs []*Catalog) ([]*Catalog, error)
 							// The fixture admin household has a PIN-locked
 							// profile, so a profile-less admin session is
 							// refused (critical v1 bridge fix).
-							principal.Class = decisionAdminPrincipal
+							principal.Class = "admin"
 							status = http.StatusForbidden
 							v2status = status
 						}

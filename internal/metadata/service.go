@@ -2723,21 +2723,26 @@ func (s *MetadataService) mergeAndPersist(
 
 	// Persist per-source ratings. The item row does not carry them, so the
 	// merge above saw no stored sources and passed every reported one through
-	// (or none, under a FieldRating lock). The stored rows are merged by the
-	// write instead: fill-empty keeps each source already stored, and
-	// replace-unlocked overwrites the sources this refresh reported. Identify
-	// replaces the whole set, even with an empty one, because it keeps the
-	// content_id while changing the title: a source only the previous match
-	// reported would otherwise stay on the item for good. Like the rating
-	// columns, they are provider-invariant and written for every language.
+	// (or none, under a FieldRating lock); the chain's provider order already
+	// picked one entry per source. The stored rows are merged by the write
+	// instead. A manual or scheduled refresh overwrites the sources this
+	// refresh reported: scores and vote counts keep moving after release, and
+	// discovery rows rank by the TMDB count. The enrichment-only bulk pass
+	// carries one provider's answer, so it only fills sources the item lacks
+	// and never overwrites the chain's choice. Identify replaces the whole set,
+	// even with an empty one, because it keeps the content_id while changing
+	// the title: a source only the previous match reported would otherwise
+	// stay on the item for good. Like the rating columns, they are
+	// provider-invariant and written for every language.
 	if s.ratingSourceRepo != nil && !isFieldLocked(locked, FieldRating) {
 		sources := itemRatingSourcesFromResult(contentID, accumulator.RatingSources)
+		replace := mergeMode == MergeReplaceUnlocked || (req.Mode == ModeScheduledRefresh && !req.enrichmentOnly)
 		var err error
 		switch {
 		case req.Mode == ModeIdentify:
 			err = s.ratingSourceRepo.Replace(ctx, contentID, sources)
 		case len(sources) > 0:
-			err = s.ratingSourceRepo.Upsert(ctx, contentID, sources, mergeMode == MergeReplaceUnlocked)
+			err = s.ratingSourceRepo.Upsert(ctx, contentID, sources, replace)
 		}
 		if err != nil {
 			slog.WarnContext(ctx, "metadata: failed to store rating sources", "component", "metadata", "content_id", contentID, "error", err)
@@ -2763,9 +2768,7 @@ func (s *MetadataService) mergeAndPersist(
 	// enrichment write carries no seasons or episodes and leaves them alone.
 	if contentType == "series" && !req.enrichmentOnly {
 		if len(seasons) > 0 || len(episodes) > 0 {
-			s.persistSeasonsAndEpisodes(
-				ctx, item, accumulator.ProviderIDs, canonicalLanguage, req.Language, seasons, episodes, mergeMode,
-			)
+			s.persistSeasonsAndEpisodes(ctx, item, accumulator.ProviderIDs, canonicalLanguage, req.Language, seasons, episodes, mergeMode)
 		}
 		if err := s.SynthesizeFallbackEpisodes(ctx, contentID); err != nil {
 			slog.WarnContext(ctx, "metadata: failed to synthesize fallback series structure", "component", "metadata",
@@ -4938,10 +4941,8 @@ func (s *MetadataService) persistSeasonAndEpisodeRows(
 	}
 
 	type preparedSeasonWrite struct {
-		model         *models.Season
-		provider      SeasonResult
-		existing      *models.Season
-		artworkLocked bool
+		model    *models.Season
+		provider SeasonResult
 	}
 	type preparedEpisodeWrite struct {
 		model    *models.Episode
@@ -5013,24 +5014,23 @@ func (s *MetadataService) persistSeasonAndEpisodeRows(
 		if existingSeason != nil && isCanonicalWrite {
 			mergedSeason := seasonResultFromModel(existingSeason)
 			MergeSeasonResult(&providerSeason, &mergedSeason, mergeMode)
-			if imagesLocked && (existingSeason.PosterPath != "" || existingSeason.PosterSourcePath != "") {
-				mergedSeason.PosterPath = existingSeason.PosterPath
-				mergedSeason.PosterSourcePath = existingSeason.PosterSourcePath
-				mergedSeason.PosterThumbhash = existingSeason.PosterThumbhash
-			} else {
-				// preserveCachedArtwork sees the raw provider path so a local
-				// file:// source still routes into *_source_path here.
-				nextPath, nextThumbhash, nextSourcePath := preserveCachedArtwork(
-					season.PosterPath,
-					season.PosterThumbhash,
-					existingSeason.PosterPath,
-					existingSeason.PosterSourcePath,
-					existingSeason.PosterThumbhash,
-				)
-				mergedSeason.PosterPath = nextPath
-				mergedSeason.PosterThumbhash = nextThumbhash
-				mergedSeason.PosterSourcePath = nextSourcePath
+			// preserveCachedArtwork sees the raw provider path so a local
+			// file:// source still routes into *_source_path here.
+			nextPath, nextThumbhash, nextSourcePath := preserveCachedArtwork(
+				season.PosterPath,
+				season.PosterThumbhash,
+				existingSeason.PosterPath,
+				existingSeason.PosterSourcePath,
+				existingSeason.PosterThumbhash,
+			)
+			if imagesLocked && existingSeason.PosterPath != "" {
+				nextPath = existingSeason.PosterPath
+				nextThumbhash = existingSeason.PosterThumbhash
+				nextSourcePath = existingSeason.PosterSourcePath
 			}
+			mergedSeason.PosterPath = nextPath
+			mergedSeason.PosterThumbhash = nextThumbhash
+			mergedSeason.PosterSourcePath = nextSourcePath
 			providerSeason = mergedSeason
 		}
 		dbSeason := &models.Season{
@@ -5073,16 +5073,13 @@ func (s *MetadataService) persistSeasonAndEpisodeRows(
 		if dbSeason.Title == "" {
 			dbSeason.Title = fallbackSeasonTitle(dbSeason.SeasonNumber)
 		}
-		return preparedSeasonWrite{model: dbSeason, provider: providerSeason, existing: existingSeason}, true
+		return preparedSeasonWrite{model: dbSeason, provider: providerSeason}, true
 	}
 
 	finishExplicitSeasonSequential := func(write preparedSeasonWrite) {
 		dbSeason := write.model
 		seasonIDs[dbSeason.SeasonNumber] = dbSeason.ContentID
-		if !imagesLocked || write.existing == nil ||
-			(write.existing.PosterPath == "" && write.existing.PosterSourcePath == "") {
-			addSeasonImageJob(dbSeason)
-		}
+		addSeasonImageJob(dbSeason)
 		if !isCanonicalWrite && s.seasonLocalizationRepo != nil {
 			existingLoc, locErr := s.seasonLocalizationRepo.Get(ctx, dbSeason.ContentID, language)
 			if locErr != nil {
@@ -5179,10 +5176,7 @@ func (s *MetadataService) persistSeasonAndEpisodeRows(
 		}
 
 		for i, write := range writes {
-			if !imagesLocked || write.existing == nil ||
-				(write.existing.PosterPath == "" && write.existing.PosterSourcePath == "") {
-				addSeasonImageJob(write.model)
-			}
+			addSeasonImageJob(write.model)
 			if localizationPersisted[i] {
 				addSeasonLocalizationImageJob(write.model, localizations[i])
 			}
@@ -5263,7 +5257,6 @@ func (s *MetadataService) persistSeasonAndEpisodeRows(
 				DefaultMetadataLanguage: canonicalLanguage,
 				MetadataSource:          "provider",
 			}
-			seasonArtworkLocked := false
 			if existingSeason, err := loadSeason(ep.SeasonNumber, false); err == nil && existingSeason != nil {
 				seasonModel.ContentID = existingSeason.ContentID
 				seasonModel.DefaultMetadataLanguage = existingSeason.DefaultMetadataLanguage
@@ -5279,12 +5272,6 @@ func (s *MetadataService) persistSeasonAndEpisodeRows(
 						mergedSeason.PosterPath,
 						"",
 					)
-					if imagesLocked && (existingSeason.PosterPath != "" || existingSeason.PosterSourcePath != "") {
-						mergedSeason.PosterPath = existingSeason.PosterPath
-						mergedSeason.PosterSourcePath = existingSeason.PosterSourcePath
-						mergedSeason.PosterThumbhash = existingSeason.PosterThumbhash
-						seasonArtworkLocked = true
-					}
 					seasonModel.Title = mergedSeason.Title
 					seasonModel.Overview = mergedSeason.Overview
 					seasonModel.PosterPath = mergedSeason.PosterPath
@@ -5306,16 +5293,14 @@ func (s *MetadataService) persistSeasonAndEpisodeRows(
 				}
 				seasonModel.ContentID = sid
 			}
-			write := preparedSeasonWrite{model: seasonModel, artworkLocked: seasonArtworkLocked}
+			write := preparedSeasonWrite{model: seasonModel}
 			writes = append(writes, write)
 			modelsToPersist = append(modelsToPersist, seasonModel)
 		}
 
 		finishImplicitSeason := func(write preparedSeasonWrite) {
 			seasonIDs[write.model.SeasonNumber] = write.model.ContentID
-			if !write.artworkLocked {
-				addSeasonImageJob(write.model)
-			}
+			addSeasonImageJob(write.model)
 		}
 		upsertImplicitOne := func(write preparedSeasonWrite) error {
 			if err := s.seasonRepo.Upsert(ctx, write.model); err != nil {

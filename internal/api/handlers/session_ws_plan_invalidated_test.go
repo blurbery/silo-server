@@ -38,8 +38,8 @@ func TestRealtimeRejectedPlanInvalidationStopsSession(t *testing.T) {
 	}
 	handler.rememberRealtimeCommand("cmd-1", session.ID, playback.CommandPlanInvalidated)
 
-	if _, err := handler.handleRealtimeClientMessage(session.ID,
-		realtimeResultMessage(t, session.ID, "cmd-1", playback.RealtimeResultStatusRejected), nil); err != nil {
+	if err := handler.handleRealtimeClientMessage(session.ID,
+		realtimeResultMessage(t, session.ID, "cmd-1", playback.RealtimeResultStatusRejected)); err != nil {
 		t.Fatalf("handleRealtimeClientMessage: %v", err)
 	}
 
@@ -62,8 +62,8 @@ func TestRealtimeCompletedPlanInvalidationKeepsSession(t *testing.T) {
 	}
 	handler.rememberRealtimeCommand("cmd-1", session.ID, playback.CommandPlanInvalidated)
 
-	if _, err := handler.handleRealtimeClientMessage(session.ID,
-		realtimeResultMessage(t, session.ID, "cmd-1", playback.RealtimeResultStatusCompleted), nil); err != nil {
+	if err := handler.handleRealtimeClientMessage(session.ID,
+		realtimeResultMessage(t, session.ID, "cmd-1", playback.RealtimeResultStatusCompleted)); err != nil {
 		t.Fatalf("handleRealtimeClientMessage: %v", err)
 	}
 
@@ -97,8 +97,8 @@ func TestRealtimeResultForOtherSessionCommandLeavesTrackerArmed(t *testing.T) {
 	fired := make(chan struct{})
 	handler.CommandTracker.Track("cmd-1", 20*time.Millisecond, func() { close(fired) })
 
-	_, err = handler.handleRealtimeClientMessage(sessionA.ID,
-		realtimeResultMessage(t, sessionA.ID, "cmd-1", playback.RealtimeResultStatusCompleted), nil)
+	err = handler.handleRealtimeClientMessage(sessionA.ID,
+		realtimeResultMessage(t, sessionA.ID, "cmd-1", playback.RealtimeResultStatusCompleted))
 	if !errors.Is(err, playback.ErrInvalidRealtimePayload) {
 		t.Fatalf("handleRealtimeClientMessage: %v, want ErrInvalidRealtimePayload", err)
 	}

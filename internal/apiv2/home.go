@@ -261,7 +261,7 @@ func calendarQuery(in *CalendarInput) (handlers.CalendarQuery, *Problem) {
 	}
 	q := handlers.CalendarQuery{Start: start, End: end, Filter: in.Filter, Location: time.UTC}
 	if q.Filter == "" {
-		q.Filter = adminPlaybackHistoryCompletedAll
+		q.Filter = "all"
 	}
 	if in.Timezone != "" {
 		loc, err := time.LoadLocation(in.Timezone)

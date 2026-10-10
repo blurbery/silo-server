@@ -824,6 +824,9 @@ func main() {
 	if *migrateOnly {
 		migCtx, migCancel := database.MigrationContext(ctx)
 		migErr := database.RunMigrations(migCtx, pool, migrations.FS, "sql")
+		if migErr == nil {
+			migErr = ensureAuditDetailIndexes(migCtx, pool)
+		}
 		migCancel()
 		if migErr != nil {
 			log.Fatalf("failed to run migrations: %v", migErr)
@@ -841,7 +844,11 @@ func main() {
 	isPrimaryNode := bc.Mode == "integrated" || bc.Mode == "api" || bc.Mode == ""
 	if isPrimaryNode {
 		migCtx, migCancel := database.MigrationContext(ctx)
-		if migErr := database.RunMigrations(migCtx, pool, migrations.FS, "sql"); migErr != nil {
+		migErr := database.RunMigrations(migCtx, pool, migrations.FS, "sql")
+		if migErr == nil {
+			migErr = ensureAuditDetailIndexes(migCtx, pool)
+		}
+		if migErr != nil {
 			migCancel()
 			log.Fatalf("failed to run migrations: %v", migErr)
 		}
@@ -2913,6 +2920,11 @@ func main() {
 		}
 		taskMgr.Register(tasks.NewCleanupOrphanedMediaItemsTask(catalog.NewOrphanedProvisionalCleaner(deps.DB)))
 		taskMgr.Register(tasks.NewBackfillMediaItemAliasesTask(catalog.NewItemAliasRepository(deps.DB)))
+		// The backfill reads media files, so it runs only where the scanner
+		// does: those processes have the libraries mounted.
+		if deps.FileRepo != nil {
+			taskMgr.Register(tasks.NewBackfillMatroskaTrackNumbersTask(deps.DB, scanner.NewMatroskaTrackBackfiller(deps.FileRepo)))
+		}
 		taskMgr.Register(tasks.NewRefreshSeriesAirDatesTask(catalog.NewEpisodeRepository(deps.DB)))
 		if deps.Blobs.Assets != nil {
 			taskMgr.Register(tasks.NewCleanupArtworkRevisionsTask(
@@ -3033,6 +3045,15 @@ func main() {
 					}
 				}
 				_ = deps.EventsHub.PublishJSON(ctx, evt.ChannelDownloadPreparations, event.Name, payload, evt.PublishOptions{AdminOnly: true})
+			})
+			if deps.NodeRepo != nil {
+				artifactMgr.SetStorageNodes(deps.NodeRepo)
+			}
+			artifactMgr.SetStorageNotifier(func(ctx context.Context) {
+				if deps.EventsHub == nil {
+					return
+				}
+				_ = deps.EventsHub.PublishJSON(ctx, evt.ChannelDownloadPreparations, "download_storage.changed", map[string]any{}, evt.PublishOptions{AdminOnly: true})
 			})
 			encodeTask := tasks.NewEncodeDownloadArtifactsTask(artifactMgr)
 			artifactMgr.SetKick(func() { _ = taskMgr.RunTask(appCtx, encodeTask.Key()) })
@@ -4537,7 +4558,7 @@ func reloadMarkerPluginProviders(
 				}
 				refreshedRuntimes[installation.ID] = true
 			}
-			pluginProvider, err := markers.NewPluginProvider(markers.PluginProviderOptions{
+			provider, err := markers.NewPluginProvider(markers.PluginProviderOptions{
 				InstallationID:      installation.ID,
 				CapabilityID:        capability.ID,
 				DisplayName:         firstNonEmptyMarkerText(descriptor.GetDisplayName(), capability.ID),
@@ -4547,10 +4568,6 @@ func reloadMarkerPluginProviders(
 			}, resolver)
 			if err != nil {
 				return err
-			}
-			var provider markers.Provider = pluginProvider
-			if !markers.PluginSupportsContributionFromMetadata(metadataMap) {
-				provider = markers.NewReadOnlyPluginProvider(pluginProvider)
 			}
 			providers = append(providers, provider)
 
@@ -4721,4 +4738,9 @@ type audiobooksSettingsAdapter struct {
 
 func (a *audiobooksSettingsAdapter) GetString(ctx context.Context, key string) (string, error) {
 	return a.repo.Get(ctx, key)
+}
+
+func ensureAuditDetailIndexes(ctx context.Context, pool *pgxpool.Pool) error {
+	return partman.NewManager(pool, "activity_log", partman.Weekly, 2).EnsureIndexes(ctx,
+		"activity_log_action_time_idx", "activity_log_target_time_idx")
 }

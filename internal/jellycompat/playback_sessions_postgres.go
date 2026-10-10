@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -88,7 +87,7 @@ func acquireNegotiatedSessionAdvisoryLock(
 	// process then takes the versioned bigint key in the same order. Once this
 	// bridge has shipped for a full release, a later release can remove the
 	// legacy acquisition while still coordinating with bridged processes.
-	legacyScope := strings.ToValidUTF8(negotiatedPlaybackScope(compatToken, clientDeviceID, routeItemID), "\uFFFD")
+	legacyScope := negotiatedPlaybackScope(compatToken, clientDeviceID, routeItemID)
 	if _, err := executor.Exec(ctx, negotiatedSessionLegacyAdvisoryLockQuery, legacyScope); err != nil {
 		return fmt.Errorf("acquiring legacy negotiated playback session advisory lock: %w", err)
 	}

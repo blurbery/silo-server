@@ -21,7 +21,6 @@ type PostgresUserStore struct {
 var _ userstore.UserStore = (*PostgresUserStore)(nil)
 var _ userstore.DeviceRegistry = (*PostgresUserStore)(nil)
 var _ userstore.WatchedBatchWriter = (*PostgresUserStore)(nil)
-var _ userstore.SupersededEpisodeProgressStore = (*PostgresUserStore)(nil)
 var _ userstore.SectionOverrideEnumerator = (*PostgresUserStore)(nil)
 
 // newStore creates a PostgresUserStore scoped to a user.

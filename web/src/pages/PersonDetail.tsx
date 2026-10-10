@@ -5,7 +5,7 @@ import { Pencil, RefreshCw } from "lucide-react";
 
 import { getPerson } from "@/api/v2/people";
 import { isNotFoundProblem } from "@/api/v2/request";
-import { createEmptyQueryDefinition } from "@/api/types";
+import { createEmptyQueryDefinition, type Person } from "@/api/types";
 import type { CatalogSearchState } from "@/pages/catalogSearchParams";
 import EditPersonDialog from "@/components/EditPersonDialog";
 import ItemGrid from "@/components/ItemGrid";
@@ -33,6 +33,7 @@ export default function PersonDetail() {
   const queryClient = useQueryClient();
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [editOpen, setEditOpen] = useState(false);
+  const autoRefreshRequestedPersonIdRef = useRef<string | null>(null);
   const { user } = useAuth();
   const isAdmin = useIsActingAdmin();
   const refreshMutation = useRefreshPerson(id, isAdmin);
@@ -59,15 +60,25 @@ export default function PersonDetail() {
 
   useDocumentTitle(personNotFound ? "Not found" : (person?.name ?? "Person"));
 
-  // Reading the person queues enrichment on the server when it is due.
-  // Automatic POSTs here would bypass that cooldown, especially for admins.
   const hasPerson = !!person;
   useEffect(() => {
+    // A person read can queue a refresh even when all metadata is already present.
     if (id && hasPerson) {
       void invalidatePersonItemDetails(queryClient, id);
       observePersonRefresh(queryClient, id);
     }
   }, [id, hasPerson, queryClient]);
+
+  useEffect(() => {
+    if (!person || !user || !isPersonMetadataIncomplete(person)) {
+      return;
+    }
+    if (autoRefreshRequestedPersonIdRef.current === person.id || refreshMutation.isPending) {
+      return;
+    }
+    autoRefreshRequestedPersonIdRef.current = person.id;
+    refreshMutation.mutate();
+  }, [person, refreshMutation, user]);
 
   const catalogState: CatalogSearchState = useMemo(
     () => ({
@@ -253,6 +264,10 @@ export default function PersonDetail() {
       ) : null}
     </div>
   );
+}
+
+function isPersonMetadataIncomplete(person: Person) {
+  return !person.bio || !person.photo_url || !person.birth_date;
 }
 
 function PersonDetailSkeleton() {

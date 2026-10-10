@@ -700,7 +700,6 @@ func (m *TranscodeManager) reconstructSession(ctx context.Context, sessionID str
 		TranscodeAudio:                card.TranscodeAudio,
 		RemuxDVMode:                   card.RemuxDVMode,
 		RemuxResumeLeadingPictureDrop: card.RemuxResumeLeadingPictureDrop,
-		DropInitialLeadingPictures:    card.DropInitialLeadingPictures,
 		TargetResolution:              card.TargetResolution,
 		TargetVideoCodec:              card.TargetCodecVideo,
 		TargetAudioCodec:              card.TargetCodecAudio,

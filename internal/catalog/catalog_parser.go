@@ -478,7 +478,7 @@ func parseCatalogMediaScope(raw string) string {
 
 func defaultCatalogQuerySort(searchQuery string) QuerySort {
 	if strings.TrimSpace(searchQuery) != "" {
-		return QuerySort{Field: relevanceSortField, Order: descendingSortOrder}
+		return QuerySort{Field: "relevance", Order: "desc"}
 	}
 	return QuerySort{Field: "title", Order: "asc"}
 }
@@ -487,7 +487,7 @@ func normalizeExplicitCatalogSort(field, order string) QuerySort {
 	normalizedField := strings.ToLower(strings.TrimSpace(field))
 	normalizedOrder := strings.ToLower(strings.TrimSpace(order))
 
-	if normalizedField == relevanceSortField {
+	if normalizedField == "relevance" {
 		if normalizedOrder == "" {
 			normalizedOrder = "desc"
 		}
@@ -524,7 +524,7 @@ func parseCatalogScalar(raw string) any {
 // a persisted collection sort. Relevance is meaningful only for a text query.
 func (r CatalogRequest) ValidateQueryDefinition() error {
 	q := r.Query
-	if NormalizeQuerySort(q.Sort).Field == relevanceSortField {
+	if NormalizeQuerySort(q.Sort).Field == "relevance" {
 		if r.Source != CatalogSourceQuery || strings.TrimSpace(r.SearchQuery) == "" {
 			return fmt.Errorf("relevance sort requires query source and q")
 		}

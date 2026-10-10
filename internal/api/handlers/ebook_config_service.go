@@ -2,15 +2,12 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/Silo-Server/silo-server/internal/catalog"
-)
-
-const (
-	ebookConfigField = "config"
 )
 
 // EbookConfigGuard runs while the current configuration row is locked. Nil
@@ -30,7 +27,7 @@ func (h *EbookReaderHandler) ReaderConfig(ctx context.Context, userID int, profi
 	}
 	config, err := h.ConfigStore.Get(ctx, userID, profileID, contentID)
 	if err != nil {
-		return nil, &APIError{Status: http.StatusInternalServerError, Code: autoscanDeliveryInternalError, Message: "Failed to load ebook reader config"}
+		return nil, &APIError{Status: http.StatusInternalServerError, Code: "internal_error", Message: "Failed to load ebook reader config"}
 	}
 	return config, nil
 }
@@ -40,7 +37,7 @@ func (h *EbookReaderHandler) SaveReaderConfig(ctx context.Context, config EbookR
 		return nil, &APIError{Status: http.StatusServiceUnavailable, Message: "Ebook reader config is not configured"}
 	}
 	if !jsonObject(config.Config) {
-		return nil, &APIError{Status: http.StatusBadRequest, Code: autoscanDeliveryBadRequest, Field: ebookConfigField, Message: "config must be a JSON object"}
+		return nil, &APIError{Status: http.StatusBadRequest, Code: "bad_request", Field: "config", Message: "config must be a JSON object"}
 	}
 	if err := h.FileAuthorizer.ItemAccess.EnsureAccessible(ctx, config.ContentID, filter); err != nil {
 		return nil, err
@@ -54,7 +51,7 @@ func (h *EbookReaderHandler) SaveReaderConfig(ctx context.Context, config EbookR
 	}
 	config.UpdatedAt = time.Now().UTC()
 	if err := h.ConfigStore.Upsert(ctx, config); err != nil {
-		return nil, &APIError{Status: http.StatusInternalServerError, Code: autoscanDeliveryInternalError, Message: "Failed to save ebook reader config"}
+		return nil, &APIError{Status: http.StatusInternalServerError, Code: "internal_error", Message: "Failed to save ebook reader config"}
 	}
 	return &config, nil
 }
@@ -92,7 +89,7 @@ func (s *PGEbookReaderConfigStore) ReplaceGuarded(ctx context.Context, config Eb
 	}
 	// Use the database-returned timestamp/JSON representation for the next tag.
 	err = tx.QueryRow(ctx, `UPDATE ebook_reader_config SET config=$4::jsonb,updated_at=clock_timestamp()
- WHERE user_id=$1 AND profile_id=$2 AND content_id=$3 RETURNING config,updated_at`, config.UserID, config.ProfileID, config.ContentID, config.Config).Scan(&config.Config, &config.UpdatedAt)
+ WHERE user_id=$1 AND profile_id=$2 AND content_id=$3 RETURNING config,updated_at`, config.UserID, config.ProfileID, config.ContentID, json.RawMessage(config.Config)).Scan(&config.Config, &config.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

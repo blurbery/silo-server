@@ -12,8 +12,6 @@ import (
 	"sync"
 )
 
-const queryParameterLocation = "query"
-
 const bindingAPIKeyPrincipal = "api_key"
 const capturedIfMatch = "If-Match"
 const MaxV2Exchanges = 16
@@ -71,7 +69,7 @@ func ValidateV2Bindings(step V2Step) error {
 		for _, op := range methods {
 			if op.OperationID == step.OperationID {
 				for _, p := range op.Parameters {
-					if p.In == queryParameterLocation && p.Schema.Type == "string" {
+					if p.In == "query" && p.Schema.Type == "string" {
 						allowed[p.Name] = true
 					}
 				}

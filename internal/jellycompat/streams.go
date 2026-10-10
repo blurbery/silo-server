@@ -147,8 +147,6 @@ func (h *PlaybackHandler) requireCompatChildHLSRoute(w http.ResponseWriter, play
 // the near-head follow-up segments arrive quickly enough for browser playback.
 const (
 	compatSegmentDuration      = 2
-	transcodeUnavailableCode   = "TranscodeUnavailable"
-	transcodeUnsupportedCode   = "TranscodeUnsupported"
 	compatHLSPathSegment       = "hls"
 	compatAudioV2PathSegment   = "audio-v2"
 	compatRemuxV1PathSegment   = "remux-v1"
@@ -1051,16 +1049,16 @@ func writeCompatTranscodeError(w http.ResponseWriter, err error) {
 		errors.Is(err, playback.ErrToneMapSourceValidationUnavailable),
 		errors.Is(err, playback.ErrToneMapExecutorUnavailable):
 		slog.Warn("compat transcode unavailable", "component", "jellycompat", "error", err)
-		writeError(w, http.StatusServiceUnavailable, transcodeUnavailableCode, "Transcode is temporarily unavailable")
+		writeError(w, http.StatusServiceUnavailable, "TranscodeUnavailable", "Transcode is temporarily unavailable")
 	case errors.Is(err, tonemap.ErrSourceRevisionChanged):
 		slog.Warn("compat transcode source changed", "component", "jellycompat", "error", err)
-		writeError(w, http.StatusUnsupportedMediaType, transcodeUnsupportedCode, "The media source changed; refresh playback information")
+		writeError(w, http.StatusUnsupportedMediaType, "TranscodeUnsupported", "The media source changed; refresh playback information")
 	case errors.Is(err, tonemap.ErrSourcePreflightRejected):
-		writeError(w, http.StatusUnsupportedMediaType, transcodeUnsupportedCode, "The media source is unsupported by the selected tone-map executor")
+		writeError(w, http.StatusUnsupportedMediaType, "TranscodeUnsupported", "The media source is unsupported by the selected tone-map executor")
 	case errors.Is(err, errTranscode4KDisallowed):
 		writeError(w, http.StatusForbidden, "Forbidden", "4K video transcoding is disabled on this server")
 	case errors.Is(err, errHDRTranscodeUnsupported):
-		writeError(w, http.StatusUnsupportedMediaType, transcodeUnsupportedCode, err.Error())
+		writeError(w, http.StatusUnsupportedMediaType, "TranscodeUnsupported", err.Error())
 	case errors.Is(err, errRemoteTranscodeStartFailed), errors.Is(err, errRemoteSoftwareToneMapStartFailed):
 		writeError(w, http.StatusBadGateway, "TranscodeStartFailed", "No remote transcode executor could start the stream")
 	case errors.Is(err, playback.ErrManifestNotReady):
@@ -1512,15 +1510,15 @@ func (h *PlaybackHandler) prepareCompatSegmentRecipe(
 func hlsSegmentErrorResponse(err error) (status int, code, message string) {
 	switch {
 	case errors.Is(err, tonemap.ErrSourceRevisionChanged):
-		return http.StatusUnsupportedMediaType, transcodeUnsupportedCode, "The media source changed; refresh playback information"
+		return http.StatusUnsupportedMediaType, "TranscodeUnsupported", "The media source changed; refresh playback information"
 	case errors.Is(err, playback.ErrToneMapSourceValidationUnavailable):
-		return http.StatusServiceUnavailable, transcodeUnavailableCode, "Transcode is temporarily unavailable"
+		return http.StatusServiceUnavailable, "TranscodeUnavailable", "Transcode is temporarily unavailable"
 	case errors.Is(err, playback.ErrToneMapExecutorUnavailable):
-		return http.StatusServiceUnavailable, transcodeUnavailableCode, "Transcode is temporarily unavailable"
+		return http.StatusServiceUnavailable, "TranscodeUnavailable", "Transcode is temporarily unavailable"
 	case errors.Is(err, playback.ErrManifestNotReady):
 		return http.StatusServiceUnavailable, "NotReady", "Transcode playlist not ready"
 	case errors.Is(err, tonemap.ErrSourcePreflightRejected):
-		return http.StatusUnsupportedMediaType, transcodeUnsupportedCode, "The media source is unsupported by the selected tone-map executor"
+		return http.StatusUnsupportedMediaType, "TranscodeUnsupported", "The media source is unsupported by the selected tone-map executor"
 	case errors.Is(err, playback.ErrSegmentNotFound), errors.Is(err, playback.ErrTranscodeFailed):
 		return http.StatusNotFound, "NotFound", "Segment not found"
 	default:
@@ -2959,9 +2957,6 @@ func (h *PlaybackHandler) ensureTranscodeSessionWithToneMapMode(
 	if compatHLSCopiesVideo(source) {
 		opts.TargetCodecVideo = compatCopyCodec
 		opts.VideoSampleEntry, opts.VideoBitstreamFilter = compatCopyVideoRecipe(source, file.PrimaryDVProfile())
-		if opts.VideoSampleEntry == playback.VideoSampleEntryDVH1 {
-			opts.RemuxDVMode = playback.RemuxDVPreserveV3
-		}
 		opts.CopyVideoMPEGTS = source.HLSRemuxMPEGTS
 	}
 	if !compatHLSTranscodesAudio(source) {

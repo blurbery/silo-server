@@ -19,8 +19,6 @@ import (
 // not describe a playable primary video stream.
 var ErrPrimaryVideoNotFound = errors.New("primary video stream not found")
 
-const ffprobeExecutable = "ffprobe"
-
 // ScalarString accepts FFprobe fields emitted as either JSON strings or
 // numbers depending on codec and container details.
 type ScalarString string
@@ -154,13 +152,13 @@ func ProbePrimaryVideoTrack(ctx context.Context, ffprobePath, filePath string) (
 func FFprobePathFromFFmpeg(ffmpegPath string) string {
 	ffmpegPath = strings.TrimSpace(ffmpegPath)
 	if ffmpegPath == "" {
-		return ffprobeExecutable
+		return "ffprobe"
 	}
 	base := filepath.Base(ffmpegPath)
 	if i := strings.LastIndex(strings.ToLower(base), "ffmpeg"); i >= 0 {
 		return filepath.Join(filepath.Dir(ffmpegPath), base[:i]+"ffprobe"+base[i+len("ffmpeg"):])
 	}
-	return ffprobeExecutable
+	return "ffprobe"
 }
 
 // IsPrimaryVideoStream excludes attached cover art from playable video facts.

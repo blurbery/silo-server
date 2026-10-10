@@ -24,13 +24,10 @@ func readOverlayConfig(t *testing.T, handler *SettingsHandler) OverlayConfigView
 	return response
 }
 
-func TestGetOverlayConfigIncludesQuickActionDefaultsAndDisabledWebWatchedIndicator(t *testing.T) {
+func TestGetOverlayConfigIncludesQuickActionDefaults(t *testing.T) {
 	response := readOverlayConfig(t, NewSettingsHandler(nil))
 	if !response.Enabled {
 		t.Fatal("overlays enabled = false, want true")
-	}
-	if response.WatchedIndicator != "none" {
-		t.Fatalf("watched indicator = %q, want none", response.WatchedIndicator)
 	}
 	if response.QuickActionsEnabled {
 		t.Fatal("card quick actions enabled = true, want false")
@@ -40,14 +37,13 @@ func TestGetOverlayConfigIncludesQuickActionDefaultsAndDisabledWebWatchedIndicat
 	}
 }
 
-func TestGetOverlayConfigIgnoresStaleWebWatchedIndicatorSetting(t *testing.T) {
+func TestGetOverlayConfigIncludesQuickActionAdminDefaults(t *testing.T) {
 	handler := NewSettingsHandler(nil)
 	handler.SetServerSettings(&fakeServerSettingsStore{values: map[string]string{
 		"overlays.enabled":                    "false",
 		"defaults.card_overlays":              `{"preset":"classic"}`,
 		"defaults.card_quick_actions_enabled": "false",
 		"defaults.card_quick_actions":         "favorites",
-		"ui.web_watched_indicator":            "eye",
 	}})
 
 	response := readOverlayConfig(t, handler)
@@ -56,9 +52,6 @@ func TestGetOverlayConfigIgnoresStaleWebWatchedIndicatorSetting(t *testing.T) {
 	}
 	if response.Defaults != `{"preset":"classic"}` {
 		t.Fatalf("defaults = %q", response.Defaults)
-	}
-	if response.WatchedIndicator != "none" {
-		t.Fatalf("watched indicator = %q, want none", response.WatchedIndicator)
 	}
 	if response.QuickActionsEnabled {
 		t.Fatal("card quick actions enabled = true, want false")
@@ -78,18 +71,6 @@ func TestGetOverlayConfigEnablesQuickActionsWhenDefaultStoredTrue(t *testing.T) 
 	if !response.QuickActionsEnabled {
 		t.Fatal("card quick actions enabled = false, want true")
 	}
-	if response.QuickActionsDefault != "both" {
-		t.Fatalf("card quick actions default = %q, want both", response.QuickActionsDefault)
-	}
-}
-
-func TestGetOverlayConfigRejectsInvalidQuickActionMode(t *testing.T) {
-	handler := NewSettingsHandler(nil)
-	handler.SetServerSettings(&fakeServerSettingsStore{values: map[string]string{
-		"defaults.card_quick_actions": "invalid",
-	}})
-
-	response := readOverlayConfig(t, handler)
 	if response.QuickActionsDefault != "both" {
 		t.Fatalf("card quick actions default = %q, want both", response.QuickActionsDefault)
 	}
