@@ -5973,6 +5973,12 @@ func (s *MetadataService) linkSeriesFilesToEpisodesWithOptions(ctx context.Conte
 		}
 	}
 
+	// Ambiguous dates are reported once per series on each pass: the same
+	// unlinked files come back every pass until their metadata or names change.
+	ambiguousFiles := 0
+	ambiguousAirDates := make(map[string]struct{})
+	var exampleAmbiguous *models.MediaFile
+	exampleAmbiguousAirDate := ""
 	for _, file := range files {
 		hint, ok := hints[file.ID]
 		if !ok {
@@ -5984,10 +5990,15 @@ func (s *MetadataService) linkSeriesFilesToEpisodesWithOptions(ctx context.Conte
 		episodeNum := hint.episodeNum
 		if hint.airDate != "" {
 			candidates := episodesByAirDate[hint.airDate]
-			selected, ok := selectAirDateEpisodeCandidate(candidates, seriesItem)
+			selected, ok := selectAirDateEpisodeCandidate(candidates, seriesItem, hint)
 			if !ok {
 				if len(candidates) > 1 {
-					slog.WarnContext(ctx, "metadata: skipped ambiguous air-date episode link", "component", "metadata",
+					ambiguousFiles++
+					ambiguousAirDates[hint.airDate] = struct{}{}
+					if exampleAmbiguous == nil {
+						exampleAmbiguous, exampleAmbiguousAirDate = file, hint.airDate
+					}
+					slog.DebugContext(ctx, "metadata: skipped ambiguous air-date episode link", "component", "metadata",
 						"series_id", seriesID,
 						"file_id", file.ID,
 						"file_path", file.FilePath,
@@ -6034,26 +6045,88 @@ func (s *MetadataService) linkSeriesFilesToEpisodesWithOptions(ctx context.Conte
 				"error", err)
 		}
 	}
+	if ambiguousFiles > 0 {
+		slog.WarnContext(ctx, "metadata: skipped ambiguous air-date episode links", "component", "metadata",
+			"series_id", seriesID,
+			"files", ambiguousFiles,
+			"air_dates", len(ambiguousAirDates),
+			"example_file_id", exampleAmbiguous.ID,
+			"example_air_date", exampleAmbiguousAirDate)
+	}
 	return nil
 }
 
-func selectAirDateEpisodeCandidate(candidates []*models.Episode, seriesItem *models.MediaItem) (*models.Episode, bool) {
-	if len(candidates) == 0 {
+// selectAirDateEpisodeCandidate picks the episode a by-date file belongs to
+// among the series' episodes that aired that day. Each rule narrows the
+// candidates only when it keeps at least one, so a rule that matches none of
+// them never rules out the rest: the series' own provider numbering, the
+// episode title in the filename, the file's season folder, and finally
+// regular episodes over same-day specials.
+func selectAirDateEpisodeCandidate(candidates []*models.Episode, seriesItem *models.MediaItem, hint episodeLinkHint) (*models.Episode, bool) {
+	remaining := make([]*models.Episode, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate != nil {
+			remaining = append(remaining, candidate)
+		}
+	}
+	// narrow reports false when the rule matched none of several candidates.
+	narrow := func(keep func(*models.Episode) bool) bool {
+		if len(remaining) < 2 {
+			return true
+		}
+		kept := make([]*models.Episode, 0, len(remaining))
+		for _, candidate := range remaining {
+			if keep(candidate) {
+				kept = append(kept, candidate)
+			}
+		}
+		if len(kept) == 0 {
+			return false
+		}
+		remaining = kept
+		return true
+	}
+
+	for _, provider := range preferredEpisodeProviders(seriesItem) {
+		if len(remaining) < 2 {
+			break
+		}
+		if filtered := filterEpisodesByProviderID(remaining, provider); len(filtered) > 0 {
+			remaining = filtered
+			break
+		}
+	}
+	titleMatched := true
+	if airDateTitleIsEvidence(hint.title) {
+		title := normalizeTitleForScoring(hint.title)
+		titleMatched = narrow(func(candidate *models.Episode) bool { return normalizeTitleForScoring(candidate.Title) == title })
+	}
+	if hint.seasonKnown {
+		narrow(func(candidate *models.Episode) bool { return candidate.SeasonNumber == hint.seasonNum })
+	}
+	// A titled file that matches no candidate may be a special its provider
+	// titles differently, so only then is a regular episode not the default.
+	if titleMatched {
+		narrow(func(candidate *models.Episode) bool { return candidate.SeasonNumber > 0 })
+	}
+
+	if len(remaining) != 1 {
 		return nil, false
 	}
-	if len(candidates) == 1 {
-		return candidates[0], true
-	}
-	for _, provider := range preferredEpisodeProviders(seriesItem) {
-		filtered := filterEpisodesByProviderID(candidates, provider)
-		if len(filtered) == 1 {
-			return filtered[0], true
-		}
-		if len(filtered) > 1 {
-			return nil, false
-		}
-	}
-	return nil, false
+	return remaining[0], true
+}
+
+// unknownEpisodeTitle is the normalized placeholder renamers write for an
+// episode without a title.
+const unknownEpisodeTitle = "unknown"
+
+// airDateTitleIsEvidence reports whether a by-date filename's title can pick
+// between same-day episodes. Generic titles and the Unknown placeholder cannot.
+func airDateTitleIsEvidence(title string) bool {
+	// Check the normalized form, which is what the title match compares, so
+	// spellings such as "Episode-83" or "(TBA)" count as generic too.
+	normalized := normalizeTitleForScoring(title)
+	return !isGenericEpisodeMatchTitle(normalized) && normalized != unknownEpisodeTitle
 }
 
 func preferredEpisodeProviders(seriesItem *models.MediaItem) []string {
@@ -6102,7 +6175,9 @@ type episodeLinkHint struct {
 	seasonKnown bool
 	episodeNum  int
 	airDate     string
-	ok          bool
+	// title is the episode title a by-date filename carries after its date.
+	title string
+	ok    bool
 }
 
 func (s *MetadataService) updateEpisodeMetadataState(ctx context.Context, seriesID string, incomplete bool, lastCheckedAt *time.Time) {
@@ -6244,7 +6319,15 @@ func parseEpisodeLinkHint(file *models.MediaFile, libraryRoots ...string) episod
 		return episodeLinkHint{seasonNum: fnh.SeasonNum, seasonKnown: fnh.SeasonKnown, episodeNum: fnh.EpisodeNum, ok: true}
 	}
 	if fnh.AirDate != "" {
-		return episodeLinkHint{airDate: fnh.AirDate, ok: true}
+		// A by-date name has no episode number, but its season folder and
+		// title still tell same-day episodes apart.
+		return episodeLinkHint{
+			seasonNum:   fnh.SeasonNum,
+			seasonKnown: fnh.SeasonKnown,
+			airDate:     fnh.AirDate,
+			title:       extractAirDateMatchTitle(file.FilePath),
+			ok:          true,
+		}
 	}
 	return episodeLinkHint{}
 }
