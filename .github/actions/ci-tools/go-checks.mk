@@ -2,14 +2,14 @@
 # the repository root: Go lint runs lint and then contracts, and Go test runs
 # tests, each job on its own runner.
 # LINT_BASE_REF, LINT_BASE_MODE, CONTRACT_BASE_REF, and TEST_GOFLAGS come from
-# the workflow.
+# the workflow. Fork: LINT_ARGS passes extra golangci-lint flags.
 .PHONY: lint contracts tests
 
 # Router recovery must hold over the whole tree, including inherited lines.
 lint:
 	@unformatted="$$(gofmt -l .)"; if [ -n "$$unformatted" ]; then echo "::error::gofmt is required on:"; echo "$$unformatted"; exit 1; fi
 	go vet ./...
-	BASE_REF="$${LINT_BASE_REF}" LINT_CHANGED_CI=1 LINT_CHANGED_BASE_MODE="$${LINT_BASE_MODE}" CI_OPERATION=lint bash .ci-tools/scripts/lint-changed.sh
+	BASE_REF="$${LINT_BASE_REF}" LINT_CHANGED_CI=1 LINT_CHANGED_BASE_MODE="$${LINT_BASE_MODE}" CI_OPERATION=lint bash .ci-tools/scripts/lint-changed.sh $${LINT_ARGS}
 	$(MAKE) -f Makefile lint-router-recovery
 
 # Package assertions belong to the tests lane; these check generated artifacts.

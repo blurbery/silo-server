@@ -87,7 +87,8 @@ jobs:
       - name: Check out the CI tools from main
         uses: actions/checkout@v5
         with:
-          repository: Silo-Server/silo-server
+          # Fork: the workflow commit only exists in this repository.
+          repository: ${{ github.repository }}
           ref: ${{ job.workflow_sha || 'refs/heads/main' }}
           path: .ci-tools
           fetch-depth: 1
@@ -139,7 +140,8 @@ jobs:
       - name: Check out the case-collision checker from main
         uses: actions/checkout@v5
         with:
-          repository: Silo-Server/silo-server
+          # Fork: the workflow commit only exists in this repository.
+          repository: ${{ github.repository }}
           ref: ${{ job.workflow_sha || 'refs/heads/main' }}
           path: .ci-tools
           fetch-depth: 1
@@ -257,7 +259,8 @@ jobs:
       - name: Check out the CI tools from main
         uses: actions/checkout@v5
         with:
-          repository: Silo-Server/silo-server
+          # Fork: the workflow commit only exists in this repository.
+          repository: ${{ github.repository }}
           ref: ${{ job.workflow_sha || 'refs/heads/main' }}
           path: .ci-tools
           fetch-depth: 1
@@ -337,6 +340,9 @@ jobs:
         env:
           LINT_BASE_REF: ${{ github.event_name == 'push' && github.event.before || github.event_name == 'pull_request' && github.event.pull_request.base.sha || format('origin/{0}', github.event.repository.default_branch) }}
           LINT_BASE_MODE: ${{ github.event_name == 'push' && 'revision' || 'merge-base' }}
+          # Fork: report every lint finding instead of golangci-lint's
+          # per-linter and same-issue caps.
+          LINT_ARGS: --max-issues-per-linter=0 --max-same-issues=0 --uniq-by-line=false
           CONTRACT_BASE_REF: ${{ github.base_ref || github.event.repository.default_branch }}
         run: make -f .ci-tools/.github/actions/ci-tools/go-checks.mk --keep-going lint contracts
 
@@ -367,7 +373,8 @@ jobs:
       - name: Check out the CI tools from main
         uses: actions/checkout@v5
         with:
-          repository: Silo-Server/silo-server
+          # Fork: the workflow commit only exists in this repository.
+          repository: ${{ github.repository }}
           ref: ${{ job.workflow_sha || 'refs/heads/main' }}
           path: .ci-tools
           fetch-depth: 1
@@ -724,7 +731,11 @@ jobs:
         run: pnpm run budget:check
 
       - name: Upload frontend bundle for image builds
-        if: matrix.part == 'build' && github.event_name == 'push' && contains(fromJSON('["refs/heads/main","refs/heads/apiv2"]'), github.ref)
+        # Fork: manual runs on sync/ branches also validate the image.
+        if: >-
+          matrix.part == 'build' &&
+          ((github.event_name == 'push' && contains(fromJSON('["refs/heads/main","refs/heads/apiv2"]'), github.ref)) ||
+           (github.event_name == 'workflow_dispatch' && startsWith(github.ref_name, 'sync/')))
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist-${{ github.sha }}
@@ -800,6 +811,100 @@ jobs:
       - name: Test
         run: make test-web WEBTEST_ARGS="--shard=${{ matrix.shard }}/4 --maxWorkers=4"
 
+  # Fork: PostgreSQL regressions from earlier upstream syncs and the fork's
+  # DB-backed package tests. The full schema needs pgvector.
+  go-fork-db:
+    name: Go fork PostgreSQL
+    needs: select
+    if: ${{ !cancelled() && (needs.select.result != 'success' || needs.select.outputs.go != 'false') }}
+    runs-on: ubuntu-latest
+    services:
+      watch-party-postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: watch_party
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d watch_party"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/watch_party?sslmode=disable
+      SILO_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/watch_party?sslmode=disable
+      SECRET_KEY: ci-only-disposable-database-encryption-key-00000000
+    steps:
+      # Fork: setup-go waits for the libvips install every Go job starts
+      # before checkout.
+      - *libvips-cache-key
+      - *libvips-restore
+      - *libvips-install
+
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: ./.github/actions/setup-go
+        id: setup-go
+        with:
+          cache-name: fork-db
+
+      - *libvips-save
+
+      - name: Verify fork PostgreSQL merge regressions
+        run: |
+          go run ./cmd/silo --migrate-only
+          go test -p 1 -count=1 -run 'TestLibraryCollectionAggregateTransactionLockOrderDB|TestOrphanCleanupAfterPlexTableDropPostgres|TestAdminSubtitleListPageDB|TestCatalogTransferPersistsJobsAndSignedLink|TestSyncMergeStepsAfterPlexTableDropPostgres' ./internal/catalog ./internal/api/handlers ./internal/metadata
+
+      - name: Test fork PostgreSQL integration
+        run: |
+          go test -p 1 -count=1 ./internal/catalog ./internal/userstore/pgstore ./internal/jellycompat ./internal/api ./internal/api/handlers ./internal/apiv2 ./internal/playback/planstore ./internal/sections ./internal/metadata
+
+  # Fork: an upstream sync is dispatched on a sync/ branch and must build the
+  # production image on both platforms before main moves.
+  sync-docker:
+    name: Sync Docker (${{ matrix.platform }})
+    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref_name, 'sync/')
+    needs: web
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Download validated frontend bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist-${{ github.sha }}
+          path: web/dist
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Validate production image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: false
+          build-contexts: |
+            frontend_dist=./web/dist
+          build-args: |
+            BUILD_REVISION=${{ github.sha }}
+            BUILD_DIRTY=false
+          cache-from: type=gha,scope=docker-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || 'linux-arm64' }}
+
   result:
     name: CI result
     if: always()
@@ -809,7 +914,8 @@ jobs:
       - name: Check out the CI tools from main
         uses: actions/checkout@v5
         with:
-          repository: Silo-Server/silo-server
+          # Fork: the workflow commit only exists in this repository.
+          repository: ${{ github.repository }}
           ref: ${{ job.workflow_sha || 'refs/heads/main' }}
           path: .ci-tools
           fetch-depth: 1

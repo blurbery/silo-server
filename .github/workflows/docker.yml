@@ -79,7 +79,8 @@ jobs:
       contents: read
       actions: read
       packages: write
-    uses: Silo-Server/silo-server/.github/workflows/trusted-linux-build.yml@main
+    # Fork: build with this repository's copy of the workflow.
+    uses: ./.github/workflows/trusted-linux-build.yml
     with:
       platform: ${{ matrix.platform }}
       build_number: ${{ needs.prepare.outputs.build_number }}
