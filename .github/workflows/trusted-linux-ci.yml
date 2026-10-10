@@ -335,11 +335,19 @@ jobs:
       - name: Normalize tracked source mtimes
         run: python3 scripts/ci/content_mtimes.py
 
+      # Fork: outside pull requests, lint what the fork adds on top of
+      # upstream rather than upstream's own code, which upstream's CI already
+      # lints. Comparing a sync with the previous fork main reports every
+      # finding in the upstream commits it brings in.
+      - name: Fetch upstream main as the fork's lint base
+        if: github.event_name != 'pull_request'
+        run: git fetch --no-tags --quiet https://github.com/Silo-Server/silo-server.git +refs/heads/main:refs/remotes/upstream/main
+
       - name: Run Go lint and contract checks
         shell: bash
         env:
-          LINT_BASE_REF: ${{ github.event_name == 'push' && github.event.before || github.event_name == 'pull_request' && github.event.pull_request.base.sha || format('origin/{0}', github.event.repository.default_branch) }}
-          LINT_BASE_MODE: ${{ github.event_name == 'push' && 'revision' || 'merge-base' }}
+          LINT_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'upstream/main' }}
+          LINT_BASE_MODE: merge-base
           # Fork: report every lint finding instead of golangci-lint's
           # per-linter and same-issue caps.
           LINT_ARGS: --max-issues-per-linter=0 --max-same-issues=0 --uniq-by-line=false
