@@ -1427,11 +1427,22 @@ export function usePlaybackSession(
       // While the server is unreachable a transport failure says nothing about
       // the route; the reconnect replaces the transport anyway.
       if (reconnectRef.current.active) return;
+      // A route can fail before the player reports its first position. Its
+      // zero (or a missing time) is then not the viewer's position, so recover
+      // from the server-resolved resume anchor instead of restarting at zero.
+      const preservedPosition = playbackPositionRef.current;
+      const reportedPosition = Number.isFinite(currentPosition) ? Math.max(0, currentPosition) : 0;
+      const recoveryPosition =
+        (!Number.isFinite(currentPosition) ||
+          (awaitingInitialPlayerPositionRef.current && currentPosition === 0)) &&
+        preservedPosition > 0
+          ? preservedPosition
+          : reportedPosition;
       reportEvent("plan_failed", {
         failureClassification: failure.classification,
         ...(failure.message ? { diagnostics: { message: failure.message } } : {}),
       });
-      void replan({ operation: "failure_recovery", positionSeconds: currentPosition, failure });
+      void replan({ operation: "failure_recovery", positionSeconds: recoveryPosition, failure });
     },
     [replan, reportEvent],
   );
@@ -1688,9 +1699,11 @@ export function usePlaybackSession(
 
   const updatePlaybackState = useCallback((positionSeconds: number, playing: boolean) => {
     if (Number.isFinite(positionSeconds) && positionSeconds >= 0) {
+      // Safari can emit play before its first timeline-bearing timeupdate, so
+      // a zero while the resume anchor is still pending is not a position even
+      // when the player already reports that it is playing.
       const isUninitializedPlayerZero =
         awaitingInitialPlayerPositionRef.current &&
-        !playing &&
         positionSeconds === 0 &&
         playbackPositionRef.current > 0;
       if (!isUninitializedPlayerZero) {
