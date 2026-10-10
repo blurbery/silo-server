@@ -48,6 +48,18 @@ type mutablePlaybackSettingsV3 struct {
 	getErrors map[string]error
 }
 
+func TestSessionStartErrorV3DistinguishesPolicyFailureFromDenial(t *testing.T) {
+	unavailable := sessionStartErrorV3(playback.ErrPlaybackAdmissionUnavailable)
+	if unavailable == nil || unavailable.reason != "policy_unavailable" || !unavailable.retryable {
+		t.Fatalf("unavailable mapping = %#v, want retryable policy_unavailable", unavailable)
+	}
+
+	denied := sessionStartErrorV3(playback.ErrPlaybackNotAllowed)
+	if denied == nil || denied.reason != "policy_denied" || denied.retryable {
+		t.Fatalf("denied mapping = %#v, want non-retryable policy_denied", denied)
+	}
+}
+
 type gatedPlaybackSettingsV3 struct {
 	started chan string
 	release chan struct{}
