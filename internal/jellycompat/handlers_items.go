@@ -3799,6 +3799,13 @@ func writeCompatUpstreamError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, "AudioTranscodingDisabled", "Audio transcoding is disabled for your user")
 		return
 	}
+	if errors.Is(err, playback.ErrPlaybackAdmissionUnavailable) {
+		// The admission policy could not be evaluated. Playback is still
+		// refused, but this is transient rather than a policy decision.
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusServiceUnavailable, "PlaybackUnavailable", "Playback policy is temporarily unavailable")
+		return
+	}
 	if errors.Is(err, playback.ErrPlaybackNotAllowed) {
 		writeError(w, http.StatusForbidden, "PlaybackNotAllowed", "Playback denied by server policy")
 		return

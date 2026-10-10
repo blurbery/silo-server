@@ -1283,7 +1283,10 @@ HDR, 4K, or transcode-policy reason — deselecting the subtitle restores playba
 `invalid_seek_position`, `invalid_replan`, `seek_reanchor_route_changed`,
 `seek_reanchor_recipe_unavailable`,
 `seek_reanchor_intent_mismatch`, `seek_failure_recovery_intent_mismatch`,
-`policy_denied`, `routing_policy_unsatisfied`, `route_capacity_unavailable`.
+`policy_unavailable`, `policy_denied`, `routing_policy_unsatisfied`,
+`route_capacity_unavailable`. A playback admission policy that could not be
+evaluated is retryable `policy_unavailable`; only an evaluated decision whose
+result is deny uses non-retryable `policy_denied`.
 The last two come from the node-routing resolver:
 `routing_policy_unsatisfied` means no route shape is legal under the configured
 execution and egress policy and is never retryable, while

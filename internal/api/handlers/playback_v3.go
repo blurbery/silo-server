@@ -6641,6 +6641,8 @@ func sessionStartErrorV3(err error) *transportErrorV3 {
 		return &transportErrorV3{reason: "audio_transcoding_disabled", message: "The selected audio adaptation is disabled."}
 	case errors.Is(err, playback.ErrTranscodingDisabled):
 		return &transportErrorV3{reason: "transcoding_disabled", message: "The selected server adaptation is disabled."}
+	case errors.Is(err, playback.ErrPlaybackAdmissionUnavailable):
+		return &transportErrorV3{reason: "policy_unavailable", message: "Playback policy is temporarily unavailable.", retryable: true, cause: err}
 	case errors.Is(err, playback.ErrPlaybackNotAllowed):
 		return &transportErrorV3{reason: "policy_denied", message: "Playback is denied by server policy."}
 	default:

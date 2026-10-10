@@ -3,6 +3,8 @@ package jellycompat
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/Silo-Server/silo-server/internal/config"
 	"github.com/Silo-Server/silo-server/internal/models"
+	"github.com/Silo-Server/silo-server/internal/playback"
 )
 
 // countingContentService is a ContentService double that returns a fixed
@@ -698,4 +701,22 @@ func TestHandleUpcoming_UnavailableCatalogReturnsError(t *testing.T) {
 		t.Fatalf("expected 503 for unavailable episode catalog; got %d, body=%s", rec.Code, rec.Body.String())
 	}
 
+}
+
+func TestWriteCompatUpstreamErrorSeparatesPolicyFailureFromDenial(t *testing.T) {
+	unavailable := httptest.NewRecorder()
+	writeCompatUpstreamError(unavailable, fmt.Errorf("%w: %w", playback.ErrPlaybackAdmissionUnavailable, context.DeadlineExceeded))
+	if unavailable.Code != http.StatusServiceUnavailable || unavailable.Header().Get("Retry-After") != "1" {
+		t.Fatalf("unavailable status = %d, Retry-After = %q, want 503 with Retry-After 1", unavailable.Code, unavailable.Header().Get("Retry-After"))
+	}
+	var unavailableBody errorResponse
+	if err := json.Unmarshal(unavailable.Body.Bytes(), &unavailableBody); err != nil || unavailableBody.Error != "PlaybackUnavailable" {
+		t.Fatalf("unavailable body = %s (err %v), want PlaybackUnavailable", unavailable.Body.String(), err)
+	}
+
+	denied := httptest.NewRecorder()
+	writeCompatUpstreamError(denied, playback.ErrPlaybackNotAllowed)
+	if denied.Code != http.StatusForbidden || denied.Header().Get("Retry-After") != "" {
+		t.Fatalf("denied status = %d, Retry-After = %q, want 403 without Retry-After", denied.Code, denied.Header().Get("Retry-After"))
+	}
 }
