@@ -16,10 +16,16 @@ Original-file responses follow the HTTP byte-range contract:
 - `HEAD` returns the same representation headers as `GET` without a body.
 
 On Linux, macOS, and Windows, each response carries a strong, opaque `ETag`
-derived from the open file's filesystem identity, change time, modification
-time, and size. The validator is stable while the playback plan's original-file
-entity is unchanged, but changes for same-size replacements even when their
-modification time is preserved. Platforms that cannot expose a durable
+derived from the open file's filesystem identity, modification time, and size;
+macOS and Windows also include the change time. The validator is stable while
+the playback plan's original-file entity is unchanged, but changes for
+same-size replacements even when their modification time is preserved, because
+a replacement is a different filesystem entity. On Linux, permission,
+ownership, ACL, and xattr updates do not invalidate the validator, because they
+change the inode change time but not the served bytes. A same-inode, same-size
+rewrite that deliberately restores the exact modification time cannot be told
+apart without hashing the file and is outside this stat-based contract.
+Platforms that cannot expose a durable
 filesystem revision omit the validator instead of hashing an entire media file
 before each request. On those platforms an ETag-based `If-Range` request cannot
 match and safely falls back to a full `200 OK` response.
