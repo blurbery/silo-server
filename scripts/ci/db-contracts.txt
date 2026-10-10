@@ -170,3 +170,7 @@
 
 # Watch-provider events carry catalog titles to plugins.
 ./internal/watchsync TestGetMediaTitlesDB
+
+# Autoscan poll markers restart from now, and poll at once, only when the upstream changes.
+./internal/autoscan TestUpdateSourceMarkerReset
+./internal/autoscan TestUpdateConnectionMarkerReset
