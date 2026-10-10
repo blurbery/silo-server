@@ -13,6 +13,7 @@
  */
 
 import {
+  FEATURE_NATIVE_HLS_PLAYBACK_V3,
   PROTOCOL_V3,
   type ClientCodecCapabilitiesV3,
   type ClientPlaybackContextV3,
@@ -182,6 +183,10 @@ export function buildDeliveriesV3(
       containers: ["hls"],
       video_codecs: hlsVideoCodecs,
       hdr_details: hlsHDRDetails,
+      // Safari plays every HLS plan through its media element, which rejects
+      // copied HEVC labelled `hev1`. Only Safari claims it: the player keeps
+      // Chromium on hls.js even when its media element reports native HLS.
+      features: nativeHLSPreferred ? [FEATURE_NATIVE_HLS_PLAYBACK_V3] : [],
     }),
   };
 }
