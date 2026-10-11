@@ -27,10 +27,18 @@ export function formatCodecLabel(codec?: string, fallback = "—"): string {
   return CODEC_LABELS[normalized.toLowerCase()] ?? normalized.toUpperCase();
 }
 
-/** Fuzzy audio-family label for quality badges ("truehd atmos" → "Atmos"). */
-export function mapAudioLabel(codec: string): string {
+/**
+ * Fuzzy audio-family label for quality badges. The stored codec of an Atmos
+ * track is plain "eac3" or "truehd"; FFprobe names Atmos in the track's
+ * profile ("Dolby Digital Plus + Dolby Atmos"), so pass it when known.
+ */
+export function mapAudioLabel(codec: string, profile?: string): string {
   const lower = codec.toLowerCase();
-  if (lower.includes("atmos")) return "Atmos";
+  if (lower.includes("atmos") || profile?.toLowerCase().includes("atmos")) {
+    if (lower.includes("truehd")) return "TrueHD Atmos";
+    if (lower.includes("eac3") || lower.includes("e-ac-3")) return "DD+ Atmos";
+    return "Atmos";
+  }
   if (lower.includes("truehd")) return "TrueHD";
   if (lower.includes("dts-hd") || lower.includes("dts:x")) return "DTS-HD";
   if (lower.includes("dts")) return "DTS";

@@ -142,7 +142,7 @@ export function formatAudioTrackSummary(track: VersionAudioTrack | undefined): s
   }
 
   const language = getLanguageName(track.language ?? "") || "Unknown";
-  const codec = track.codec ? mapAudioLabel(track.codec) : "";
+  const codec = track.codec ? mapAudioLabel(track.codec, track.profile) : "";
   const channels = formatChannels(track.channels);
   return [language, codec, channels].filter(Boolean).join(" · ");
 }

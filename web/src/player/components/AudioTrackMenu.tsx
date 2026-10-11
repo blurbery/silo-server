@@ -47,7 +47,7 @@ function describeTrack(track: PlayerAudioTrack, index: number): TrackDescriptor 
   return {
     title,
     meta: metaParts.join(" \u00B7 "),
-    codecLabel: track.codec ? mapAudioLabel(track.codec) : "",
+    codecLabel: track.codec ? mapAudioLabel(track.codec, track.profile) : "",
     channelsLabel: formatChannels(track.channels),
     isDefault: Boolean(track.default),
   };
