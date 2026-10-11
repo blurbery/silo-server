@@ -35,8 +35,16 @@ describe("formatCodecLabel", () => {
 
 describe("mapAudioLabel", () => {
   it("prefers Atmos over other markers", () => {
-    expect(mapAudioLabel("TrueHD Atmos")).toBe("Atmos");
-    expect(mapAudioLabel("eac3 atmos")).toBe("Atmos");
+    expect(mapAudioLabel("TrueHD Atmos")).toBe("TrueHD Atmos");
+    expect(mapAudioLabel("eac3 atmos")).toBe("DD+ Atmos");
+    expect(mapAudioLabel("Atmos")).toBe("Atmos");
+  });
+
+  it("reads Atmos from the FFprobe profile of a plain codec", () => {
+    expect(mapAudioLabel("eac3", "Dolby Digital Plus + Dolby Atmos")).toBe("DD+ Atmos");
+    expect(mapAudioLabel("truehd", "Dolby TrueHD + Dolby Atmos")).toBe("TrueHD Atmos");
+    expect(mapAudioLabel("eac3", "")).toBe("EAC3");
+    expect(mapAudioLabel("dts", "DTS-HD MA")).toBe("DTS");
   });
 
   it("maps codec families", () => {

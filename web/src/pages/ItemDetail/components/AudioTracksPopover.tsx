@@ -119,7 +119,7 @@ function AudioTracksPopover({
           />
         )}
         {tracks.map((track, index) => {
-          const codec = track.codec ? mapAudioLabel(track.codec) : "";
+          const codec = track.codec ? mapAudioLabel(track.codec, track.profile) : "";
           const channels = formatChannels(track.channels);
           const language = getLanguageName(track.language ?? "");
           const fallbackTitle = audioTitle(track);
