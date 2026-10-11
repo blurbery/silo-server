@@ -75,6 +75,10 @@ type Stream struct {
 	Disposition        Disposition       `json:"disposition"`
 	Tags               map[string]string `json:"tags"`
 	SideDataList       []SideData        `json:"side_data_list"`
+	// FrameSideDataList holds side data read from the stream's first decoded
+	// frame. FFmpeg reports HDR10+ dynamic metadata only per frame, never in
+	// the stream's own side data, so a stream-only probe cannot see it.
+	FrameSideDataList []SideData `json:"-"`
 }
 
 // Disposition is the subset of FFprobe disposition flags used by scans.
@@ -166,6 +170,18 @@ func IsPrimaryVideoStream(stream Stream) bool {
 	return stream.CodecType == "video" && stream.Disposition.AttachedPic == 0
 }
 
+// NeedsFrameSideData reports whether a stream's HDR10+ status depends on
+// frame side data. HDR10+ is defined only for PQ video, so other streams skip
+// the frame decode.
+func NeedsFrameSideData(stream Stream) bool {
+	return IsPrimaryVideoStream(stream) && IsPQTransfer(stream.ColorTransfer)
+}
+
+// IsPQTransfer reports whether colorTransfer is SMPTE ST 2084 (PQ).
+func IsPQTransfer(colorTransfer string) bool {
+	return strings.Contains(strings.ToLower(colorTransfer), "smpte2084")
+}
+
 // NormalizeVideoTrack converts FFprobe's raw video facts into the catalog's
 // authoritative normalized representation.
 func NormalizeVideoTrack(stream Stream) models.VideoTrack {
@@ -174,7 +190,7 @@ func NormalizeVideoTrack(stream Stream) models.VideoTrack {
 	dvLevel := positive(dvConfig.DVLevel)
 	dvELPresent := dvConfig.DVElPresent > 0 || dvConfig.DVElPresentLegacy > 0
 	colorRange := firstNonEmpty(stream.ColorRange, "unknown")
-	hdr10Plus := hasHDR10Plus(stream.SideDataList)
+	hdr10Plus := hasHDR10Plus(stream.SideDataList) || hasHDR10Plus(stream.FrameSideDataList)
 	return models.VideoTrack{
 		Title:               firstNonEmpty(stream.Tags["title"], stream.CodecLongName, strings.ToUpper(stream.CodecName)),
 		Codec:               stream.CodecName,

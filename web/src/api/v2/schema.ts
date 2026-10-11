@@ -30677,7 +30677,7 @@ export interface components {
       dv_profile?: number;
       dv_rpu_present?: boolean;
       frame_rate?: string;
-      hdr10_plus?: boolean;
+      hdr10_plus: boolean;
       /** Format: int64 */
       height?: number;
       interlaced: boolean;

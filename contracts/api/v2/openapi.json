@@ -47626,6 +47626,7 @@
         "required": [
           "dv_config_present",
           "dv_bl_compat_id_present",
+          "hdr10_plus",
           "interlaced"
         ],
         "type": "object"

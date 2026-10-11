@@ -3544,6 +3544,11 @@ func needsCriticalProbeRepairScanState(file *scanStateFile) bool {
 	if file.DVProvenanceCurrent != nil && !*file.DVProvenanceCurrent {
 		return true
 	}
+	// HDR10+ status is not needed to start playback (an unchecked HDR10+
+	// file plays as HDR10), so only a scan repairs it, never playback.
+	if file.HDR10PlusProbeCurrent != nil && !*file.HDR10PlusProbeCurrent {
+		return true
+	}
 	if strings.TrimSpace(file.ProbeSource) == "" || file.ProbeUpdatedAt == nil {
 		return true
 	}

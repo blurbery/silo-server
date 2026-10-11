@@ -110,12 +110,29 @@ func (p DeviceProfile) hlsRemuxCodecProfileCompatibility(version catalog.FileVer
 
 func hlsRemuxConditionsMatch(conditions []ProfileCondition, values conditionValues, version catalog.FileVersion) bool {
 	for _, condition := range conditions {
-		if conditionMatches(condition, values) || hlsRemuxDV8HDR10BaseLayerConditionMatches(condition, version) {
+		if conditionMatches(condition, values) ||
+			hlsRemuxDV8HDR10BaseLayerConditionMatches(condition, version) ||
+			hlsRemuxHDR10PlusConditionMatches(condition, values) {
 			continue
 		}
 		return false
 	}
 	return true
+}
+
+// hlsRemuxHDR10PlusConditionMatches mirrors Jellyfin's CanStreamCopyVideo,
+// which copies an HDR10+ stream, dynamic metadata included, whenever the
+// request accepts HDR10. Jellyfin derives the accepted range types from
+// NotEquals exclusion lists as well, so unlike direct play this rule also
+// widens negative conditions: a client that excludes HDR10Plus but not HDR10
+// (Jellyfin Android TV on an HDR10-only display) gets a copy rather than a
+// full encode or no route at all.
+func hlsRemuxHDR10PlusConditionMatches(condition ProfileCondition, values conditionValues) bool {
+	if normalizeConditionToken(condition.Property) != "videorangetype" ||
+		!strings.EqualFold(values["videorangetype"].text, compatRangeHDR10Plus) {
+		return false
+	}
+	return conditionMatches(condition, conditionValues{"videorangetype": {text: compatRangeHDR10}})
 }
 
 // hlsRemuxDV8HDR10BaseLayerConditionMatches recognizes the precise device
@@ -321,6 +338,9 @@ func conditionMatches(condition ProfileCondition, values conditionValues) bool {
 	if !ok {
 		return !condition.IsRequired
 	}
+	if hdr10PlusMatchesPositiveHDR10Condition(condition, actual) {
+		return true
+	}
 
 	switch normalizeConditionToken(condition.Condition) {
 	case "equals":
@@ -346,6 +366,20 @@ func conditionMatches(condition ProfileCondition, values conditionValues) bool {
 	default:
 		return false
 	}
+}
+
+// hdr10PlusMatchesPositiveHDR10Condition mirrors Jellyfin 10.11's
+// ConditionProcessor, where HDR10 also satisfies a range condition for an
+// HDR10+ video: HDR10+ only adds dynamic metadata to an HDR10 stream, and a
+// display without HDR10+ support ignores it. Silo widens only positive
+// conditions (Equals, EqualsAny), so a client that excludes HDR10Plus with
+// NotEquals keeps it excluded for direct play. Jellyfin reaches the same
+// result for the pipe-separated exclusion lists clients send, which it cannot
+// parse as a single range type.
+func hdr10PlusMatchesPositiveHDR10Condition(condition ProfileCondition, actual conditionValue) bool {
+	return isPositiveVideoRangeCondition(condition) &&
+		strings.EqualFold(actual.text, compatRangeHDR10Plus) &&
+		stringInConditionSet(compatRangeHDR10, condition.Value)
 }
 
 func buildConditionValues(version catalog.FileVersion, audioStreamIndex *int) conditionValues {
