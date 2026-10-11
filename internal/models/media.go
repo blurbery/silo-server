@@ -403,7 +403,7 @@ type VideoTrack struct {
 	DVRPUPresent        bool   `json:"dv_rpu_present,omitempty"`
 	DVELPresent         bool   `json:"dv_el_present,omitempty"`
 	DVEnhancementLayer  string `json:"dv_enhancement_layer,omitempty"` // none, mel, fel, unknown
-	HDR10Plus           bool   `json:"hdr10_plus,omitempty"`
+	HDR10Plus           bool   `json:"hdr10_plus"`                     // always written; a PQ track without the key predates frame-level HDR10+ detection
 	Profile             string `json:"profile,omitempty"`
 	Level               int    `json:"level,omitempty"`
 	Width               int    `json:"width,omitempty"`
