@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Silo-Server/silo-server/internal/mediaprobe"
 	"github.com/Silo-Server/silo-server/internal/models"
 	"github.com/Silo-Server/silo-server/internal/tonemap"
 	"golang.org/x/sync/singleflight"
@@ -81,6 +82,24 @@ func NeedsCriticalProbeRepair(file *models.MediaFile) bool {
 		return true
 	}
 	return false
+}
+
+// carryCheckedHDR10Plus keeps the primary track's recorded HDR10+ status
+// across playback's probe repair, which skips the frame read, when the
+// reprobed stream is the one that was checked. Any other difference leaves
+// the track unchecked for the HDR10+ backfill.
+func carryCheckedHDR10Plus(previous, next []models.VideoTrack) {
+	if len(previous) == 0 || len(next) == 0 || previous[0].HDR10PlusUnchecked || !next[0].HDR10PlusUnchecked {
+		return
+	}
+	if tonemap.StreamSignatureForTrack(previous[0]) != tonemap.StreamSignatureForTrack(next[0]) {
+		return
+	}
+	next[0].HDR10PlusUnchecked = false
+	next[0].HDR10Plus = previous[0].HDR10Plus
+	if previous[0].HDR10Plus {
+		next[0].VideoRangeType = mediaprobe.RangeTypeWithHDR10Plus(next[0])
+	}
 }
 
 // videoTracksHaveLegacyDVProvenance reports whether a Dolby Vision track was
@@ -442,6 +461,7 @@ func (e *PlaybackProbeEnsurer) ensureCriticalProbe(ctx context.Context, file *mo
 		}
 		updated := *current
 		applyProbeData(&updated, probe, "local")
+		carryCheckedHDR10Plus(current.VideoTracks, updated.VideoTracks)
 		return e.fileRepo.Upsert(probeCtx, updated)
 	})
 	select {

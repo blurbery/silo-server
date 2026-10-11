@@ -439,7 +439,7 @@ type VideoTrack struct {
 	// read from a decoded frame: it was probed before frame-level detection,
 	// by playback's quick repair, or when the frame read failed transiently.
 	// MarshalJSON writes hdr10_plus only for checked tracks, so a stored PQ
-	// track without the key is checked by the next library scan.
+	// track without the key is checked by the HDR10+ backfill task.
 	HDR10PlusUnchecked bool `json:"-"`
 }
 

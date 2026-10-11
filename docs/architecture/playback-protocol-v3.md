@@ -563,18 +563,23 @@ checks follow Jellyfin 10.11: each HDR10+ range type (`HDR10Plus`,
 `VideoRangeType` condition that its form without HDR10+ (`HDR10`,
 `DOVIWithHDR10`, `DOVIWithEL`) satisfies, any condition for an HLS copy, and
 is excluded by a negative condition that excludes that form. A file therefore
-keeps every route it had before its HDR10+ metadata was detected.
+keeps the routes it had before its HDR10+ metadata was detected, with one
+change Jellyfin makes too: a client that excludes the HDR10+ range type while
+accepting its form, such as Jellyfin Android TV on a display without HDR10+,
+gets an HLS copy of the same stream instead of direct play.
 
 FFmpeg reports HDR10+ only as frame side data, so the scanner decodes the first
 frame of the primary video stream when it is PQ. A stored first video track
 carries `hdr10_plus`, `false` included, only once that frame has been read. A
-PQ track without the key was probed before this check, by playback's probe
-repair (which skips the frame read to stay within its budget), or when the read
-hit a storage error or timed out. The `backfill_hdr10_plus` task, at startup
-and daily, reads the first frame of those files and sets only `hdr10_plus` and,
-for an HDR10+ file, `video_range_type`, writing only while the file and the
-track still match the row it read. A frame ffprobe reads but cannot decode is
-recorded as not HDR10+, so a damaged file is not read again.
+PQ track without the key was probed before this check, or the read failed, or
+playback's probe repair rewrote it; the repair skips the frame read to stay
+within its budget and keeps a recorded status only when the reprobed stream
+is unchanged. A failed read is never recorded as "not HDR10+", so a
+misbehaving ffprobe cannot mark the library that way. The
+`backfill_hdr10_plus` task, at startup and daily, reads the first frame of the
+unchecked files and sets only `hdr10_plus` and, for an HDR10+ file,
+`video_range_type`, writing only while the file and the track still match the
+row it read.
 
 A client may additionally report the raw display probe in `output.display`
 with an evidence tier:

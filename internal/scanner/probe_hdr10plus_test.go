@@ -104,11 +104,12 @@ func TestProbeFileKeepsStreamFactsWhenFrameProbeFails(t *testing.T) {
 		frameScript   string
 		wantUnchecked bool
 	}{
-		// ffprobe read the file and rejected the frame: retrying on every
-		// scan would not change the answer.
-		{name: "undecodable frame", frameScript: "echo 'Invalid data found when processing input' >&2; exit 1"},
+		// No failure is recorded as "not HDR10+": the backfill reads the
+		// file again instead.
+		{name: "undecodable frame", frameScript: "echo 'Invalid data found when processing input' >&2; exit 1", wantUnchecked: true},
 		{name: "storage error", frameScript: "echo 'movie.mkv: Input/output error' >&2; exit 1", wantUnchecked: true},
 		{name: "killed", frameScript: "kill -9 $$", wantUnchecked: true},
+		{name: "no frame decoded", frameScript: `printf '{"frames":[]}'`, wantUnchecked: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -61,6 +61,8 @@ describe("pickBestAttributes", () => {
     expect(pickBestAttributes(versions)?.audioLabel).toBe("DD+ Atmos");
   });
 
+  // Real files never pair an aac track with an Atmos profile; the mismatch
+  // proves the profile is read only from codec_audio's own stream.
   it("does not read a profile from a first track that is not codec_audio's stream", () => {
     const versions = [
       makeVersion({

@@ -96,8 +96,8 @@ export function pickBestAttributes(
   };
 }
 
-// bestAttributes ranks audio by codec alone; the profile only refines the
-// displayed label, so it never changes which version is preferred.
+// bestAttributes ranks audio by codec alone; the profile and titles only
+// refine the displayed label, so they never change which version is preferred.
 function bestAttributes(
   versions: FileVersion[],
   qualityPreference?: string | null,

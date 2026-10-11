@@ -266,8 +266,20 @@ func HasHDR10Plus(sideData []SideData) bool {
 }
 
 // RangeTypeWithHDR10Plus returns the video range type of a stored track
-// whose primary stream has been found to carry HDR10+ metadata.
+// whose primary stream has been found to carry HDR10+ metadata. A track that
+// names Dolby Vision only in its range type, as older probes and seeded rows
+// can, keeps it.
 func RangeTypeWithHDR10Plus(track models.VideoTrack) string {
+	if track.DVProfile <= 0 {
+		switch rangeType := strings.TrimSpace(track.VideoRangeType); {
+		case strings.EqualFold(rangeType, "DOVIWithHDR10"), strings.EqualFold(rangeType, "DOVIWithHDR10Plus"):
+			return "DOVIWithHDR10Plus"
+		case strings.EqualFold(rangeType, "DOVIWithEL"), strings.EqualFold(rangeType, "DOVIWithELHDR10Plus"):
+			return "DOVIWithELHDR10Plus"
+		case strings.HasPrefix(strings.ToLower(rangeType), "dovi"):
+			return rangeType
+		}
+	}
 	return videoRangeType(Stream{ColorTransfer: track.ColorTransfer}, track.DVProfile, track.DVBLCompatID, true)
 }
 

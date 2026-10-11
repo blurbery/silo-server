@@ -3,6 +3,8 @@ package mediaprobe
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/Silo-Server/silo-server/internal/models"
 )
 
 func TestFFprobePathFromFFmpegRewritesOnlyExecutableName(t *testing.T) {
@@ -91,6 +93,27 @@ func TestNeedsFrameSideDataOnlyForPrimaryPQVideo(t *testing.T) {
 	for _, tt := range tests {
 		if got := NeedsFrameSideData(tt.stream); got != tt.want {
 			t.Errorf("%s: NeedsFrameSideData() = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestRangeTypeWithHDR10PlusKeepsDolbyVision(t *testing.T) {
+	tests := []struct {
+		name  string
+		track models.VideoTrack
+		want  string
+	}{
+		{name: "HDR10", track: models.VideoTrack{ColorTransfer: "smpte2084", VideoRangeType: "HDR10"}, want: "HDR10Plus"},
+		{name: "DV 8.1 with a profile", track: models.VideoTrack{ColorTransfer: "smpte2084", DVProfile: 8, DVBLCompatID: 1, VideoRangeType: "DOVIWithHDR10"}, want: "DOVIWithHDR10Plus"},
+		{name: "DV 7 with a profile", track: models.VideoTrack{ColorTransfer: "smpte2084", DVProfile: 7, VideoRangeType: "DOVIWithEL"}, want: "DOVIWithELHDR10Plus"},
+		// Older probes and seeded rows can name Dolby Vision only here.
+		{name: "DV 8.1 range type only", track: models.VideoTrack{ColorTransfer: "smpte2084", VideoRangeType: "DOVIWithHDR10"}, want: "DOVIWithHDR10Plus"},
+		{name: "DV 7 range type only", track: models.VideoTrack{ColorTransfer: "smpte2084", VideoRangeType: "DOVIWithEL"}, want: "DOVIWithELHDR10Plus"},
+		{name: "DV 5 range type only", track: models.VideoTrack{ColorTransfer: "smpte2084", VideoRangeType: "DOVI"}, want: "DOVI"},
+	}
+	for _, tt := range tests {
+		if got := RangeTypeWithHDR10Plus(tt.track); got != tt.want {
+			t.Errorf("%s: RangeTypeWithHDR10Plus() = %q, want %q", tt.name, got, tt.want)
 		}
 	}
 }

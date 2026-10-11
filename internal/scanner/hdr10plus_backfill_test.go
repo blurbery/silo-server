@@ -107,9 +107,8 @@ func insertHDR10PlusBackfillRow(t *testing.T, ctx context.Context, pool *pgxpool
 
 // The backfill reads the first frame of each unchecked PQ file, sets only
 // hdr10_plus and, for an HDR10+ file, video_range_type on its first track,
-// and leaves the rest of the row as it found it. A read that could give a
-// different answer later leaves the file a candidate; a second pass reads
-// only those.
+// and leaves the rest of the row as it found it. A failed read leaves the
+// file a candidate; a second pass reads only those.
 func TestHDR10PlusBackfillRecordsFrameStatusDB(t *testing.T) {
 	pool := newDeadRootTestPool(t)
 	ctx := context.Background()
@@ -131,7 +130,7 @@ func TestHDR10PlusBackfillRecordsFrameStatusDB(t *testing.T) {
 		{name: "plain-hdr10", tracks: `[{"codec":"hevc","color_transfer":"smpte2084"}]`, sideData: staticFrame},
 		{name: "undecodable", tracks: "[" + hdr10Track + "]", readErr: commandError(t, "echo 'Invalid data found when processing input' >&2; exit 1")},
 		{name: "storage-error", tracks: "[" + hdr10Track + "]", readErr: commandError(t, "echo 'movie.mkv: Input/output error' >&2; exit 1")},
-		{name: "timed-out", tracks: "[" + hdr10Track + "]", readErr: commandError(t, "kill -9 $$")},
+		{name: "timed-out", tracks: "[" + hdr10Track + "]", readErr: fmt.Errorf("%w after 30s", errFrameSideDataTimeout)},
 		{name: "sdr", tracks: "[" + sdrTrack + "]", sideData: hdr10PlusFrame},
 		{name: "already-checked", tracks: `[{"codec":"hevc","color_transfer":"smpte2084","hdr10_plus":false}]`, sideData: hdr10PlusFrame},
 	}
@@ -190,10 +189,7 @@ func TestHDR10PlusBackfillRecordsFrameStatusDB(t *testing.T) {
 	} else if _, ok := got["video_range_type"]; ok {
 		t.Fatalf("plain HDR10 file = %v, want no video_range_type added", got)
 	}
-	if got := track("undecodable"); got["hdr10_plus"] != false || got["video_range_type"] != "HDR10" {
-		t.Fatalf("undecodable file = %v, want it recorded as not HDR10+", got)
-	}
-	for _, name := range []string{"storage-error", "timed-out"} {
+	for _, name := range []string{"undecodable", "storage-error", "timed-out"} {
 		if _, ok := track(name)["hdr10_plus"]; ok {
 			t.Fatalf("%s file = %v, want it left unchecked for the next pass", name, track(name))
 		}
@@ -225,7 +221,7 @@ func TestHDR10PlusBackfillRecordsFrameStatusDB(t *testing.T) {
 	}
 	for name, count := range reads {
 		want := 0
-		if name == "storage-error" || name == "timed-out" {
+		if name == "undecodable" || name == "storage-error" || name == "timed-out" {
 			want = 1
 		}
 		if count != want {
@@ -282,14 +278,14 @@ func TestHDR10PlusBackfillStopsWhenStorageStallsDB(t *testing.T) {
 		paths[path] = true
 		insertHDR10PlusBackfillRow(t, ctx, pool, folderID, path, `[{"codec":"hevc","color_transfer":"smpte2084"}]`)
 	}
-	killed := commandError(t, "kill -9 $$")
+	timedOut := fmt.Errorf("%w after 30s", errFrameSideDataTimeout)
 	backfiller := NewHDR10PlusBackfiller(NewFileRepository(pool), "ffprobe")
 	backfiller.workers = 1
 	backfiller.readFrame = func(_ context.Context, _, filePath, _ string) ([]ffprobeSideData, error) {
 		if !paths[filePath] {
 			return nil, errors.New("not this test's file")
 		}
-		return nil, killed
+		return nil, timedOut
 	}
 	_, err := backfiller.Run(ctx, nil)
 	if !errors.Is(err, errHDR10PlusStorageStalled) {
@@ -300,5 +296,62 @@ func TestHDR10PlusBackfillStopsWhenStorageStallsDB(t *testing.T) {
 func TestNewHDR10PlusBackfillerNeedsADatabase(t *testing.T) {
 	if NewHDR10PlusBackfiller(nil, "ffprobe") != nil || NewHDR10PlusBackfiller(&FileRepository{}, "ffprobe") != nil {
 		t.Fatal("a backfiller without a database was built")
+	}
+}
+
+// Playback's probe repair skips the frame read. It keeps a recorded HDR10+
+// status only when the reprobed stream is the one that was checked.
+func TestCarryCheckedHDR10PlusKeepsStatusForTheSameStream(t *testing.T) {
+	checked := models.VideoTrack{Codec: "hevc", Width: 3840, Height: 2160, ColorRange: "tv", ColorTransfer: "smpte2084", HDR10Plus: true, VideoRangeType: "HDR10Plus"}
+	reprobed := func() []models.VideoTrack {
+		return []models.VideoTrack{{Codec: "hevc", Width: 3840, Height: 2160, ColorRange: "tv", ColorTransfer: "smpte2084", VideoRangeType: "HDR10", HDR10PlusUnchecked: true}}
+	}
+
+	next := reprobed()
+	carryCheckedHDR10Plus([]models.VideoTrack{checked}, next)
+	if next[0].HDR10PlusUnchecked || !next[0].HDR10Plus || next[0].VideoRangeType != "HDR10Plus" {
+		t.Fatalf("same stream = %+v, want the checked HDR10+ status kept", next[0])
+	}
+
+	next = reprobed()
+	next[0].Width = 1920
+	carryCheckedHDR10Plus([]models.VideoTrack{checked}, next)
+	if !next[0].HDR10PlusUnchecked || next[0].HDR10Plus {
+		t.Fatalf("different stream = %+v, want it left unchecked", next[0])
+	}
+
+	unchecked := checked
+	unchecked.HDR10Plus, unchecked.HDR10PlusUnchecked = false, true
+	next = reprobed()
+	carryCheckedHDR10Plus([]models.VideoTrack{unchecked}, next)
+	if !next[0].HDR10PlusUnchecked {
+		t.Fatalf("previously unchecked = %+v, want it left unchecked", next[0])
+	}
+}
+
+func TestPlaybackProbeRepairKeepsCheckedHDR10Plus(t *testing.T) {
+	stored := &models.MediaFile{
+		ID: 7, FilePath: "/library/hdr10plus.mkv", FileSize: 1_000,
+		// No probe source: playback must repair the row before planning.
+		CodecVideo: "hevc", Container: "mkv", Duration: 5400, Resolution: "2160p",
+		VideoTracks: []models.VideoTrack{{Codec: "hevc", Width: 3840, Height: 2160, ColorRange: "tv", ColorTransfer: "smpte2084", HDR10Plus: true, VideoRangeType: "HDR10Plus"}},
+	}
+	repo := &probeRepairTestRepository{files: map[int]*models.MediaFile{stored.ID: stored}}
+	ensurer := &PlaybackProbeEnsurer{
+		fileRepo:    repo,
+		ffprobePath: "ffprobe",
+		probeFile: func(context.Context, string, string) (*ProbeData, error) {
+			return &ProbeData{
+				Container: "mkv", Duration: 5400, CodecVideo: "hevc", Resolution: "2160p",
+				VideoTracks: []VideoTrackInfo{{Codec: "hevc", Width: 3840, Height: 2160, ColorRange: "tv", ColorTransfer: "smpte2084", VideoRangeType: "HDR10", HDR10PlusUnchecked: true}},
+			}, nil
+		},
+	}
+	got, err := ensurer.Ensure(context.Background(), stored)
+	if err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+	if track := got.VideoTracks[0]; track.HDR10PlusUnchecked || !track.HDR10Plus || track.VideoRangeType != "HDR10Plus" {
+		t.Fatalf("repaired track = %+v, want the checked HDR10+ status kept", track)
 	}
 }

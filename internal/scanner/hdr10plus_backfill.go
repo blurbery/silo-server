@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"sync"
 	"time"
 
@@ -34,10 +33,10 @@ const (
 // errHDR10PlusStorageStalled ends a pass whose frame reads keep timing out.
 var errHDR10PlusStorageStalled = errors.New("media storage is not responding")
 
-// HDR10PlusBackfillResult counts what one backfill pass did. HDR10Plus,
-// NotHDR10Plus, and Undecodable are recorded on the file, so it is not read
-// again until a scan rewrites its row. Changed, Unreadable, and TimedOut are
-// read again on the next pass.
+// HDR10PlusBackfillResult counts what one backfill pass did. HDR10Plus and
+// NotHDR10Plus are recorded on the file, so it is not read again until a scan
+// rewrites its row. Changed, Unreadable, and TimedOut are read again on the
+// next pass.
 type HDR10PlusBackfillResult struct {
 	// Checked is the number of candidate files examined.
 	Checked int `json:"checked"`
@@ -45,13 +44,12 @@ type HDR10PlusBackfillResult struct {
 	HDR10Plus int `json:"hdr10_plus"`
 	// NotHDR10Plus files have a first frame without HDR10+ metadata.
 	NotHDR10Plus int `json:"not_hdr10_plus"`
-	// Undecodable files were read, but ffprobe could not decode their first
-	// frame. They are recorded as not HDR10+, as a scan would.
-	Undecodable int `json:"undecodable"`
 	// Changed files had their row rewritten during the pass. The next pass
 	// checks the row as it now stands.
 	Changed int `json:"changed"`
-	// Unreadable files failed on a storage error, which may recover.
+	// Unreadable files could not be opened or decoded, or ffprobe failed.
+	// None is recorded as not HDR10+: a misconfigured ffprobe would otherwise
+	// mark the whole library that way.
 	Unreadable int `json:"unreadable"`
 	// TimedOut files did not answer within the frame read timeout.
 	TimedOut int `json:"timed_out"`
@@ -106,7 +104,6 @@ type hdr10PlusOutcome int
 const (
 	hdr10PlusOutcomeHDR10Plus hdr10PlusOutcome = iota
 	hdr10PlusOutcomeNotHDR10Plus
-	hdr10PlusOutcomeUndecodable
 	hdr10PlusOutcomeChanged
 	hdr10PlusOutcomeUnreadable
 	hdr10PlusOutcomeTimedOut
@@ -133,6 +130,7 @@ func (b *HDR10PlusBackfiller) Run(ctx context.Context, progress func(HDR10PlusBa
 			return result, err
 		}
 		if rowCount == 0 {
+			logHDR10PlusUnreadable(ctx, result)
 			return result, nil
 		}
 		afterID = lastID
@@ -159,8 +157,6 @@ func (b *HDR10PlusBackfiller) Run(ctx context.Context, progress func(HDR10PlusBa
 					result.HDR10Plus++
 				case hdr10PlusOutcomeNotHDR10Plus:
 					result.NotHDR10Plus++
-				case hdr10PlusOutcomeUndecodable:
-					result.Undecodable++
 				case hdr10PlusOutcomeChanged:
 					result.Changed++
 				case hdr10PlusOutcomeUnreadable:
@@ -184,6 +180,7 @@ func (b *HDR10PlusBackfiller) Run(ctx context.Context, progress func(HDR10PlusBa
 		// Count rows, not decoded candidates: a row skipped for unreadable
 		// JSON must not end the pass early.
 		if rowCount < b.batch {
+			logHDR10PlusUnreadable(ctx, result)
 			return result, nil
 		}
 	}
@@ -242,24 +239,18 @@ func (b *HDR10PlusBackfiller) backfillFile(ctx context.Context, c hdr10PlusCandi
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return 0, ctxErr
 	}
-	outcome := hdr10PlusOutcomeNotHDR10Plus
+	if errors.Is(err, errFrameSideDataTimeout) {
+		slog.WarnContext(ctx, "scanner: HDR10+ frame read timed out",
+			"component", "scanner", "file_id", c.id, "path", c.path, "timeout", frameSideDataProbeTimeout)
+		return hdr10PlusOutcomeTimedOut, nil
+	}
 	if err != nil {
-		if frameSideDataFailureIsTransient(err) {
-			// A killed ffprobe is the read timing out; other transient
-			// failures are storage errors or ffprobe not starting.
-			if exitErr, ok := errors.AsType[*exec.ExitError](err); ok && !exitErr.Exited() {
-				slog.WarnContext(ctx, "scanner: HDR10+ frame read timed out",
-					"component", "scanner", "file_id", c.id, "path", c.path, "timeout", frameSideDataProbeTimeout)
-				return hdr10PlusOutcomeTimedOut, nil
-			}
-			slog.DebugContext(ctx, "scanner: HDR10+ backfill could not read file",
-				"component", "scanner", "file_id", c.id, "path", c.path, "error", err)
-			return hdr10PlusOutcomeUnreadable, nil
-		}
-		slog.DebugContext(ctx, "scanner: HDR10+ backfill could not decode the first frame; recording the file as not HDR10+",
+		slog.DebugContext(ctx, "scanner: HDR10+ backfill could not read the first frame",
 			"component", "scanner", "file_id", c.id, "path", c.path, "error", err)
-		outcome = hdr10PlusOutcomeUndecodable
-	} else if mediaprobe.HasHDR10Plus(sideData) {
+		return hdr10PlusOutcomeUnreadable, nil
+	}
+	outcome := hdr10PlusOutcomeNotHDR10Plus
+	if mediaprobe.HasHDR10Plus(sideData) {
 		outcome = hdr10PlusOutcomeHDR10Plus
 	}
 
@@ -288,6 +279,15 @@ func (b *HDR10PlusBackfiller) backfillFile(ctx context.Context, c hdr10PlusCandi
 		return hdr10PlusOutcomeChanged, nil
 	}
 	return outcome, nil
+}
+
+// logHDR10PlusUnreadable warns once per pass about files it could not read,
+// so a misconfigured ffprobe or unreachable storage is visible.
+func logHDR10PlusUnreadable(ctx context.Context, result HDR10PlusBackfillResult) {
+	if result.Unreadable > 0 {
+		slog.WarnContext(ctx, "scanner: HDR10+ backfill could not read some files; they are read again on the next pass",
+			"component", "scanner", "unreadable", result.Unreadable, "checked", result.Checked)
+	}
 }
 
 // normalizedModifiedAt is the stored mtime in the form row comparisons use.
