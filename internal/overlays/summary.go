@@ -175,9 +175,9 @@ func normalizeAudio(file *models.MediaFile) string {
 	for _, track := range file.AudioTracks {
 		atmos := atmosProfile(track.Profile)
 		if track.Default {
-			defaultCandidates = append(defaultCandidates, track.Title, track.EmbeddedTitle, atmos, track.Codec)
+			defaultCandidates = append(defaultCandidates, atmos, track.Title, track.EmbeddedTitle, track.Codec)
 		}
-		candidates = append(candidates, track.Title, track.EmbeddedTitle, atmos, track.Codec)
+		candidates = append(candidates, atmos, track.Title, track.EmbeddedTitle, track.Codec)
 	}
 	if len(defaultCandidates) > 0 {
 		defaultCandidates = append(defaultCandidates, file.CodecAudio)
@@ -196,9 +196,10 @@ func normalizeAudio(file *models.MediaFile) string {
 
 // atmosProfile returns an FFprobe audio profile that names Atmos ("Dolby
 // Digital Plus + Dolby Atmos", "Dolby TrueHD + Dolby Atmos"), or "". The
-// stored codec of an Atmos track is plain eac3 or truehd, so the profile is
-// the only evidence when the track title does not say Atmos. Other profiles
-// are ignored so they cannot change the remaining badges.
+// stored codec of an Atmos track is plain eac3 or truehd, and the scanner
+// fills an untagged title with the codec's long name, so the profile is
+// checked before the title. Other profiles are ignored so they cannot change
+// the remaining badges.
 func atmosProfile(profile string) string {
 	if strings.Contains(strings.ToLower(profile), "atmos") {
 		return profile

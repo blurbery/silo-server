@@ -65,11 +65,12 @@ describe("pickBestAttributes", () => {
     const versions = [
       makeVersion({
         codec_audio: "eac3",
-        audio_tracks: [{ codec: "truehd", profile: "Dolby TrueHD + Dolby Atmos", language: "en" }],
+        audio_tracks: [
+          { codec: "aac", profile: "Dolby Digital Plus + Dolby Atmos", language: "en" },
+        ],
       }),
     ];
-    expect(pickBestAttributes(versions)?.audioLabel).toBe("TrueHD Atmos");
-    expect(pickBestAttributes([makeVersion({ codec_audio: "eac3" })])?.audioLabel).toBe("EAC3");
+    expect(pickBestAttributes(versions)?.audioLabel).toBe("EAC3");
   });
 
   it("sets hdr true when any version has hdr", () => {
@@ -127,16 +128,16 @@ describe("pickBestAttributes", () => {
 });
 
 describe("selectDefaultVersion audio matching", () => {
-  it("still picks by codec when the preferred track's profile names Atmos", () => {
+  it("still matches versions by codec when the preferred track's profile names Atmos", () => {
+    const plain = makeVersion({ file_id: 1, resolution: "2160p", codec_audio: "aac" });
     const atmos = makeVersion({
-      file_id: 1,
+      file_id: 2,
       resolution: "2160p",
       codec_audio: "eac3",
       audio_tracks: [
         { codec: "eac3", profile: "Dolby Digital Plus + Dolby Atmos", language: "en" },
       ],
     });
-    const plain = makeVersion({ file_id: 2, resolution: "1080p", codec_audio: "aac" });
-    expect(selectDefaultVersion([plain, atmos])?.file_id).toBe(1);
+    expect(selectDefaultVersion([plain, atmos])?.file_id).toBe(2);
   });
 });

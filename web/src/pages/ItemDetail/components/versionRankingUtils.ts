@@ -1,6 +1,6 @@
 import type { FileVersion, LeafItemUserData, PlaybackVariant } from "@/api/types";
-import { mapAudioLabel } from "@/lib/mediaFormat";
-import { versionAudioProfile } from "./versionFormatUtils";
+import { audioTrackAtmosEvidence, mapAudioLabel } from "@/lib/mediaFormat";
+import { versionAudioAtmosEvidence } from "./versionFormatUtils";
 
 const RESOLUTION_RANK: Record<string, number> = {
   "4k": 4,
@@ -92,7 +92,7 @@ export function pickBestAttributes(
   return {
     resolution: best.resolution,
     hdr: best.hdr,
-    audioLabel: best.audioCodec ? mapAudioLabel(best.audioCodec, best.audioProfile) : "",
+    audioLabel: best.audioCodec ? mapAudioLabel(best.audioCodec, best.audioEvidence) : "",
   };
 }
 
@@ -105,7 +105,7 @@ function bestAttributes(
   resolution: string;
   hdr: boolean;
   audioCodec: string;
-  audioProfile?: string;
+  audioEvidence?: string;
 } | null {
   if (versions.length === 0) return null;
 
@@ -123,7 +123,7 @@ function bestAttributes(
   let bestResScore = -1;
   let hdr = false;
   let bestAudioCodec = "";
-  let bestAudioProfile: string | undefined;
+  let bestAudioEvidence: string | undefined;
   let bestAudioScore = -1;
 
   for (const v of candidates) {
@@ -138,7 +138,7 @@ function bestAttributes(
     if (as_ > bestAudioScore) {
       bestAudioScore = as_;
       bestAudioCodec = v.codec_audio;
-      bestAudioProfile = versionAudioProfile(v);
+      bestAudioEvidence = versionAudioAtmosEvidence(v);
     }
 
     // Also check individual audio tracks for higher-quality codecs
@@ -149,7 +149,7 @@ function bestAttributes(
           if (ts > bestAudioScore) {
             bestAudioScore = ts;
             bestAudioCodec = t.codec;
-            bestAudioProfile = t.profile;
+            bestAudioEvidence = audioTrackAtmosEvidence(t);
           }
         }
       }
@@ -160,7 +160,7 @@ function bestAttributes(
     resolution: bestRes,
     hdr,
     audioCodec: bestAudioCodec,
-    audioProfile: bestAudioProfile,
+    audioEvidence: bestAudioEvidence,
   };
 }
 

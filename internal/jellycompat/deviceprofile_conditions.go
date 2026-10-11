@@ -15,6 +15,16 @@ import (
 
 const codecProfileTargetVideo = "video"
 
+// conditionPropertyVideoRangeType is the normalized VideoRangeType profile
+// condition property and its key in conditionValues.
+const conditionPropertyVideoRangeType = "videorangetype"
+
+// Dolby Vision 7 range types; the others are with the stream constants.
+const (
+	compatRangeDOVIWithEL        = "DOVIWithEL"
+	compatRangeDOVIWithELHDRPlus = "DOVIWithELHDR10Plus"
+)
+
 type codecProfileCompatibility struct {
 	VideoSupported bool
 	AudioSupported bool
@@ -120,19 +130,41 @@ func hlsRemuxConditionsMatch(conditions []ProfileCondition, values conditionValu
 	return true
 }
 
+// hdr10PlusFallbackRangeType returns the range type an HDR10+ video reports
+// without its dynamic metadata: HDR10Plus is HDR10, DOVIWithHDR10Plus is
+// DOVIWithHDR10 and DOVIWithELHDR10Plus is DOVIWithEL. Before the scanner
+// detected HDR10+ these files reported that range type, so a condition it
+// satisfies keeps the routes such clients already had.
+func hdr10PlusFallbackRangeType(rangeType string) (string, bool) {
+	switch {
+	case strings.EqualFold(rangeType, compatRangeHDR10Plus):
+		return compatRangeHDR10, true
+	case strings.EqualFold(rangeType, compatRangeDOVIWithHDRPlus):
+		return compatRangeDOVIWithHDR, true
+	case strings.EqualFold(rangeType, compatRangeDOVIWithELHDRPlus):
+		return compatRangeDOVIWithEL, true
+	default:
+		return "", false
+	}
+}
+
 // hlsRemuxHDR10PlusConditionMatches mirrors Jellyfin's CanStreamCopyVideo,
 // which copies an HDR10+ stream, dynamic metadata included, whenever the
 // request accepts HDR10. Jellyfin derives the accepted range types from
 // NotEquals exclusion lists as well, so unlike direct play this rule also
 // widens negative conditions: a client that excludes HDR10Plus but not HDR10
 // (Jellyfin Android TV on an HDR10-only display) gets a copy rather than a
-// full encode or no route at all.
+// full encode or no route at all. The Dolby Vision variants keep the copy
+// they had before HDR10+ was detected.
 func hlsRemuxHDR10PlusConditionMatches(condition ProfileCondition, values conditionValues) bool {
-	if normalizeConditionToken(condition.Property) != "videorangetype" ||
-		!strings.EqualFold(values["videorangetype"].text, compatRangeHDR10Plus) {
+	if normalizeConditionToken(condition.Property) != conditionPropertyVideoRangeType {
 		return false
 	}
-	return conditionMatches(condition, conditionValues{"videorangetype": {text: compatRangeHDR10}})
+	fallback, ok := hdr10PlusFallbackRangeType(values[conditionPropertyVideoRangeType].text)
+	if !ok {
+		return false
+	}
+	return conditionMatches(condition, conditionValues{conditionPropertyVideoRangeType: {text: fallback}})
 }
 
 // hlsRemuxDV8HDR10BaseLayerConditionMatches recognizes the precise device
@@ -148,7 +180,7 @@ func hlsRemuxDV8HDR10BaseLayerConditionMatches(condition ProfileCondition, versi
 }
 
 func isPositiveVideoRangeCondition(condition ProfileCondition) bool {
-	if normalizeConditionToken(condition.Property) != "videorangetype" {
+	if normalizeConditionToken(condition.Property) != conditionPropertyVideoRangeType {
 		return false
 	}
 	switch normalizeConditionToken(condition.Condition) {
@@ -168,8 +200,7 @@ func hlsRemuxDV8HDR10BaseLayerEligible(version catalog.FileVersion) bool {
 	if codec != compatVideoCodecHEVC && codec != compatVideoCodecH265 ||
 		video.DVProfile != 8 || video.DVBLCompatID != 1 ||
 		!video.DVConfigPresent || !video.DVBLCompatIDPresent || !video.DVBLPresent ||
-		video.DVELPresent ||
-		!strings.EqualFold(compatVideoRangeType(video, version.HDR), "DOVIWithHDR10") {
+		video.DVELPresent || !dv8HDR10BaseRangeType(compatVideoRangeType(video, version.HDR)) {
 		return false
 	}
 
@@ -341,6 +372,9 @@ func conditionMatches(condition ProfileCondition, values conditionValues) bool {
 	if hdr10PlusMatchesPositiveHDR10Condition(condition, actual) {
 		return true
 	}
+	if hdr10PlusExcludedWithHDR10(condition, actual) {
+		return false
+	}
 
 	switch normalizeConditionToken(condition.Condition) {
 	case "equals":
@@ -368,18 +402,44 @@ func conditionMatches(condition ProfileCondition, values conditionValues) bool {
 	}
 }
 
+// dv8HDR10BaseRangeType reports a Dolby Vision 8.1 range type: an HDR10
+// base layer, with or without HDR10+ metadata in it.
+func dv8HDR10BaseRangeType(rangeType string) bool {
+	return strings.EqualFold(rangeType, compatRangeDOVIWithHDR) || strings.EqualFold(rangeType, compatRangeDOVIWithHDRPlus)
+}
+
 // hdr10PlusMatchesPositiveHDR10Condition mirrors Jellyfin 10.11's
 // ConditionProcessor, where HDR10 also satisfies a range condition for an
 // HDR10+ video: HDR10+ only adds dynamic metadata to an HDR10 stream, and a
-// display without HDR10+ support ignores it. Silo widens only positive
-// conditions (Equals, EqualsAny), so a client that excludes HDR10Plus with
-// NotEquals keeps it excluded for direct play. Jellyfin reaches the same
-// result for the pipe-separated exclusion lists clients send, which it cannot
-// parse as a single range type.
+// display without HDR10+ support ignores it. The Dolby Vision variants fall
+// back the same way so they keep the direct play they had before HDR10+ was
+// detected. Silo widens only positive conditions (Equals, EqualsAny), so a
+// client that excludes an HDR10+ range type with NotEquals keeps it excluded
+// for direct play. Jellyfin reaches the same result for the pipe-separated
+// exclusion lists clients send, which it cannot parse as a single range type.
 func hdr10PlusMatchesPositiveHDR10Condition(condition ProfileCondition, actual conditionValue) bool {
-	return isPositiveVideoRangeCondition(condition) &&
-		strings.EqualFold(actual.text, compatRangeHDR10Plus) &&
-		stringInConditionSet(compatRangeHDR10, condition.Value)
+	if !isPositiveVideoRangeCondition(condition) {
+		return false
+	}
+	fallback, ok := hdr10PlusFallbackRangeType(actual.text)
+	return ok && stringInConditionSet(fallback, condition.Value)
+}
+
+// hdr10PlusExcludedWithHDR10 reports a negative range condition that excludes
+// an HDR10+ video's HDR10 form. A client that excludes HDR10 (an SDR display)
+// but predates the HDR10+ range types excluded these files when they reported
+// HDR10, and still does.
+func hdr10PlusExcludedWithHDR10(condition ProfileCondition, actual conditionValue) bool {
+	if normalizeConditionToken(condition.Property) != conditionPropertyVideoRangeType {
+		return false
+	}
+	switch normalizeConditionToken(condition.Condition) {
+	case "notequals", "notequalsany", "notincollection":
+	default:
+		return false
+	}
+	fallback, ok := hdr10PlusFallbackRangeType(actual.text)
+	return ok && stringInConditionSet(fallback, condition.Value)
 }
 
 func buildConditionValues(version catalog.FileVersion, audioStreamIndex *int) conditionValues {
@@ -387,8 +447,8 @@ func buildConditionValues(version catalog.FileVersion, audioStreamIndex *int) co
 	audio := compatAudioTrack(version, audioStreamIndex)
 
 	values := conditionValues{
-		"videorangetype": {text: compatVideoRangeType(video, version.HDR)},
-		"isinterlaced":   {text: strconv.FormatBool(video.Interlaced)},
+		conditionPropertyVideoRangeType: {text: compatVideoRangeType(video, version.HDR)},
+		"isinterlaced":                  {text: strconv.FormatBool(video.Interlaced)},
 	}
 
 	// Everything below is only inserted when Silo actually knows the value.

@@ -28,7 +28,7 @@ func planHDRFileV3(req StartRequestV3, file *models.MediaFile) PlannerResultV3 {
 
 // HDR10+ is HDR10 plus dynamic metadata that an HDR10-only display ignores,
 // so for such a client an HDR10+ file must get the result the same file gets
-// when it is labelled HDR10, on every delivery. A video encode has no
+// when its range type is HDR10, on every delivery. A video encode has no
 // HDR-preserving recipe, so without a tone-map executor both end in the same
 // terminal.
 func TestPlanPlaybackV3PlaysHDR10PlusAsHDR10ForHDR10OnlyOutput(t *testing.T) {

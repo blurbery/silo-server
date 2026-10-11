@@ -140,7 +140,7 @@ type PlaybackProbeEnsurer struct {
 	ffmpegPath  string
 	livePaths   atomic.Pointer[probeBinaries]
 	timeout     time.Duration
-	// probeFile is the ffprobe entry point; nil means the package's ProbeFile.
+	// probeFile is the ffprobe entry point; nil means probeFileStreamsOnly.
 	// Tests substitute it to drive the coalescing behavior deterministically.
 	probeFile func(context.Context, string, string) (*ProbeData, error)
 	// probeRepair collapses concurrent repairs of the same source revision so a
@@ -431,7 +431,7 @@ func (e *PlaybackProbeEnsurer) ensureCriticalProbe(ctx context.Context, file *mo
 		}
 		probeFile := e.probeFile
 		if probeFile == nil {
-			probeFile = ProbeFile
+			probeFile = probeFileStreamsOnly
 		}
 		probe, err := probeFile(probeCtx, ffprobePath, current.FilePath)
 		if err != nil && IsProbeRejection(probeCtx, current.FilePath, err) {

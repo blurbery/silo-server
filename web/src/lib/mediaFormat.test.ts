@@ -11,6 +11,8 @@ import {
   formatMbpsFromKbps,
   formatSampleRate,
   mapAudioLabel,
+  audioTrackHasAtmos,
+  audioTrackLabel,
   prettyResolution,
 } from "./mediaFormat";
 
@@ -38,6 +40,26 @@ describe("mapAudioLabel", () => {
     expect(mapAudioLabel("TrueHD Atmos")).toBe("TrueHD Atmos");
     expect(mapAudioLabel("eac3 atmos")).toBe("DD+ Atmos");
     expect(mapAudioLabel("Atmos")).toBe("Atmos");
+  });
+
+  it("reads Atmos from a track's profile or titles", () => {
+    const longName = "ATSC A/52B (AC-3, E-AC-3)";
+    expect(
+      audioTrackLabel({
+        codec: "eac3",
+        title: longName,
+        profile: "Dolby Digital Plus + Dolby Atmos",
+      }),
+    ).toBe("DD+ Atmos");
+    expect(audioTrackLabel({ codec: "truehd", embedded_title: "TrueHD Atmos 7.1" })).toBe(
+      "TrueHD Atmos",
+    );
+    expect(audioTrackLabel({ codec: "eac3", title: longName })).toBe("EAC3");
+    expect(audioTrackLabel({ title: "Atmos" })).toBe("");
+    expect(audioTrackHasAtmos({ codec: "eac3", profile: "Dolby Digital Plus + Dolby Atmos" })).toBe(
+      true,
+    );
+    expect(audioTrackHasAtmos({ codec: "eac3", title: longName })).toBe(false);
   });
 
   it("reads Atmos from the FFprobe profile of a plain codec", () => {

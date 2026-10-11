@@ -57,11 +57,7 @@ type scanStateFile struct {
 	HasAudioTracks         bool
 	HasChapters            bool
 	DVProvenanceCurrent    *bool
-	// HDR10PlusProbeCurrent is false when a stored PQ video track lacks the
-	// hdr10_plus key, which means it was probed before frame-level HDR10+
-	// detection. Nil means the state was built in memory, not read back.
-	HDR10PlusProbeCurrent *bool
-	ExternalSubtitlePaths []string
+	ExternalSubtitlePaths  []string
 }
 
 const scanStateColumns = `id, content_id, episode_id, extra_id,
@@ -86,12 +82,6 @@ const scanStateColumns = `id, content_id, episode_id, extra_id,
 		WHERE (track ? 'dv_profile' OR lower(COALESCE(track->>'video_range_type', '')) LIKE '%dovi%' OR lower(COALESCE(track->>'dolby_vision', '')) LIKE '%dolby%')
 		  AND (NOT (track ? 'dv_config_present') OR NOT (track ? 'dv_bl_compat_id_present'))
 	) AS dv_provenance_current,
-	NOT EXISTS (
-		SELECT 1
-		FROM jsonb_array_elements(CASE WHEN jsonb_typeof(video_tracks) = 'array' THEN video_tracks ELSE '[]'::jsonb END) AS pq_track(track)
-		WHERE lower(COALESCE(track->>'color_transfer', '')) LIKE '%smpte2084%'
-		  AND NOT (track ? 'hdr10_plus')
-	) AS hdr10_plus_probe_current,
 	COALESCE((
 		SELECT jsonb_agg(path)
 		FROM (
@@ -119,7 +109,6 @@ func scanScanStateRow(row pgx.Row) (*scanStateFile, error) {
 	var probeSource *string
 	var externalSubtitlePathsJSON []byte
 	var dvProvenanceCurrent bool
-	var hdr10PlusProbeCurrent bool
 
 	if err := row.Scan(
 		&state.ID,
@@ -162,7 +151,6 @@ func scanScanStateRow(row pgx.Row) (*scanStateFile, error) {
 		&state.HasAudioTracks,
 		&state.HasChapters,
 		&dvProvenanceCurrent,
-		&hdr10PlusProbeCurrent,
 		&externalSubtitlePathsJSON,
 	); err != nil {
 		return nil, fmt.Errorf("scanning scan state row: %w", err)
@@ -206,7 +194,6 @@ func scanScanStateRow(row pgx.Row) (*scanStateFile, error) {
 	}
 	state.FileModifiedAt = fileModifiedAt
 	state.DVProvenanceCurrent = &dvProvenanceCurrent
-	state.HDR10PlusProbeCurrent = &hdr10PlusProbeCurrent
 	if fileHash != nil {
 		state.FileHash = *fileHash
 	}

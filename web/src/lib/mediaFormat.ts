@@ -29,12 +29,13 @@ export function formatCodecLabel(codec?: string, fallback = "—"): string {
 
 /**
  * Fuzzy audio-family label for quality badges. The stored codec of an Atmos
- * track is plain "eac3" or "truehd"; FFprobe names Atmos in the track's
- * profile ("Dolby Digital Plus + Dolby Atmos"), so pass it when known.
+ * track is plain "eac3" or "truehd", so atmosEvidence carries any other text
+ * that can name Atmos, such as the track's FFprobe profile ("Dolby Digital
+ * Plus + Dolby Atmos"). audioTrackLabel builds it from a track.
  */
-export function mapAudioLabel(codec: string, profile?: string): string {
+export function mapAudioLabel(codec: string, atmosEvidence?: string): string {
   const lower = codec.toLowerCase();
-  if (lower.includes("atmos") || profile?.toLowerCase().includes("atmos")) {
+  if (lower.includes("atmos") || atmosEvidence?.toLowerCase().includes("atmos")) {
     if (lower.includes("truehd")) return "TrueHD Atmos";
     if (lower.includes("eac3") || lower.includes("e-ac-3")) return "DD+ Atmos";
     return "Atmos";
@@ -46,6 +47,32 @@ export function mapAudioLabel(codec: string, profile?: string): string {
   if (lower.includes("aac")) return "AAC";
   if (lower.includes("flac")) return "FLAC";
   return codec.toUpperCase();
+}
+
+/** The audio track fields that can identify a codec and Atmos. */
+export interface AudioTrackFormat {
+  codec?: string;
+  profile?: string;
+  title?: string;
+  embedded_title?: string;
+}
+
+/**
+ * Text beyond the codec that can name Atmos: the FFprobe profile, and the
+ * track titles, which some releases tag "Atmos" when the profile is empty.
+ */
+export function audioTrackAtmosEvidence(track: AudioTrackFormat): string {
+  return [track.profile, track.title, track.embedded_title].filter(Boolean).join(" ");
+}
+
+/** Whether a track's codec, profile, or titles name Atmos. */
+export function audioTrackHasAtmos(track: AudioTrackFormat): boolean {
+  return `${track.codec ?? ""} ${audioTrackAtmosEvidence(track)}`.toLowerCase().includes("atmos");
+}
+
+/** Audio-family label for one track ("DD+ Atmos", "TrueHD", …), or "" without a codec. */
+export function audioTrackLabel(track: AudioTrackFormat): string {
+  return track.codec ? mapAudioLabel(track.codec, audioTrackAtmosEvidence(track)) : "";
 }
 
 interface FormatFileSizeOptions {

@@ -403,7 +403,7 @@ type VideoTrack struct {
 	DVRPUPresent        bool   `json:"dv_rpu_present,omitempty"`
 	DVELPresent         bool   `json:"dv_el_present,omitempty"`
 	DVEnhancementLayer  string `json:"dv_enhancement_layer,omitempty"` // none, mel, fel, unknown
-	HDR10Plus           bool   `json:"hdr10_plus"`                     // always written; a PQ track without the key predates frame-level HDR10+ detection
+	HDR10Plus           bool   `json:"hdr10_plus,omitempty"`
 	Profile             string `json:"profile,omitempty"`
 	Level               int    `json:"level,omitempty"`
 	Width               int    `json:"width,omitempty"`
@@ -435,6 +435,12 @@ type VideoTrack struct {
 	// safety scan cannot establish that video stream-copy is safe. It is
 	// runtime-only so transient scan failures are retried on a later request.
 	VideoCopyUnsafe bool `json:"-"`
+	// HDR10PlusUnchecked records that the track's HDR10+ status was never
+	// read from a decoded frame: it was probed before frame-level detection,
+	// by playback's quick repair, or when the frame read failed transiently.
+	// MarshalJSON writes hdr10_plus only for checked tracks, so a stored PQ
+	// track without the key is checked by the next library scan.
+	HDR10PlusUnchecked bool `json:"-"`
 }
 
 // UnmarshalJSON preserves raw-key presence so rolling older scanners cannot
@@ -453,7 +459,21 @@ func (v *VideoTrack) UnmarshalJSON(data []byte) error {
 	current := raw["dv_config_present"] != nil && raw["dv_bl_compat_id_present"] != nil
 	*v = VideoTrack(decoded)
 	v.DVProvenanceCurrent = &current
+	v.HDR10PlusUnchecked = raw["hdr10_plus"] == nil
 	return nil
+}
+
+// MarshalJSON writes hdr10_plus, false included, for a track whose HDR10+
+// status was checked, and leaves it out of an unchecked one.
+func (v VideoTrack) MarshalJSON() ([]byte, error) {
+	type videoTrackAlias VideoTrack
+	if v.HDR10PlusUnchecked {
+		return json.Marshal(videoTrackAlias(v))
+	}
+	return json.Marshal(struct {
+		videoTrackAlias
+		HDR10Plus bool `json:"hdr10_plus"`
+	}{videoTrackAlias(v), v.HDR10Plus})
 }
 
 // AudioTrack represents a probed audio stream stored as JSONB.

@@ -70,8 +70,8 @@ func TestProbeFileDetectsHDR10PlusFromFirstFrame(t *testing.T) {
 		t.Fatalf("video tracks = %d, want 1", len(probe.VideoTracks))
 	}
 	track := probe.VideoTracks[0]
-	if !track.HDR10Plus || track.VideoRangeType != "HDR10Plus" {
-		t.Fatalf("HDR10Plus = %v, VideoRangeType = %q; want true, HDR10Plus", track.HDR10Plus, track.VideoRangeType)
+	if !track.HDR10Plus || track.VideoRangeType != "HDR10Plus" || track.HDR10PlusUnchecked {
+		t.Fatalf("track = %+v; want a checked HDR10Plus track", track)
 	}
 	frames := frameProbeInvocations(t, argsLog)
 	if len(frames) != 1 {
@@ -99,15 +99,48 @@ func TestProbeFileSkipsFrameProbeForNonPQVideo(t *testing.T) {
 }
 
 func TestProbeFileKeepsStreamFactsWhenFrameProbeFails(t *testing.T) {
-	ffprobe, _ := writeHDR10PlusFFprobe(t, hdr10PlusStreamsJSON, "echo 'Invalid data found when processing input' >&2; exit 1")
-
-	probe, err := ProbeFile(context.Background(), ffprobe, filepath.Join(t.TempDir(), "movie.mkv"))
-	if err != nil {
-		t.Fatalf("ProbeFile: %v", err)
+	tests := []struct {
+		name          string
+		frameScript   string
+		wantUnchecked bool
+	}{
+		// ffprobe read the file and rejected the frame: retrying on every
+		// scan would not change the answer.
+		{name: "undecodable frame", frameScript: "echo 'Invalid data found when processing input' >&2; exit 1"},
+		{name: "storage error", frameScript: "echo 'movie.mkv: Input/output error' >&2; exit 1", wantUnchecked: true},
+		{name: "killed", frameScript: "kill -9 $$", wantUnchecked: true},
 	}
-	track := probe.VideoTracks[0]
-	if track.HDR10Plus || track.VideoRangeType != "HDR10" || probe.CodecVideo != "hevc" {
-		t.Fatalf("track = %+v, codec = %q; want the stream-level HDR10 facts", track, probe.CodecVideo)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ffprobe, _ := writeHDR10PlusFFprobe(t, hdr10PlusStreamsJSON, tt.frameScript)
+
+			probe, err := ProbeFile(context.Background(), ffprobe, filepath.Join(t.TempDir(), "movie.mkv"))
+			if err != nil {
+				t.Fatalf("ProbeFile: %v", err)
+			}
+			track := probe.VideoTracks[0]
+			if track.HDR10Plus || track.VideoRangeType != "HDR10" || probe.CodecVideo != "hevc" {
+				t.Fatalf("track = %+v, codec = %q; want the stream-level HDR10 facts", track, probe.CodecVideo)
+			}
+			if track.HDR10PlusUnchecked != tt.wantUnchecked {
+				t.Fatalf("HDR10PlusUnchecked = %v, want %v", track.HDR10PlusUnchecked, tt.wantUnchecked)
+			}
+		})
+	}
+}
+
+func TestProbeFileStreamsOnlyLeavesHDR10PlusUnchecked(t *testing.T) {
+	ffprobe, argsLog := writeHDR10PlusFFprobe(t, hdr10PlusStreamsJSON, "printf '%s' '"+hdr10PlusFrameJSON+"'")
+
+	probe, err := probeFileStreamsOnly(context.Background(), ffprobe, filepath.Join(t.TempDir(), "movie.mkv"))
+	if err != nil {
+		t.Fatalf("probeFileStreamsOnly: %v", err)
+	}
+	if frames := frameProbeInvocations(t, argsLog); len(frames) != 0 {
+		t.Fatalf("frame probes = %q, want none from playback's probe repair", frames)
+	}
+	if track := probe.VideoTracks[0]; track.HDR10Plus || !track.HDR10PlusUnchecked {
+		t.Fatalf("track = %+v, want an unchecked HDR10 track for the next scan", track)
 	}
 }
 

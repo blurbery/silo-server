@@ -78,6 +78,21 @@ func TestHLSRemuxDV8HDR10BaseLayerMatchesExplicitDOVIAndHDR10Declaration(t *test
 	}
 }
 
+// A DV 8.1 file whose HDR10 base layer also carries HDR10+ keeps the remux it
+// had before the scanner detected HDR10+.
+func TestHLSRemuxDV8HDR10BaseLayerAcceptsHDR10PlusBase(t *testing.T) {
+	version := hlsRemuxDV8HDR10BaseLayerTestVersion()
+	version.VideoTracks[0].HDR10Plus = true
+	version.VideoTracks[0].VideoRangeType = "DOVIWithHDR10Plus"
+	profile := hlsRemuxDV8HDR10BaseLayerTestProfile([]ProfileCondition{
+		{Condition: "EqualsAny", Property: "VideoRangeType", Value: "SDR|HDR10|HDR10Plus|HLG|DOVI", IsRequired: true},
+		{Condition: "EqualsAny", Property: "VideoCodecTag", Value: "hvc1|dvh1", IsRequired: true},
+	})
+	if !profile.SupportsHLSRemuxForAudioStream(version, defaultAudioStreamIndex(version)) {
+		t.Fatal("DV8.1 source with HDR10+ in its base layer lost the explicit DOVI+HDR10 HLS remux")
+	}
+}
+
 func TestDV8HDR10BaseLayerDoesNotWidenOriginalMKVDirectPlay(t *testing.T) {
 	version := hlsRemuxDV8HDR10BaseLayerTestVersion()
 	profile := DeviceProfile{
@@ -252,6 +267,27 @@ func TestHDR10PlusSatisfiesHDR10RangeConditions(t *testing.T) {
 		{
 			name: "HDR10 fails an HDR10 exclusion", rangeType: "HDR10",
 			rangeProfile: unsupportedRangeProfile("hevc", sdrDisplay),
+		},
+		{
+			name: "DV 8.1 with HDR10+ meets a positive list naming DOVIWithHDR10", rangeType: "DOVIWithHDR10Plus",
+			rangeProfile: supportedRanges("SDR|HDR10|DOVIWithHDR10"), wantDirectPlay: true, wantHLSRemux: true,
+		},
+		{
+			name: "DV 8.1 with HDR10+ fails a positive list without DOVIWithHDR10", rangeType: "DOVIWithHDR10Plus",
+			rangeProfile: supportedRanges("SDR|HDR10|HLG"),
+		},
+		{
+			name: "DV 7 with HDR10+ meets a positive list naming DOVIWithEL", rangeType: "DOVIWithELHDR10Plus",
+			rangeProfile: supportedRanges("SDR|HDR10|DOVIWithEL"), wantDirectPlay: true, wantHLSRemux: true,
+		},
+		// A profile from before the HDR10+ range types excludes HDR10 alone.
+		{
+			name: "HDR10+ stays excluded by an exclusion naming only HDR10", rangeType: "HDR10Plus",
+			rangeProfile: unsupportedRangeProfile("hevc", "DOVI|DOVIWithHDR10|HDR10"),
+		},
+		{
+			name: "DV 8.1 with HDR10+ stays excluded by an exclusion naming only DOVIWithHDR10", rangeType: "DOVIWithHDR10Plus",
+			rangeProfile: unsupportedRangeProfile("hevc", "DOVI|DOVIWithHDR10"),
 		},
 	}
 	for _, tt := range tests {

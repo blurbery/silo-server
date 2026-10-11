@@ -7,7 +7,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { formatFileSize, mapAudioLabel } from "@/lib/mediaFormat";
 import { videoRangeLabel } from "@/lib/videoRange";
-import { extractSourceHint, versionAudioProfile } from "./versionFormatUtils";
+import { extractSourceHint, versionAudioAtmosEvidence } from "./versionFormatUtils";
 import { resolutionScore } from "./versionRankingUtils";
 
 // ---------------------------------------------------------------------------
@@ -22,7 +22,7 @@ export function buildQualitySummary(version: FileVersion): string {
   const rangeLabel = videoRangeLabel(version);
   if (rangeLabel) parts.push(rangeLabel);
   if (version.codec_audio)
-    parts.push(mapAudioLabel(version.codec_audio, versionAudioProfile(version)));
+    parts.push(mapAudioLabel(version.codec_audio, versionAudioAtmosEvidence(version)));
   if (parts.length === 0 && version.container) {
     parts.push(version.container.toUpperCase());
   }

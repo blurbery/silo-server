@@ -65,7 +65,20 @@ type ffprobeDisp = mediaprobe.Disposition
 
 // ProbeFile runs ffprobe on the given file and returns parsed ProbeData.
 // ffprobePath is the path to the ffprobe binary. filePath is the media file to probe.
+// A PQ primary video also has its first frame read for HDR10+ metadata.
 func ProbeFile(ctx context.Context, ffprobePath string, filePath string) (*ProbeData, error) {
+	return probeMediaFile(ctx, ffprobePath, filePath, true)
+}
+
+// probeFileStreamsOnly is ProbeFile without the first-frame read. Playback's
+// probe repair runs under a short budget and does not need HDR10+ status (an
+// unchecked HDR10+ file plays as HDR10), so it leaves the track unchecked for
+// the next library scan.
+func probeFileStreamsOnly(ctx context.Context, ffprobePath string, filePath string) (*ProbeData, error) {
+	return probeMediaFile(ctx, ffprobePath, filePath, false)
+}
+
+func probeMediaFile(ctx context.Context, ffprobePath string, filePath string, readFrameSideData bool) (*ProbeData, error) {
 	// Errors go to stderr (kept on the *exec.ExitError) so IsProbeRejection
 	// can tell an unreadable source from damaged content; stdout stays JSON.
 	cmd := exec.CommandContext(ctx, ffprobePath,
@@ -87,8 +100,10 @@ func ProbeFile(ctx context.Context, ffprobePath string, filePath string) (*Probe
 	if err := json.Unmarshal(output, &raw); err != nil {
 		return nil, fmt.Errorf("ffprobe JSON parse failed for %s: %w", filePath, err)
 	}
-	if err := applyPrimaryVideoFrameSideData(ctx, ffprobePath, filePath, raw.Streams); err != nil {
-		return nil, err
+	if readFrameSideData {
+		if err := applyPrimaryVideoFrameSideData(ctx, ffprobePath, filePath, raw.Streams); err != nil {
+			return nil, err
+		}
 	}
 
 	probe := convertProbeData(&raw)
@@ -326,6 +341,12 @@ func convertProbeData(raw *ffprobeOutput) *ProbeData {
 				continue
 			}
 			normalized := mediaprobe.NormalizeVideoTrack(s)
+			if len(pd.VideoTracks) > 0 {
+				// Only the primary stream's frame is read, and only its HDR10+
+				// status is used, so a later stream is never left for a
+				// backfill that would not read it either.
+				normalized.HDR10PlusUnchecked = false
+			}
 			track := VideoTrackInfo{
 				Title:               normalized.Title,
 				Codec:               normalized.Codec,
@@ -357,6 +378,7 @@ func convertProbeData(raw *ffprobeOutput) *ProbeData {
 				BitDepth:            normalized.BitDepth,
 				PixelFormat:         normalized.PixelFormat,
 				ReferenceFrames:     normalized.ReferenceFrames,
+				HDR10PlusUnchecked:  normalized.HDR10PlusUnchecked,
 			}
 			pd.VideoTracks = append(pd.VideoTracks, track)
 			if pd.CodecVideo == "" {
@@ -645,11 +667,6 @@ func primaryVideoFrameRate(streams []ffprobeStream) (string, bool) {
 	return "", false
 }
 
-// probeVideoPacketDuration derives a duration for files whose duration
-// metadata is unusable by scanning video packet timestamps. It intentionally
-// demuxes the whole file: the timestamps being repaired are the same ones
-// ffprobe would need for reliable interval seeking, so sampling cannot be
-// trusted here. The repair layer keeps this one-shot per file.
 // frameSideDataProbeTimeout bounds the one-frame decode that reads HDR10+
 // metadata. A 4K HEVC frame decodes in well under a second; the margin covers
 // slow network storage.
@@ -661,9 +678,11 @@ const frameSideDataProbeTimeout = 30 * time.Second
 // stream is checked because it is the one playback and the badges describe.
 //
 // A failed frame read is not fatal: the file keeps its stream-level facts and
-// is recorded as not HDR10+, which plays and labels as HDR10. Only a canceled
-// or expired caller context is returned, so a half-finished probe is not
-// persisted as if the frame had been checked.
+// plays and labels as HDR10. When ffprobe read the file and could not decode
+// the frame, the track counts as checked, so damaged content is not retried
+// on every scan. A timeout or a storage error leaves it unchecked for the next
+// scan. A canceled or expired caller context is returned, so a half-finished
+// probe is not stored.
 func applyPrimaryVideoFrameSideData(ctx context.Context, ffprobePath, filePath string, streams []ffprobeStream) error {
 	for i := range streams {
 		if !mediaprobe.IsPrimaryVideoStream(streams[i]) {
@@ -672,33 +691,51 @@ func applyPrimaryVideoFrameSideData(ctx context.Context, ffprobePath, filePath s
 		if !mediaprobe.NeedsFrameSideData(streams[i]) {
 			return nil
 		}
-		sideData, err := probeVideoFrameSideData(ctx, ffprobePath, filePath, streams[i].Index)
+		sideData, err := probeVideoFrameSideData(ctx, ffprobePath, filePath, strconv.Itoa(streams[i].Index))
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			slog.WarnContext(ctx, "scanner: could not read the first video frame to check for HDR10+; recording the file as HDR10",
+			retry := frameSideDataFailureIsTransient(err)
+			slog.WarnContext(ctx, "scanner: could not read the first video frame to check for HDR10+; treating the file as HDR10",
 				"component", "scanner",
 				"path", filePath,
+				"retry_next_scan", retry,
 				"error", err,
 			)
+			streams[i].FrameSideDataRead = !retry
 			return nil
 		}
 		streams[i].FrameSideDataList = sideData
+		streams[i].FrameSideDataRead = true
 		return nil
 	}
 	return nil
 }
 
-// probeVideoFrameSideData decodes the first frame of the stream at
-// streamIndex and returns the side data FFmpeg attached to it.
-func probeVideoFrameSideData(ctx context.Context, ffprobePath, filePath string, streamIndex int) ([]ffprobeSideData, error) {
+// frameSideDataFailureIsTransient reports whether a failed frame read says
+// nothing about the content: the read timed out, ffprobe never ran, or its
+// error output names a storage access failure.
+func frameSideDataFailureIsTransient(err error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return true
+	}
+	if !exitErr.Exited() {
+		return true
+	}
+	return probeStderrAccessFailure(exitErr.Stderr) != nil
+}
+
+// probeVideoFrameSideData decodes the first frame of the stream that
+// streamSpecifier selects and returns the side data FFmpeg attached to it.
+func probeVideoFrameSideData(ctx context.Context, ffprobePath, filePath, streamSpecifier string) ([]ffprobeSideData, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, frameSideDataProbeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(probeCtx, ffprobePath,
 		"-v", "error",
 		"-read_intervals", "%+#1",
-		"-select_streams", strconv.Itoa(streamIndex),
+		"-select_streams", streamSpecifier,
 		"-show_frames",
 		"-show_entries", "frame=media_type:frame_side_data=side_data_type",
 		"-print_format", "json",
@@ -724,6 +761,11 @@ func probeVideoFrameSideData(ctx context.Context, ffprobePath, filePath string, 
 	return sideData, nil
 }
 
+// probeVideoPacketDuration derives a duration for files whose duration
+// metadata is unusable by scanning video packet timestamps. It intentionally
+// demuxes the whole file: the timestamps being repaired are the same ones
+// ffprobe would need for reliable interval seeking, so sampling cannot be
+// trusted here. The repair layer keeps this one-shot per file.
 func probeVideoPacketDuration(
 	ctx context.Context,
 	ffprobePath string,

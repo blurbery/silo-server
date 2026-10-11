@@ -555,6 +555,27 @@ output supports HDR10, and the plan carries the `hdr_range_assumed_hdr10`
 degradation warning. Refusing to play those outright would be worse than an
 assumption the client is told about.
 
+An `hdr10_plus` source is HDR10 plus dynamic metadata that HDR10-only displays
+ignore, so an output that claims HDR10 but not HDR10+ takes it as HDR10, within
+its HDR10 ceilings, and the plan claims HDR10. The jellycompat device profile
+checks follow Jellyfin 10.11: each HDR10+ range type (`HDR10Plus`,
+`DOVIWithHDR10Plus`, `DOVIWithELHDR10Plus`) satisfies a positive
+`VideoRangeType` condition that its form without HDR10+ (`HDR10`,
+`DOVIWithHDR10`, `DOVIWithEL`) satisfies, any condition for an HLS copy, and
+is excluded by a negative condition that excludes that form. A file therefore
+keeps every route it had before its HDR10+ metadata was detected.
+
+FFmpeg reports HDR10+ only as frame side data, so the scanner decodes the first
+frame of the primary video stream when it is PQ. A stored first video track
+carries `hdr10_plus`, `false` included, only once that frame has been read. A
+PQ track without the key was probed before this check, by playback's probe
+repair (which skips the frame read to stay within its budget), or when the read
+hit a storage error or timed out. The `backfill_hdr10_plus` task, at startup
+and daily, reads the first frame of those files and sets only `hdr10_plus` and,
+for an HDR10+ file, `video_range_type`, writing only while the file and the
+track still match the row it read. A frame ffprobe reads but cannot decode is
+recorded as not HDR10+, so a damaged file is not read again.
+
 A client may additionally report the raw display probe in `output.display`
 with an evidence tier:
 
