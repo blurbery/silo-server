@@ -35,7 +35,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
-import type { Collection, LibraryTabCollection } from "@/api/types";
+import type { Collection, LibraryTabCollection, ServerCollectionsLibrary } from "@/api/types";
 import { CalmPage } from "@/components/calm/CalmPage";
 import { PillSwitcher } from "@/components/calm/PillSwitcher";
 import { CollectionActionsMenu } from "@/components/collections/CollectionActionsMenu";
@@ -56,6 +56,7 @@ import {
   useServerCollections,
   useSetCollectionShared,
 } from "@/hooks/queries/collections";
+import { useLibraryCollections } from "@/hooks/queries/libraryCollections";
 import { useProfiles } from "@/hooks/queries/profiles";
 import { useSyncUserCollection } from "@/hooks/queries/userCollectionImports";
 import { useCurrentProfile } from "@/hooks/useCurrentProfile";
@@ -204,7 +205,11 @@ function CollectionsSection({
     <section aria-labelledby={id} className="grid gap-4">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <div className="flex items-baseline gap-2">
-          <h2 id={id} className="text-xl font-semibold tracking-tight sm:text-2xl">
+          {/* The margin clears the sticky mobile header when a section scrolls into view. */}
+          <h2
+            id={id}
+            className="scroll-mt-24 text-xl font-semibold tracking-tight sm:text-2xl lg:scroll-mt-6"
+          >
             {title}
           </h2>
           {count !== undefined ? (
@@ -651,10 +656,14 @@ function SortableCollectionCard({
 }
 
 const ALL_LIBRARIES = "all";
+/** Hides a POSTER_GRID's cards past its first row. */
+const FIRST_ROW_ONLY =
+  "max-sm:[&>li:nth-child(n+4)]:hidden max-lg:[&>li:nth-child(n+6)]:hidden [&>li:nth-child(n+8)]:hidden";
 
 /**
- * Server collections: library pills, one row of cards, and See all for the
- * chosen library. Hidden only when no library has any, so one-profile accounts see it too.
+ * Server collections: library pills, then one row per library under All, each
+ * with See all, or every collection of the chosen library. Hidden only when no
+ * library has any, so one-profile accounts see it too.
  */
 function ServerCollectionsSection() {
   const { data, isLoading } = useServerCollections();
@@ -673,40 +682,13 @@ function ServerCollectionsSection() {
     libraries.length === 1
       ? libraries[0]
       : libraries.find((entry) => String(entry.library_id) === selected);
-  // All libraries: every library's cards in library order, each collection
-  // once. A collection in several libraries opens across all of them, so its
-  // card carries no library (and so no sidebar pin, which needs one).
-  const libraryCount = new Map<string, number>();
-  for (const entry of libraries) {
-    for (const collection of entry.collections) {
-      libraryCount.set(collection.id, (libraryCount.get(collection.id) ?? 0) + 1);
-    }
-  }
-  const seen = new Set<string>();
-  const cards = (library ? [library] : libraries).flatMap((entry) =>
-    entry.collections.flatMap((collection) => {
-      if (seen.has(collection.id)) return [];
-      seen.add(collection.id);
-      const inSeveral = !library && (libraryCount.get(collection.id) ?? 0) > 1;
-      return [{ collection, libraryId: inSeveral ? undefined : entry.library_id }];
-    }),
-  );
+  const seeAll = (entry: ServerCollectionsLibrary) => {
+    setSelected(String(entry.library_id));
+    // The rows above the chosen library fold away, so bring the pills back into view.
+    document.getElementById("server-collections")?.scrollIntoView?.({ block: "nearest" });
+  };
   return (
-    <CollectionsSection
-      id="server-collections"
-      title="Server collections"
-      action={
-        library ? (
-          <Link
-            to={`/library/${library.library_id}?tab=collections`}
-            aria-label={`See all ${library.total_count} ${library.library_name} collections`}
-            className="text-sm font-medium underline-offset-4 hover:underline"
-          >
-            See all {library.total_count}
-          </Link>
-        ) : null
-      }
-    >
+    <CollectionsSection id="server-collections" title="Server collections">
       {libraries.length > 1 ? (
         <PillSwitcher
           label="Library"
@@ -721,24 +703,92 @@ function ServerCollectionsSection() {
           onChange={setSelected}
         />
       ) : null}
-      {/* One row: as many cards as the grid has columns. */}
-      <ul
-        className={cn(
-          POSTER_GRID,
-          "max-sm:[&>li:nth-child(n+4)]:hidden max-lg:[&>li:nth-child(n+6)]:hidden [&>li:nth-child(n+8)]:hidden",
-        )}
-      >
-        {cards.map(({ collection, libraryId }) => (
+      {library ? (
+        <LibraryServerCollections key={library.library_id} library={library} />
+      ) : (
+        <div className="grid gap-6">
+          {libraries.map((entry) => (
+            <div
+              key={entry.library_id}
+              role="group"
+              aria-labelledby={`server-collections-${entry.library_id}`}
+              className="grid gap-3"
+            >
+              <div className="flex items-baseline justify-between gap-4">
+                <h3
+                  id={`server-collections-${entry.library_id}`}
+                  className="truncate text-base font-semibold"
+                >
+                  {entry.library_name}
+                </h3>
+                <button
+                  type="button"
+                  aria-label={`See all ${entry.total_count} ${entry.library_name} collections`}
+                  className="shrink-0 text-sm font-medium underline-offset-4 hover:underline"
+                  onClick={() => seeAll(entry)}
+                >
+                  See all {entry.total_count}
+                </button>
+              </div>
+              {/* One row: as many cards as the grid has columns. */}
+              <ul className={cn(POSTER_GRID, FIRST_ROW_ONLY)}>
+                {entry.collections.map((collection) => (
+                  <li key={collection.id}>
+                    <ServerCollectionCard collection={collection} libraryId={entry.library_id} />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+    </CollectionsSection>
+  );
+}
+
+/**
+ * Every server collection of one library. The aggregated answer carries only
+ * each library's first 20, so the full list comes from the library's
+ * Collections tab, which lists the same collections in the same order. Those
+ * first 20 show until it loads.
+ */
+function LibraryServerCollections({ library }: { library: ServerCollectionsLibrary }) {
+  const { data, isError } = useLibraryCollections(library.library_id);
+  const collections: LibraryTabCollection[] = data?.collections ?? library.collections;
+  return (
+    <>
+      <ul className={POSTER_GRID}>
+        {collections.map((collection) => (
           <li key={collection.id}>
-            <CollectionPosterCard
-              collection={collection}
-              kind="regular"
-              libraryId={libraryId}
-              meta={<CollectionMetaLine className="text-xs" itemCount={collection.item_count} />}
-            />
+            <ServerCollectionCard collection={collection} libraryId={library.library_id} />
           </li>
         ))}
       </ul>
-    </CollectionsSection>
+      {isError && collections.length < library.total_count ? (
+        <Link
+          to={`/library/${library.library_id}?tab=collections`}
+          className="justify-self-start text-sm font-medium underline-offset-4 hover:underline"
+        >
+          See all {library.total_count} in {library.library_name}
+        </Link>
+      ) : null}
+    </>
+  );
+}
+
+function ServerCollectionCard({
+  collection,
+  libraryId,
+}: {
+  collection: LibraryTabCollection;
+  libraryId: number;
+}) {
+  return (
+    <CollectionPosterCard
+      collection={collection}
+      kind="regular"
+      libraryId={libraryId}
+      meta={<CollectionMetaLine className="text-xs" itemCount={collection.item_count} />}
+    />
   );
 }
