@@ -18,17 +18,29 @@ import (
 // provider choices at.
 const localArtworkPreviewWidth = 300
 
+// LocalImageProviderID labels local sidecar choices in the admin image list
+// and keys their failures in its provider errors.
+const LocalImageProviderID = imageCacheLocalProviderID
+
 // localArtworkCapabilityID is the built-in provider that discovers sidecar
 // artwork next to an item's files.
 const localArtworkCapabilityID = "nfo"
+
+// pickableLocalImageTypes are the image types an admin can apply to a movie
+// or series. Discovery also finds banners, thumbs, clear art and disc art,
+// which the picker cannot apply, so it does not offer or preview them.
+var pickableLocalImageTypes = []ImageType{ImagePoster, ImageBackdrop, ImageLogo}
 
 // ErrLocalImageNotOffered rejects a local image the item's own discovery did
 // not return, so the apply endpoint cannot be used to read arbitrary files.
 var ErrLocalImageNotOffered = errors.New("local image is not one of the item's local images")
 
-// IsLocalImageSource reports whether an image URL names a local sidecar file.
+// IsLocalImageSource reports whether an image URL names a local sidecar file
+// (file://). An image URL an NFO names (nfo+http(s)://) is not one: it has no
+// file to preview or copy.
 func IsLocalImageSource(url string) bool {
-	return isLocalImageSourcePath(url)
+	_, ok := localImageSourceFilePath(url)
+	return ok
 }
 
 // FetchItemImagesWithLocal is FetchItemImages plus the item's local sidecar
@@ -56,14 +68,15 @@ func (s *MetadataService) FetchItemImagesWithLocal(ctx context.Context, provider
 		if providerErrors == nil {
 			providerErrors = map[string]string{}
 		}
-		providerErrors[imageCacheLocalProviderID] = "Local artwork discovery failed"
+		providerErrors[LocalImageProviderID] = "Local artwork discovery failed"
 	}
 	return append(images, local...), providerErrors, nil
 }
 
 // localItemImages runs sidecar discovery for an item with its media files and
-// sidecar directories, finding the same poster, fanart and logo files a
-// refresh would use.
+// sidecar directories, finding the same poster, backdrop and logo files a
+// refresh would use. It keeps sidecar files only: an image URL an NFO names
+// has no file to preview or copy here.
 func (s *MetadataService) localItemImages(ctx context.Context, contentType string, folderID int, contentID string) ([]RemoteImage, error) {
 	discovery := s.localImageProvider
 	if discovery == nil {
@@ -75,7 +88,12 @@ func (s *MetadataService) localItemImages(ctx context.Context, contentType strin
 			return nil, nil
 		}
 	}
-	localCtx := s.localProviderContextForContent(ctx, contentID, folderID)
+	// A failure to read the item's files is reported rather than read as an
+	// item without sidecars.
+	localCtx, err := s.loadLocalProviderContext(ctx, contentID, folderID)
+	if err != nil {
+		return nil, err
+	}
 	if localCtx.representativeFilePath == "" && len(localCtx.primarySidecarSearchPaths) == 0 {
 		return nil, nil
 	}
@@ -89,7 +107,7 @@ func (s *MetadataService) localItemImages(ctx context.Context, contentType strin
 		return nil, err
 	}
 	return slices.DeleteFunc(images, func(image RemoteImage) bool {
-		return !isLocalImageSourcePath(image.URL)
+		return !IsLocalImageSource(image.URL) || !slices.Contains(pickableLocalImageTypes, image.Type)
 	}), nil
 }
 
@@ -97,7 +115,7 @@ func (s *MetadataService) localItemImages(ctx context.Context, contentType strin
 // the admin picker. The file is read under the same library-root confinement,
 // symlink and size checks as background caching.
 func (s *MetadataService) LocalImagePreview(ctx context.Context, contentID string, sourceURL string) (string, error) {
-	data, err := readConfinedLocalImage(ctx, s.libraryRoots, contentID, sourceURL)
+	data, err := s.readLocalSidecar(ctx, contentID, sourceURL)
 	if err != nil {
 		return "", err
 	}
@@ -106,6 +124,23 @@ func (s *MetadataService) LocalImagePreview(ctx context.Context, contentID strin
 		return "", err
 	}
 	return "data:image/webp;base64," + base64.StdEncoding.EncodeToString(preview), nil
+}
+
+// readLocalSidecar reads a file:// sidecar source of contentID, without its
+// fingerprint, under the library-root confinement of readConfinedLocalImage.
+func (s *MetadataService) readLocalSidecar(ctx context.Context, contentID, source string) ([]byte, error) {
+	if s.libraryRoots == nil {
+		return nil, errors.New("missing library root resolver for local artwork")
+	}
+	localPath, ok := localImageSourceFilePath(source)
+	if !ok {
+		return nil, fmt.Errorf("not a local image source: %q", source)
+	}
+	roots, err := s.libraryRoots.LibraryRootsForContent(ctx, contentID)
+	if err != nil {
+		return nil, fmt.Errorf("resolving library roots: %w", err)
+	}
+	return readConfinedLocalImage(localPath, roots)
 }
 
 // ApplyLocalItemImageRequest describes a local sidecar image an admin chose
@@ -144,7 +179,7 @@ func (s *MetadataService) ApplyLocalItemImage(ctx context.Context, req ApplyLoca
 		return nil, ErrLocalImageNotOffered
 	}
 
-	data, err := readConfinedLocalImage(ctx, s.libraryRoots, req.ContentID, req.SourceURL)
+	data, err := s.readLocalSidecar(ctx, req.ContentID, req.SourceURL)
 	if err != nil {
 		return nil, err
 	}

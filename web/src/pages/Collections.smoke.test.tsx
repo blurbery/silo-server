@@ -213,11 +213,13 @@ describe("Server collections", () => {
       ],
     });
     show();
-    // The only library's collections under the Server collections heading,
-    // once loaded, without pills to switch between.
+    // The library's cards under the Server collections heading, once loaded,
+    // with See all leading to its Collections tab.
     const server = await screen.findByRole("region", { name: "Server collections" });
-    expect(await within(server).findByRole("link", { name: /Oscar Winners/ })).toBeInTheDocument();
-    expect(within(server).queryByRole("group", { name: "Library" })).toBeNull();
+    expect(
+      await within(server).findByRole("link", { name: "See all 1 Movies collections" }),
+    ).toHaveAttribute("href", "/library/1?tab=collections");
+    expect(within(server).getByRole("link", { name: /Oscar Winners/ })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Shared with me" })).toBeNull();
   });
 });

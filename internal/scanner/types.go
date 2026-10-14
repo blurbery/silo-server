@@ -40,6 +40,9 @@ type ScanResult struct {
 	// the operator confirms cleanup or the files return.
 	SuspectEmptyRoots []string
 	RootObservations  []RootObservation
+	// Sidecars lists the local metadata sidecars (.nfo, artwork) in every
+	// directory a video scan read. It is nil for other library types.
+	Sidecars SidecarListing
 }
 
 // FileHints contains the OSHash gathered during scanning.
@@ -96,9 +99,6 @@ type VideoTrackInfo struct {
 	BitDepth            int
 	PixelFormat         string
 	ReferenceFrames     int
-	// HDR10PlusUnchecked marks a PQ track whose first frame was not read;
-	// see models.VideoTrack.HDR10PlusUnchecked.
-	HDR10PlusUnchecked bool
 }
 
 // AudioTrackInfo describes a probed audio track.

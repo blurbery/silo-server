@@ -25,9 +25,8 @@ env:
 jobs:
   build:
     # A PR cannot turn this publisher into a privileged PR-code build.
-    # Fork: also publish from blurbery/silo-server.
     if: >-
-      contains(fromJSON('["Silo-Server/silo-server","blurbery/silo-server"]'), github.repository) &&
+      github.repository == 'Silo-Server/silo-server' &&
       contains(fromJSON('["linux/amd64","linux/arm64"]'), inputs.platform) &&
       ((github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["refs/heads/main","refs/heads/apiv2"]'), github.ref)) ||

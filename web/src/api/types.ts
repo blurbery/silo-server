@@ -807,6 +807,8 @@ export interface BrowseItem {
   rating_rt_audience?: number | null;
   original_language?: string;
   overview: string;
+  poster_is_episode_still?: boolean;
+  backdrop_is_episode_still?: boolean;
   poster_url: string;
   poster_thumbhash: string;
   backdrop_url: string;
@@ -1034,6 +1036,9 @@ export interface TimeRange {
 export type MarkerKind = "intro" | "credits" | "recap" | "preview";
 
 export interface MarkerOccurrence {
+  thumbnail_url?: string;
+  thumbnail_thumbhash?: string;
+  thumbnail_capture_seconds?: number;
   kind: MarkerKind;
   start_seconds: number;
   end_seconds: number;
@@ -1187,6 +1192,8 @@ export interface ItemDetail {
   air_timezone?: string | null;
 
   // Presigned image URLs.
+  poster_is_episode_still?: boolean;
+  backdrop_is_episode_still?: boolean;
   poster_url: string;
   poster_thumbhash: string;
   backdrop_url: string;
@@ -1300,6 +1307,7 @@ export interface EpisodeListItem {
   imdb_id?: string;
   tmdb_id?: string;
   tvdb_id?: string;
+  still_is_episode_still?: boolean;
   still_url: string;
   still_thumbhash: string;
   user_data?: LeafItemUserData;
@@ -2502,6 +2510,8 @@ export interface AccessGroup {
   max_transcodes: number;
   max_remote_stream_bitrate_kbps: number;
   max_local_stream_bitrate_kbps: number;
+  /** Household profiles each member account may have, unless it overrides it. */
+  max_profiles: number;
   allowed_permissions: string[] | null;
   requests_allowed: boolean;
   is_default: boolean;
@@ -2523,6 +2533,7 @@ export interface AccessGroupInput {
   max_transcodes?: number;
   max_remote_stream_bitrate_kbps?: number;
   max_local_stream_bitrate_kbps?: number;
+  max_profiles?: number;
   allowed_permissions?: string[] | null;
   requests_allowed?: boolean;
   is_default?: boolean;
@@ -2538,6 +2549,7 @@ export interface AdminUserEffectivePolicy {
   max_transcodes: number;
   max_remote_stream_bitrate_kbps: number;
   max_local_stream_bitrate_kbps: number;
+  max_profiles: number;
   transcode_allowed: boolean;
   audio_transcode_allowed: boolean;
   download_allowed: boolean;
@@ -2570,7 +2582,7 @@ export interface AdminUser {
   max_local_stream_bitrate_kbps: number | null;
   transcode_allowed: boolean | null;
   audio_transcode_allowed: boolean | null;
-  max_profiles: number;
+  max_profiles: number | null;
   download_allowed: boolean | null;
   download_transcode_allowed: boolean | null;
   requests_allowed: boolean | null;
@@ -2641,7 +2653,7 @@ export interface UpdateUserRequest {
   max_local_stream_bitrate_kbps?: number | null;
   transcode_allowed?: boolean | null;
   audio_transcode_allowed?: boolean | null;
-  max_profiles?: number;
+  max_profiles?: number | null;
   download_allowed?: boolean | null;
   download_transcode_allowed?: boolean | null;
   requests_allowed?: boolean | null;
@@ -2744,6 +2756,7 @@ export interface AdminSession {
   source_bitrate_kbps: number | null;
   source_video_codec?: string;
   source_video_resolution?: string;
+  source_video_height?: number;
   source_audio_codec?: string;
   source_audio_channels: number | null;
   source_audio_language?: string;
@@ -3738,6 +3751,8 @@ export interface LibraryProviderChainEntry {
   provider_slug: string;
   priority: number;
   enabled: boolean;
+  /** The built-in local metadata provider (.nfo files and sidecar artwork), always first. */
+  local: boolean;
 }
 
 export interface LibraryProviderChainResponse {
@@ -4314,6 +4329,16 @@ export interface StreamNode {
    * note on its next refetch. Nothing routes on it.
    */
   capability_drift?: string | null;
+  /**
+   * An administrator asked this transcode node to drain: placement skips it
+   * while its sessions finish. Absent on servers that predate draining.
+   */
+  drain_requested?: boolean;
+  /**
+   * What the node reported on its last health check: draining while it takes
+   * no new work, drained once it has none left. Absent on older servers.
+   */
+  drain_state?: "none" | "draining" | "drained";
 }
 
 export interface CreateNodeRequest {
@@ -4428,6 +4453,8 @@ export interface SectionItem {
   position_seconds?: number;
   duration_seconds?: number;
   progress_updated_at?: string;
+  poster_is_episode_still?: boolean;
+  backdrop_is_episode_still?: boolean;
   poster_url: string;
   poster_thumbhash: string;
   backdrop_url: string;
@@ -4984,6 +5011,13 @@ export interface AdminTimeseries {
   from: string;
   to: string;
   oldest_sample_at: string | null;
+  // Data transferred over the whole window, integrated server-side from every
+  // sampled minute (not from `points`, which are per-bucket peaks). An estimate:
+  // node egress is a rolling average and unsampled minutes count as nothing.
+  // v2 only (advertised by the `egress_totals` dashboard capability); optional
+  // because older servers do not send it.
+  egress_bytes?: number;
+  download_egress_bytes?: number;
   points: AdminTimeseriesPoint[];
 }
 

@@ -214,6 +214,18 @@ func PlanPlaybackV3(input PlannerInputV3) (result PlannerResultV3) {
 	if file.ProbeRejected() {
 		return terminalPlannerResultV3(TerminalSourceUnreadableV3, TerminalSourceUnreadableMessageV3, false)
 	}
+	// No route plays an audio track FFmpeg cannot decode: conversion has no
+	// decoder, an MP4 or fMP4 copy has no codec tag, and no client can claim
+	// a codec the probe could not name. Default selection skips such tracks,
+	// so this one was chosen explicitly or the file has no other. Retrying
+	// cannot help; choosing another track can.
+	if input.AudioTrackIndex >= 0 && input.AudioTrackIndex < len(file.AudioTracks) && !AudioTrackDecodable(file.AudioTracks, input.AudioTrackIndex, file.CodecAudio) {
+		message := TerminalAudioTrackUndecodableMessageV3
+		if !AnyAudioTrackDecodable(file.AudioTracks, file.CodecAudio) {
+			message = TerminalNoDecodableAudioMessageV3
+		}
+		return terminalPlannerResultV3(TerminalAudioConversionUnsupportedV3, message, false)
+	}
 	if input.Now.IsZero() {
 		input.Now = time.Now()
 	}
@@ -306,8 +318,8 @@ func PlanPlaybackV3(input PlannerInputV3) (result PlannerResultV3) {
 		// Video-only media has no audio stream to adapt: treating the absence
 		// as an unsupported codec would force a pointless AAC conversion — or
 		// a terminal when conversion is unavailable — on a playable file. An
-		// audio track whose codec merely failed to probe keeps the codec
-		// gate: converting unknown audio is safer than copying it.
+		// audio track the probe could not name never reaches this point: the
+		// decodability gate above refuses it.
 		audioOK = true
 		audioClaims.Reason = "no_audio_track"
 	}
@@ -2261,8 +2273,7 @@ func hdrDetailsSupportPlanV3(hdr HDRCapabilitiesV3, plan PlanV3) bool {
 	case DynamicRangeHDR10V3, DynamicRangeHDRUnknownV3:
 		return hdr.HDR10 && hdr10LimitsSupportPlanV3(hdr, plan)
 	case DynamicRangeHDR10PlusV3:
-		// An HDR10 output shows HDR10+ as its HDR10 signal.
-		return hdr.HDR10Plus || hdr.HDR10 && hdr10LimitsSupportPlanV3(hdr, plan)
+		return hdr.HDR10Plus
 	case DynamicRangeHLGV3:
 		return hdr.HLG
 	case DynamicRangeDolbyVisionV3:

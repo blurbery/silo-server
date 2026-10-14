@@ -3,8 +3,6 @@ package jellycompat
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
@@ -14,7 +12,6 @@ import (
 
 	"github.com/Silo-Server/silo-server/internal/config"
 	"github.com/Silo-Server/silo-server/internal/models"
-	"github.com/Silo-Server/silo-server/internal/playback"
 )
 
 // countingContentService is a ContentService double that returns a fixed
@@ -282,6 +279,30 @@ func TestHandleEpisodes_AdjacentToUnknownReturnsEmptyPage(t *testing.T) {
 	}
 }
 
+// An Ids value that names a season is not an unresolvable Ids filter: a
+// series ParentId still lists that series' seasons.
+func TestHandleItems_SeriesParentWithSeasonIDsListsSeasons(t *testing.T) {
+	codec := NewResourceIDCodec()
+	contentSvc := &countingContentService{
+		seasons: []upstreamSeason{
+			{ContentID: "season-1", SeasonNumber: 1, Title: "Season 1", EpisodeCount: 10},
+		},
+	}
+	h := &ItemsHandler{
+		content:  contentSvc,
+		userData: &mockUserDataService{},
+		codec:    codec,
+		mapper:   newMapper(codec, &config.Config{}),
+		images:   NewImageCache(time.Hour, time.Now),
+	}
+
+	result := performItemsRequest(t, h, "/Users/test/Items?ParentId="+codec.EncodeStringID(EncodedIDItem, "series-1")+
+		"&Ids="+codec.EncodeStringID(EncodedIDSeason, "season-1")+"&IncludeItemTypes=Season")
+	if contentSvc.listSeasonsCalls != 1 || len(result.Items) != 1 {
+		t.Fatalf("ListSeasons calls = %d, items = %+v; want the series' season", contentSvc.listSeasonsCalls, result.Items)
+	}
+}
+
 func TestHandleItems_SeriesParentSeasonFilterReturnsPagedSeasons(t *testing.T) {
 	codec := NewResourceIDCodec()
 	seriesContentID := "series-1"
@@ -492,6 +513,8 @@ func TestHandleItem_Episode_FetchesSeriesDetailForStableParentImageTags(t *testi
 			Title:       "Test Series",
 			PosterURL:   "/img/series-1-poster.jpg",
 			BackdropURL: "/img/series-1-backdrop.jpg",
+			LogoURL:     "/img/series-1-logo.png",
+			LogoPath:    "metadb://logo/series-1",
 		},
 	}
 
@@ -537,6 +560,11 @@ func TestHandleItem_Episode_FetchesSeriesDetailForStableParentImageTags(t *testi
 		item.ParentBackdropImageTags[0] == "" || item.ParentThumbItemID != encodedSeriesID ||
 		item.ParentThumbImageTag != item.ParentBackdropImageTags[0] {
 		t.Fatalf("episode response lost parent backdrop identity or tag: %+v", item)
+	}
+	seriesLogoTag := h.mapper.itemFromDetail(*contentSvc.seriesDetail, false, nil).ImageTags["Logo"]
+	if item.ParentLogoItemID != encodedSeriesID || item.ParentLogoImageTag == "" || item.ParentLogoImageTag != seriesLogoTag {
+		t.Fatalf("episode response lost the series logo: id=%q tag=%q, want %q and the series Logo tag %q",
+			item.ParentLogoItemID, item.ParentLogoImageTag, encodedSeriesID, seriesLogoTag)
 	}
 }
 
@@ -701,22 +729,4 @@ func TestHandleUpcoming_UnavailableCatalogReturnsError(t *testing.T) {
 		t.Fatalf("expected 503 for unavailable episode catalog; got %d, body=%s", rec.Code, rec.Body.String())
 	}
 
-}
-
-func TestWriteCompatUpstreamErrorSeparatesPolicyFailureFromDenial(t *testing.T) {
-	unavailable := httptest.NewRecorder()
-	writeCompatUpstreamError(unavailable, fmt.Errorf("%w: %w", playback.ErrPlaybackAdmissionUnavailable, context.DeadlineExceeded))
-	if unavailable.Code != http.StatusServiceUnavailable || unavailable.Header().Get("Retry-After") != "1" {
-		t.Fatalf("unavailable status = %d, Retry-After = %q, want 503 with Retry-After 1", unavailable.Code, unavailable.Header().Get("Retry-After"))
-	}
-	var unavailableBody errorResponse
-	if err := json.Unmarshal(unavailable.Body.Bytes(), &unavailableBody); err != nil || unavailableBody.Error != "PlaybackUnavailable" {
-		t.Fatalf("unavailable body = %s (err %v), want PlaybackUnavailable", unavailable.Body.String(), err)
-	}
-
-	denied := httptest.NewRecorder()
-	writeCompatUpstreamError(denied, playback.ErrPlaybackNotAllowed)
-	if denied.Code != http.StatusForbidden || denied.Header().Get("Retry-After") != "" {
-		t.Fatalf("denied status = %d, Retry-After = %q, want 403 without Retry-After", denied.Code, denied.Header().Get("Retry-After"))
-	}
 }

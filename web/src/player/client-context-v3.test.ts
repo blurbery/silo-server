@@ -11,7 +11,6 @@ import {
   detectHLSSupport,
   type WebCapabilityProbe,
 } from "./client-context-v3";
-import { FEATURE_NATIVE_HLS_PLAYBACK_V3 } from "./protocol-v3";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -106,9 +105,6 @@ describe("structured HDR capabilities", () => {
     expect(deliveries.hls?.video_codecs).toContain("hevc");
     expect(deliveries.original_http?.hdr_details?.hdr10).toBe(false);
     expect(deliveries.original_http?.hdr_details?.dolby_vision_profiles).toEqual([]);
-    expect(deliveries.hls?.features).toEqual([FEATURE_NATIVE_HLS_PLAYBACK_V3]);
-    expect(deliveries.progressive?.features).toEqual([]);
-    expect(deliveries.original_http?.features).toEqual([]);
   });
 
   it("keeps Chromium native-HLS evidence scoped to its hls.js engine", () => {
@@ -125,17 +121,15 @@ describe("structured HDR capabilities", () => {
     expect(deliveries.hls?.hdr_details?.hdr10).toBe(false);
     expect(deliveries.hls?.hdr_details?.dolby_vision_profiles).toEqual([]);
     expect(deliveries.hls?.video_codecs).toEqual(["h264"]);
-    expect(deliveries.hls?.features).toEqual([]);
   });
 
   it("keeps normalized HDR sample entries on progressive without native HLS", () => {
-    const deliveries = buildDeliveriesV3({ ...probe, nativeHLS: false }, safariUA);
+    const deliveries = buildDeliveriesV3({ ...probe, nativeHLS: false });
 
     expect(deliveries.progressive?.hdr_details).toEqual(probe.hdrDetails);
     expect(deliveries.hls?.hdr_details?.dolby_vision_profiles).toEqual([]);
     expect(deliveries.original_http?.hdr_details?.hdr10).toBe(false);
     expect(deliveries.original_http?.hdr_details?.dolby_vision_profiles).toEqual([]);
-    expect(deliveries.hls?.features).toEqual([]);
   });
 
   it("keeps media-element-only HEVC evidence out of original and HLS delivery", () => {

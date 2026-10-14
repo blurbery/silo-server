@@ -8,7 +8,11 @@ import {
   describePlanTerminal,
   describePlaybackTransportError,
 } from "../playback-errors";
-import { isTransientPlayerRequestError, PlayerFetchError } from "../player-fetch";
+import {
+  isPlaybackSessionEndedError,
+  isTransientPlayerRequestError,
+  PlayerFetchError,
+} from "../player-fetch";
 import { useCodecDetection } from "./useCodecDetection";
 import {
   buildClientCapabilitiesV3,
@@ -87,7 +91,11 @@ interface PlaybackSessionState {
   connectionError: string | null;
 }
 
-export type PlaybackConnectionStatus = "connected" | "reconnecting" | "lost";
+/**
+ * `ended` means the server ended the session for good (an administrator
+ * stopped it); the player exits rather than reconnecting.
+ */
+export type PlaybackConnectionStatus = "connected" | "reconnecting" | "lost" | "ended";
 
 // Mid-stream reconnect backoff: 1s, 2s, 4s, 8s, then every 15s, for about two
 // and a quarter minutes in total before the player gives up and asks the
@@ -1254,6 +1262,18 @@ export function usePlaybackSession(
       } catch (err) {
         if (loadSequence !== loadSequenceRef.current) return false;
         if (reconnect) throw err;
+        if (isPlaybackSessionEndedError(err)) {
+          // An administrator ended the session: leave rather than show an
+          // error or recover into a fresh session.
+          setState((current) => ({
+            ...current,
+            replanning: false,
+            connectionStatus: "ended",
+            connectionErrorTitle: null,
+            connectionError: null,
+          }));
+          return false;
+        }
         if (retireSessionOnRefusal) {
           console.error("Failed to refresh playback output", err);
           return false;
@@ -1427,22 +1447,11 @@ export function usePlaybackSession(
       // While the server is unreachable a transport failure says nothing about
       // the route; the reconnect replaces the transport anyway.
       if (reconnectRef.current.active) return;
-      // A route can fail before the player reports its first position. Its
-      // zero (or a missing time) is then not the viewer's position, so recover
-      // from the server-resolved resume anchor instead of restarting at zero.
-      const preservedPosition = playbackPositionRef.current;
-      const reportedPosition = Number.isFinite(currentPosition) ? Math.max(0, currentPosition) : 0;
-      const recoveryPosition =
-        (!Number.isFinite(currentPosition) ||
-          (awaitingInitialPlayerPositionRef.current && currentPosition === 0)) &&
-        preservedPosition > 0
-          ? preservedPosition
-          : reportedPosition;
       reportEvent("plan_failed", {
         failureClassification: failure.classification,
         ...(failure.message ? { diagnostics: { message: failure.message } } : {}),
       });
-      void replan({ operation: "failure_recovery", positionSeconds: recoveryPosition, failure });
+      void replan({ operation: "failure_recovery", positionSeconds: currentPosition, failure });
     },
     [replan, reportEvent],
   );
@@ -1544,6 +1553,18 @@ export function usePlaybackSession(
         if (adopted || !isCurrent()) return;
       } catch (error) {
         if (!isCurrent()) return;
+        if (isPlaybackSessionEndedError(error)) {
+          endReconnect(false);
+          setState((current) => ({
+            ...current,
+            replacing: false,
+            replanning: false,
+            connectionStatus: "ended",
+            connectionErrorTitle: null,
+            connectionError: null,
+          }));
+          return;
+        }
         if (isRetryableReconnectError(error, "replan")) {
           retryLater();
           return;
@@ -1699,11 +1720,9 @@ export function usePlaybackSession(
 
   const updatePlaybackState = useCallback((positionSeconds: number, playing: boolean) => {
     if (Number.isFinite(positionSeconds) && positionSeconds >= 0) {
-      // Safari can emit play before its first timeline-bearing timeupdate, so
-      // a zero while the resume anchor is still pending is not a position even
-      // when the player already reports that it is playing.
       const isUninitializedPlayerZero =
         awaitingInitialPlayerPositionRef.current &&
+        !playing &&
         positionSeconds === 0 &&
         playbackPositionRef.current > 0;
       if (!isUninitializedPlayerZero) {

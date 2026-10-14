@@ -79,6 +79,7 @@ type MediaFile struct {
 	SubtitleTracks               []SubtitleTrack    // JSONB
 	ExternalSubtitles            []ExternalSubtitle // JSONB
 	Chapters                     []MediaChapter     // JSONB; nil means not yet probed for chapters
+	MarkerThumbnails             []MarkerThumbnail  `json:"-"`
 	ChapterThumbnailRetryAfter   *time.Time
 	ChapterThumbnailFailureCount int
 	ChapterThumbnailLastError    string
@@ -142,6 +143,9 @@ type MediaFile struct {
 	FirstSeenScanRunID   string
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
+
+	// Non-nil only for an ephemeral on-demand overlay; fences canonical edits.
+	MarkerThumbnailBaseSegments []MarkerSegment `json:"-"`
 }
 
 // MediaChapter represents a single media chapter derived from embedded file metadata.
@@ -435,12 +439,6 @@ type VideoTrack struct {
 	// safety scan cannot establish that video stream-copy is safe. It is
 	// runtime-only so transient scan failures are retried on a later request.
 	VideoCopyUnsafe bool `json:"-"`
-	// HDR10PlusUnchecked records that the track's HDR10+ status was never
-	// read from a decoded frame: it was probed before frame-level detection,
-	// by playback's quick repair, or when the frame read failed transiently.
-	// MarshalJSON writes hdr10_plus only for checked tracks, so a stored PQ
-	// track without the key is checked by the HDR10+ backfill task.
-	HDR10PlusUnchecked bool `json:"-"`
 }
 
 // UnmarshalJSON preserves raw-key presence so rolling older scanners cannot
@@ -459,21 +457,7 @@ func (v *VideoTrack) UnmarshalJSON(data []byte) error {
 	current := raw["dv_config_present"] != nil && raw["dv_bl_compat_id_present"] != nil
 	*v = VideoTrack(decoded)
 	v.DVProvenanceCurrent = &current
-	v.HDR10PlusUnchecked = raw["hdr10_plus"] == nil
 	return nil
-}
-
-// MarshalJSON writes hdr10_plus, false included, for a track whose HDR10+
-// status was checked, and leaves it out of an unchecked one.
-func (v VideoTrack) MarshalJSON() ([]byte, error) {
-	type videoTrackAlias VideoTrack
-	if v.HDR10PlusUnchecked {
-		return json.Marshal(videoTrackAlias(v))
-	}
-	return json.Marshal(struct {
-		videoTrackAlias
-		HDR10Plus bool `json:"hdr10_plus"`
-	}{videoTrackAlias(v), v.HDR10Plus})
 }
 
 // AudioTrack represents a probed audio stream stored as JSONB.
@@ -610,6 +594,11 @@ type ItemPerson struct {
 	Kind      PersonKind
 	Character string
 	SortOrder int
+	// LocalPhotoSource is a photo the item's local metadata (an NFO actor
+	// <thumb>) names for the person: a file:// sidecar or an http(s) URL. It
+	// travels through the metadata pipeline only; the person's photo takes it
+	// when the person has no cached photo (see metadata.applyLocalPersonPhotos).
+	LocalPhotoSource string
 }
 
 // AudiobookSeriesMembership captures a book's membership in an audiobook
@@ -727,6 +716,37 @@ type MediaItem struct {
 	// PlayContentID is transient presentation metadata populated by resolvers
 	// whose displayed item differs from the leaf item that should play.
 	PlayContentID string
+	// PosterIsEpisodeStill and BackdropIsEpisodeStill are transient provenance
+	// set by the query that picks an episode card's artwork: true when the
+	// path is the episode's own still, false for season or series artwork, nil
+	// when no such query loaded the item. They travel with the paths so a
+	// cached item never pairs old artwork with newer provenance. json:"-"
+	// because some frozen v1 responses serialize MediaItem directly.
+	PosterIsEpisodeStill   *bool `json:"-"`
+	BackdropIsEpisodeStill *bool `json:"-"`
+	// Banner, thumb (landscape), clear art and disc art follow the poster,
+	// backdrop and logo slots. Clear art and disc art are cut-outs and, like
+	// the logo, carry no thumbhash. json:"-" for the same frozen v1 responses.
+	BannerPath         string `json:"-"`
+	BannerSourcePath   string `json:"-"`
+	BannerThumbhash    string `json:"-"`
+	ThumbPath          string `json:"-"`
+	ThumbSourcePath    string `json:"-"`
+	ThumbThumbhash     string `json:"-"`
+	ClearArtPath       string `json:"-"`
+	ClearArtSourcePath string `json:"-"`
+	DiscPath           string `json:"-"`
+	DiscSourcePath     string `json:"-"`
+}
+
+// ItemBackdrop is one backdrop after an item's primary, a media_item_backdrops
+// row. Ordinal 1 is the second backdrop the item shows.
+type ItemBackdrop struct {
+	ID         int64
+	Ordinal    int
+	Path       string
+	SourcePath string
+	Thumbhash  string
 }
 
 // MediaItemAlias is a provider-confirmed searchable title for a media item.

@@ -124,7 +124,7 @@ describe("buildStartRequestV3", () => {
     expect(
       buildStartRequestV3({ ...startBase, extraClientFeatures: VIDEO_CLIENT_FEATURES_V3 })
         .client_features,
-    ).toEqual(["playback_plan_v3", "plan_invalidated_v1"]);
+    ).toEqual(["playback_plan_v3", "plan_invalidated_v1", "marker_thumbnails_v1"]);
     expect(buildStartRequestV3(startBase).client_features).toEqual(["playback_plan_v3"]);
   });
 
@@ -206,7 +206,7 @@ describe("buildReplanRequestV3", () => {
         operation: "failure_recovery",
         extraClientFeatures: VIDEO_CLIENT_FEATURES_V3,
       }).client_features,
-    ).toEqual(["playback_plan_v3", "plan_invalidated_v1"]);
+    ).toEqual(["playback_plan_v3", "plan_invalidated_v1", "marker_thumbnails_v1"]);
   });
 
   it("names a new audio track by index alone", () => {
@@ -1502,87 +1502,6 @@ describe("usePlaybackSession version switches", () => {
 });
 
 describe("usePlaybackSession replans", () => {
-  function resumedStartFetch(replanBodies: Array<{ operation: string; position_seconds: number }>) {
-    const resumedPlan = fixturePlanV3({ session_id: "session-resume" });
-    resumedPlan.timeline = {
-      ...resumedPlan.timeline,
-      source_start_seconds: 604.257,
-      player_start_seconds: 604.257,
-      timeline_offset_seconds: 0,
-    };
-    return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith("/playback/start")) {
-        return jsonResponse({
-          protocol_version: 3,
-          server_features: ["playback_plan_v3"],
-          outcome: "playable",
-          session_id: "session-resume",
-          playback_plan: resumedPlan,
-        });
-      }
-      if (url.endsWith("/playback/session-resume/replan")) {
-        replanBodies.push(
-          JSON.parse(String(init?.body)) as { operation: string; position_seconds: number },
-        );
-        return jsonResponse({
-          protocol_version: 3,
-          server_features: ["playback_plan_v3"],
-          outcome: "playable",
-          session_id: "session-resume",
-          playback_plan: fixturePlanV3({
-            plan_id: "plan:resume-fallback",
-            plan_attempt_key: "v3:resume-fallback",
-          }),
-        });
-      }
-      if (url.endsWith("/playback/route-events")) return new Response(null, { status: 202 });
-      if (init?.method === "DELETE") return new Response(null, { status: 204 });
-      throw new Error(`Unexpected request: ${url}`);
-    });
-  }
-
-  it("keeps the server-resolved resume anchor when decoding fails before first timeupdate", async () => {
-    const replanBodies: Array<{ operation: string; position_seconds: number }> = [];
-    vi.stubGlobal("fetch", resumedStartFetch(replanBodies));
-
-    const { result, unmount } = renderHook(
-      () => usePlaybackSession("request-1", [], [], 7, 0, false, "auto"),
-      { wrapper },
-    );
-    await waitFor(() => expect(result.current.plan).not.toBeNull());
-
-    act(() => result.current.recoverFromFailure({ classification: "decoder_error" }, 0));
-
-    await waitFor(() => expect(replanBodies).toHaveLength(1));
-    expect(replanBodies[0]).toMatchObject({
-      operation: "failure_recovery",
-      position_seconds: 604.257,
-    });
-    unmount();
-  });
-
-  it("keeps the resume anchor when the player reports playing at zero before its first timeupdate", async () => {
-    const replanBodies: Array<{ operation: string; position_seconds: number }> = [];
-    vi.stubGlobal("fetch", resumedStartFetch(replanBodies));
-
-    const { result, unmount } = renderHook(
-      () => usePlaybackSession("request-1", [], [], 7, 0, false, "auto"),
-      { wrapper },
-    );
-    await waitFor(() => expect(result.current.plan).not.toBeNull());
-
-    act(() => result.current.updatePlaybackState(0, true));
-    act(() => result.current.recoverFromFailure({ classification: "decoder_error" }, 0));
-
-    await waitFor(() => expect(replanBodies).toHaveLength(1));
-    expect(replanBodies[0]).toMatchObject({
-      operation: "failure_recovery",
-      position_seconds: 604.257,
-    });
-    unmount();
-  });
-
   it("drops a queued predecessor failure after the in-flight replan adopts a new plan", async () => {
     const initialPlan = fixturePlanV3();
     let resolveFirstReplan: ((response: Response) => void) | undefined;
@@ -2592,6 +2511,65 @@ describe("usePlaybackSession mid-stream reconnect", () => {
     // The viewer had paused before the drop, so playback stays paused.
     expect(result.current.shouldAutoPlay).toBe(false);
     expect(harness.stopped).toEqual(["/api/v2/playback/session-1"]);
+
+    unmount();
+  });
+
+  it("ends instead of starting a new session when an administrator ended the session", async () => {
+    const harness = reconnectHarness({
+      replan: () =>
+        jsonResponse(
+          {
+            type: "https://siloserver.org/docs/api/v2/problems/playback_session_ended",
+            title: "Playback session ended",
+            status: 410,
+            detail: "An administrator ended this playback session",
+          },
+          { status: 410 },
+        ),
+      restart: () => jsonResponse(playable("session-2"), { status: 201 }),
+    });
+    const { result, unmount } = await startPlaying();
+
+    act(() => result.current.recoverConnection(240, true));
+    await advance(RECONNECT_BASE_DELAY_MS);
+
+    expect(harness.replanBodies).toHaveLength(1);
+    expect(harness.startBodies).toHaveLength(1);
+    expect(result.current.connectionStatus).toBe("ended");
+    expect(result.current.sessionId).toBe("session-1");
+
+    // Nothing retries an ended session.
+    await advance(RECONNECT_MAX_DELAY_MS * 2);
+    expect(harness.replanBodies).toHaveLength(1);
+    expect(harness.startBodies).toHaveLength(1);
+
+    unmount();
+  });
+
+  it("ends when a recovery replan learns an administrator ended the session", async () => {
+    const harness = reconnectHarness({
+      replan: () =>
+        jsonResponse(
+          {
+            type: "https://siloserver.org/docs/api/v2/problems/playback_session_ended",
+            title: "Playback session ended",
+            status: 410,
+            detail: "An administrator ended this playback session",
+          },
+          { status: 410 },
+        ),
+    });
+    const { result, unmount } = await startPlaying();
+
+    await act(async () => {
+      result.current.changeQuality("720p", 100);
+    });
+
+    expect(harness.replanBodies).toHaveLength(1);
+    expect(harness.startBodies).toHaveLength(1);
+    expect(result.current.connectionStatus).toBe("ended");
+    expect(result.current.error).toBeNull();
 
     unmount();
   });

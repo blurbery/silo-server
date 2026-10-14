@@ -193,6 +193,7 @@ type Dependencies struct {
 	AdminDashboardInsights        AdminDashboardInsightsService
 	AdminNodesRead                AdminNodesReadService
 	AdminNodeCommands             AdminNodeCommandsService
+	AdminNodeDrain                AdminNodeDrainService
 	AdminNodeReload               AdminNodeReloadService
 	AdminNodeConfiguration        AdminNodeConfigurationService
 	AdminServerStatus             AdminServerStatusService
@@ -223,6 +224,7 @@ type Dependencies struct {
 	AdminCatalogTransfer          AdminCatalogTransferService
 	AdminCatalogSearch            AdminCatalogSearchService
 	AdminSettingsChecks           AdminSettingsCheckService
+	ChatGPT                       ChatGPTService
 	AdminSettingsInspection       AdminSettingsInspectionService
 	AdminResourceSampler          AdminResourceSampler
 	AdminTaskJobs                 AdminTaskJobsService
@@ -266,8 +268,10 @@ type Dependencies struct {
 	// HouseholdProfileGate run it after viewer access and fail closed when
 	// it is not wired.
 	HouseholdProfile func(http.Handler) http.Handler
-	// ActingAdmin is the admin-through-primary-profile gate.
-	ActingAdmin func(http.Handler) http.Handler
+	// ActingAdmin decides admin-through-primary-profile. The acting_admin
+	// class gate enforces it, and operations outside that class that widen
+	// what an admin sees read it through apimw.ActingAdmin.
+	ActingAdmin apimw.ActingAdminDecider
 	// PermissionGates maps a permission name (policy.Permission* constants)
 	// to the gate that enforces it.
 	PermissionGates map[string]func(http.Handler) http.Handler
@@ -419,7 +423,6 @@ type Dependencies struct {
 	ArtworkBackend                     string
 	ArtworkSigner                      *artworkurl.Signer
 	ArtworkRepair                      ArtworkRepairService
-	ThemeOverrides                     ThemeOverrideService
 	AdminInviteCodes                   AdminInviteCodeService
 	Invitations                        InvitationService
 	PasswordResets                     PasswordResetService
@@ -492,6 +495,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 	r.Use(joinPreconditionFields)
 	r.Use(rejectMalformedDeviceHeader)
 	r.Use(withRequest)
+	if deps.ActingAdmin != nil {
+		r.Use(apimw.ProvideActingAdmin(deps.ActingAdmin))
+	}
 	r.NotFound(notFound)
 
 	api := humachi.New(r, humaConfig())
@@ -670,10 +676,10 @@ func dropDelegationPattern(next http.Handler) http.Handler {
 //   - a panic anywhere, including Huma's own marshal failure after the status
 //     would already have been sent, becomes the internal_error problem with no
 //     detail leakage;
-//   - a success body, or a server error, is never written once the client has
-//     gone away (net/http cancels the request context on disconnect);
-//   - a problem below 500 — including the 408 for a body-read timeout, which
-//     net/http also reports as a canceled context — is still delivered.
+//   - a success body is never written once the client has gone away (net/http
+//     cancels the request context on disconnect);
+//   - a problem — including the 408 for a body-read timeout, which net/http
+//     also reports as a canceled context — is still delivered.
 //
 // Structured responses are bounded JSON documents, so buffering them is
 // cheap; raw media and streams are not served through Huma.
@@ -759,11 +765,8 @@ func (b *bufferedWriter) flush() {
 	if b.status == 0 {
 		b.status = http.StatusOK
 	}
-	if err := b.ctx.Err(); err != nil && (b.status < 400 || b.status >= 500 && errors.Is(err, context.Canceled)) {
-		// The client is gone; a success body has nobody to read it, and a
-		// server error raised by its own cancellation is not a failure to
-		// report. Problems below 500 are still delivered, since net/http also
-		// cancels the context on a body-read timeout and its 408 must arrive.
+	if b.ctx.Err() != nil && b.status < 400 {
+		// The client is gone; a success body has nobody to read it.
 		return
 	}
 	if b.status == http.StatusNotModified || b.status == http.StatusNoContent {
@@ -976,7 +979,7 @@ type HomeDismissalService interface {
 // HomeSectionService is the slice of *handlers.SectionHandler the
 // viewer-facing home reads use.
 type HomeSectionService interface {
-	HomeLayout(ctx context.Context) (handlers.SectionLayoutView, error)
+	HomeLayoutWithItems(ctx context.Context, viewer handlers.SectionViewer, includeItems int) (handlers.HomeLayoutView, error)
 	HomeSections(ctx context.Context, viewer handlers.SectionViewer) (handlers.SectionsView, error)
 	HomeSectionItems(ctx context.Context, sectionID string, viewer handlers.SectionViewer) (handlers.SectionView, error)
 }
@@ -1090,6 +1093,7 @@ type CatalogBrowseService interface {
 	Filters(ctx context.Context, v handlers.ItemViewer, req mediacatalog.CatalogRequest, includeTechnical bool) (handlers.CatalogFiltersView, error)
 	SearchFacet(ctx context.Context, v handlers.ItemViewer, req mediacatalog.CatalogRequest, facet, q string, limit int) (handlers.CatalogFacetSearchView, error)
 	AudiobookGroups(ctx context.Context, v handlers.ItemViewer, query mediacatalog.AudiobookGroupsQuery) (handlers.AudiobookGroupsView, error)
+	LetterIndex(ctx context.Context, v handlers.ItemViewer, req mediacatalog.CatalogRequest) (mediacatalog.LetterIndex, error)
 }
 
 // CatalogItemService is the slice of *handlers.CatalogResourceHandler the
@@ -1114,7 +1118,7 @@ type CatalogTrailerService interface {
 // MetadataAIService is the slice of *handlers.MetadataAIHandler the
 // capability and on-view translation use.
 type MetadataAIService interface {
-	Status() handlers.MetadataAIStatusView
+	Status(context.Context) handlers.MetadataAIStatusView
 	TranslateOnView(ctx context.Context, filter mediacatalog.AccessFilter, contentID, targetLanguage string, requestedBy *int) (*translation.Job, error)
 }
 
