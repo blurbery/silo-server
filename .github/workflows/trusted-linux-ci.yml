@@ -352,6 +352,10 @@ jobs:
           # per-linter and same-issue caps.
           LINT_ARGS: --max-issues-per-linter=0 --max-same-issues=0 --uniq-by-line=false
           CONTRACT_BASE_REF: ${{ github.base_ref || github.event.repository.default_branch }}
+          # Fork: outside pull requests, diff the API contract against upstream
+          # main as well. A sync compared with the previous fork main reports
+          # every breaking change upstream already approved one PR at a time.
+          CONTRACT_BASE_OVERRIDE: ${{ github.event_name != 'pull_request' && 'upstream/main' || '' }}
         run: make -f .ci-tools/.github/actions/ci-tools/go-checks.mk --keep-going lint contracts
 
       - name: Save the Go cache

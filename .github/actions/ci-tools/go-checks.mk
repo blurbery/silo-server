@@ -2,7 +2,9 @@
 # the repository root: Go lint runs lint and then contracts, and Go test runs
 # tests, each job on its own runner.
 # LINT_BASE_REF, LINT_BASE_MODE, CONTRACT_BASE_REF, and TEST_GOFLAGS come from
-# the workflow. Fork: LINT_ARGS passes extra golangci-lint flags.
+# the workflow. Fork: LINT_ARGS passes extra golangci-lint flags, and
+# CONTRACT_BASE_OVERRIDE, when set, replaces origin/CONTRACT_BASE_REF as the
+# ref the API contract diff takes its merge base from.
 .PHONY: lint contracts tests
 
 # Router recovery must hold over the whole tree, including inherited lines.
@@ -17,7 +19,7 @@ contracts:
 	$(MAKE) -j1 -f Makefile verify-settings-bindings verify-playback-fixtures verify-route-inventory
 	$(MAKE) -j1 -f Makefile verify-migration-ledger verify-apiv2-openapi CONTRACT_GO_TESTS=0
 	git fetch --no-tags origin "+refs/heads/$${CONTRACT_BASE_REF}:refs/remotes/origin/$${CONTRACT_BASE_REF}"
-	$(MAKE) -j1 -f Makefile verify-apiv2-contract CONTRACT_GO_TESTS=0 BASE_REF="origin/$${CONTRACT_BASE_REF}"
+	$(MAKE) -j1 -f Makefile verify-apiv2-contract CONTRACT_GO_TESTS=0 BASE_REF="$${CONTRACT_BASE_OVERRIDE:-origin/$${CONTRACT_BASE_REF}}"
 
 # Go's test cache cannot see files a test's child process reads, so these
 # packages always rerun; the grep fails when a new test starts go, git, or node
