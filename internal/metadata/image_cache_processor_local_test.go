@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/Silo-Server/silo-server/internal/catalog"
 	"github.com/Silo-Server/silo-server/internal/models"
 )
 
@@ -607,7 +609,7 @@ func TestReadConfinedLocalImageReportsUnopenableRoot(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
 
-	_, err := readConfinedLocalImage(posterPath, []string{root})
+	_, err := readConfinedLocalImage(posterPath, []string{root}, nil)
 	if err == nil || !strings.Contains(err.Error(), "local image forbidden") {
 		t.Fatalf("err = %v, want the forbidden failure", err)
 	}
@@ -629,5 +631,166 @@ func TestOpenedLibraryRootForSeparatesStatFailuresFromEscapes(t *testing.T) {
 	}
 	if handle, err := openedLibraryRootFor(opened, root); handle == nil || err != nil {
 		t.Fatalf("the root itself = (%v, %v), want its handle", handle, err)
+	}
+}
+
+// FolderRepository reports the folders holding a content's media, so the
+// processor can trust a symlinked item folder.
+var _ ContentMediaFolderResolver = (*catalog.FolderRepository)(nil)
+
+// folderMediaResolver is a library root resolver that also reports which of
+// the asked folders hold one of the content's media files, like
+// FolderRepository.
+type folderMediaResolver struct {
+	roots     []string
+	mediaDirs []string
+	asked     [][]string
+}
+
+func (r *folderMediaResolver) LibraryRootsForContent(context.Context, string) ([]string, error) {
+	return r.roots, nil
+}
+
+func (r *folderMediaResolver) FoldersHoldingContentMedia(_ context.Context, _ string, folders []string) ([]string, error) {
+	r.asked = append(r.asked, slices.Clone(folders))
+	var held []string
+	for _, folder := range folders {
+		if slices.Contains(r.mediaDirs, folder) {
+			held = append(held, folder)
+		}
+	}
+	return held, nil
+}
+
+// symlinkedItemFolder builds a library root whose item folder "Film" is a
+// link to a folder outside the root holding poster.jpg, the layout of a
+// library assembled from symlinks. It returns the root and the poster's
+// logical path.
+func symlinkedItemFolder(t *testing.T) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	storage := filepath.Join(t.TempDir(), "Film")
+	if err := os.MkdirAll(storage, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeLocalPoster(t, storage)
+	if err := os.Symlink(storage, filepath.Join(root, "Film")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	return root, filepath.Join(root, "Film", "poster.jpg")
+}
+
+// An item folder that links out of the library root, and holds the item's
+// media, is where the scanner already reads that media: its sidecar art
+// copies like art under the root.
+func TestProcessLocalImageFollowsSymlinkedItemFolder(t *testing.T) {
+	root, poster := symlinkedItemFolder(t)
+	job := localArtworkJob("file://" + poster)
+	p, jobs, cacher, items, _ := newLocalProcessorForTest(job, []string{root}, "")
+	resolver := &folderMediaResolver{roots: []string{root}, mediaDirs: []string{filepath.Join(root, "Film")}}
+	p.SetLibraryRootResolver(resolver)
+
+	stats, err := p.RunOnce(context.Background(), "w1", 10, 1)
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if stats.Succeeded != 1 || len(cacher.byteReqs) != 1 || string(cacher.byteReqs[0]) != "poster-bytes" {
+		t.Fatalf("stats = %+v, reads = %d (failed text %q), want the linked poster copied", stats, len(cacher.byteReqs), jobs.failedText)
+	}
+	if !strings.HasPrefix(items.cachedPath, "local/movies/movie-1/") {
+		t.Fatalf("cachedPath = %q", items.cachedPath)
+	}
+	if want := [][]string{{filepath.Join(root, "Film")}}; !reflect.DeepEqual(resolver.asked, want) {
+		t.Fatalf("asked about %v, want %v", resolver.asked, want)
+	}
+}
+
+// The same linked folder holding none of the item's media is not one the
+// scanner reads the item through, so the read stays confined to the root.
+func TestProcessLocalImageRefusesSymlinkedFolderWithoutItemMedia(t *testing.T) {
+	root, poster := symlinkedItemFolder(t)
+	job := localArtworkJob("file://" + poster)
+	p, jobs, cacher, _, _ := newLocalProcessorForTest(job, []string{root}, "")
+	p.SetLibraryRootResolver(&folderMediaResolver{roots: []string{root}})
+
+	stats, err := p.RunOnce(context.Background(), "w1", 10, 1)
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if stats.Failed != 1 || !strings.Contains(jobs.failedText, "local image path outside library roots") {
+		t.Fatalf("stats = %+v, failed text %q, want the out-of-roots failure", stats, jobs.failedText)
+	}
+	if len(cacher.byteReqs) != 0 {
+		t.Fatal("must not read through a link that holds none of the item's media")
+	}
+}
+
+// An item folder confines like a root: a symlink planted below it that leads
+// out of it is refused even though the folder holds the item's media.
+func TestProcessLocalImageItemFolderDoesNotTrustSymlinksBelowIt(t *testing.T) {
+	root := t.TempDir()
+	film := filepath.Join(root, "Film")
+	if err := os.MkdirAll(film, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	writeLocalPoster(t, outside)
+	if err := os.Symlink(outside, filepath.Join(film, "extras")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	job := localArtworkJob("file://" + filepath.Join(film, "extras", "poster.jpg"))
+	p, jobs, cacher, _, _ := newLocalProcessorForTest(job, []string{root}, "")
+	resolver := &folderMediaResolver{roots: []string{root}, mediaDirs: []string{film}}
+	p.SetLibraryRootResolver(resolver)
+
+	stats, err := p.RunOnce(context.Background(), "w1", 10, 1)
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if stats.Failed != 1 || !isStableProviderImageFailure(jobs.failedText) {
+		t.Fatalf("stats = %+v, failed text %q, want a stable failure", stats, jobs.failedText)
+	}
+	if len(cacher.byteReqs) != 0 {
+		t.Fatal("must not read through a symlink planted inside the item folder")
+	}
+	if want := [][]string{{filepath.Join(film, "extras"), film}}; !reflect.DeepEqual(resolver.asked, want) {
+		t.Fatalf("asked about %v, want %v", resolver.asked, want)
+	}
+}
+
+// Item folders only widen confinement inside the library roots.
+func TestReadConfinedLocalImageIgnoresItemFoldersOutsideRoots(t *testing.T) {
+	root, poster := symlinkedItemFolder(t)
+	target, err := filepath.EvalSymlinks(filepath.Join(root, "Film"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readConfinedLocalImage(poster, []string{root}, []string{target}); err == nil ||
+		!strings.Contains(err.Error(), "local image path outside library roots") {
+		t.Fatalf("err = %v, want the out-of-roots failure for an item folder outside the roots", err)
+	}
+	data, err := readConfinedLocalImage(poster, []string{root}, []string{filepath.Join(root, "Film")})
+	if err != nil || string(data) != "poster-bytes" {
+		t.Fatalf("data = %q, err = %v, want the poster read through the item folder", data, err)
+	}
+}
+
+func TestLocalImageAncestorFolders(t *testing.T) {
+	root := filepath.Join(string(filepath.Separator), "library")
+	cases := []struct {
+		name string
+		path string
+		want []string
+	}{
+		{"nested", filepath.Join(root, "Show", "Season 1", "poster.jpg"), []string{filepath.Join(root, "Show", "Season 1"), filepath.Join(root, "Show")}},
+		{"directly under the root", filepath.Join(root, "poster.jpg"), nil},
+		{"outside the root", filepath.Join(string(filepath.Separator), "elsewhere", "Film", "poster.jpg"), nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := localImageAncestorFolders(tc.path, []string{root + string(filepath.Separator)}); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ancestors = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

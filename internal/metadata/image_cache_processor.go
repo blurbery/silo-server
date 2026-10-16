@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -122,6 +123,15 @@ type imageCacheBacklogReader interface {
 // confines local file:// sources to these roots before reading them.
 type LibraryRootResolver interface {
 	LibraryRootsForContent(ctx context.Context, contentID string) ([]string, error)
+}
+
+// ContentMediaFolderResolver is optionally implemented by a
+// LibraryRootResolver (FolderRepository does). It reports which of the given
+// folders hold at least one of the content's present media files, so a local
+// image may resolve through the same folder symlink Silo already reads the
+// item's media through (localArtworkItemFolders).
+type ContentMediaFolderResolver interface {
+	FoldersHoldingContentMedia(ctx context.Context, contentID string, folders []string) ([]string, error)
 }
 
 // ImagePrefixDeleter deletes cached image objects under a key prefix; used to
@@ -1057,11 +1067,16 @@ func (p *ImageCacheProcessor) processLocalOne(ctx context.Context, job *models.M
 		p.markFailed(ctx, job, localImageOutsideRootsError(localPath).Error())
 		return imageCacheProcessResult{outcome: "failed"}
 	}
+	itemFolders, err := localArtworkItemFolders(ctx, p.libraryRoots, rootsContentID, localPath, roots)
+	if err != nil {
+		p.markFailed(ctx, job, fmt.Sprintf("resolving item folders: %v", err))
+		return imageCacheProcessResult{outcome: "failed"}
+	}
 	// readConfinedLocalImage re-confines the path through symlinks and reads it
-	// through an opened library root. A failure there first asks whether this
-	// server has the file's storage mounted at all; when it does not, the job
-	// waits for one that does (deferLocalJobWithoutStorage).
-	data, err := readConfinedLocalImage(localPath, roots)
+	// through an opened library root or item folder. A failure there first asks
+	// whether this server has the file's storage mounted at all; when it does
+	// not, the job waits for one that does (deferLocalJobWithoutStorage).
+	data, err := readConfinedLocalImage(localPath, roots, itemFolders)
 	if err != nil {
 		if p.deferLocalJobWithoutStorage(ctx, job, localPath, roots) {
 			return imageCacheProcessResult{outcome: imageCacheOutcomeDeferred}
@@ -1131,24 +1146,29 @@ func (p *ImageCacheProcessor) processLocalOne(ctx context.Context, job *models.M
 
 // readConfinedLocalImage reads the sidecar image at localPath (a cleaned
 // logical path, without the file:// scheme or fingerprint) after confining it
-// to roots. Its error texts are the stable local failures
-// isStableProviderImageFailure matches.
-func readConfinedLocalImage(localPath string, roots []string) ([]byte, error) {
+// to roots, or to one of itemFolders (localArtworkItemFolders): folders inside
+// the roots that hold the item's own media files. Its error texts are the
+// stable local failures isStableProviderImageFailure matches.
+func readConfinedLocalImage(localPath string, roots, itemFolders []string) ([]byte, error) {
 	if !localImagePathWithinRoots(localPath, roots) {
 		return nil, localImageOutsideRootsError(localPath)
 	}
-	// Open every library root before resolving anything. All reads go through
-	// one of these handles, so a root or an intermediate directory replaced
-	// after this point cannot redirect the read outside the library.
-	opened := openLibraryRoots(roots)
+	// An item folder confines like a root, so the read may follow the item
+	// folder's own symlink but nothing planted below it.
+	confining := append(slices.Clone(roots), itemFoldersWithinRoots(itemFolders, roots)...)
+	// Open every library root and item folder before resolving anything. All
+	// reads go through one of these handles, so a root or an intermediate
+	// directory replaced after this point cannot redirect the read outside
+	// the library.
+	opened := openLibraryRoots(confining)
 	defer closeLibraryRoots(opened)
 	// The lexical check above cannot see through symlinks. Resolve the path and
 	// roots and re-confine so an intermediate directory symlink planted inside a
 	// root (e.g. a link pointing out of the library) cannot pull an out-of-root
 	// file into the cache. EvalSymlinks resolves both sides, so a legitimately
-	// symlinked root still matches. A not-yet-existent path (ErrNotExist) is the
-	// stable "missing" failure.
-	resolvedPath, resolvedRoot, err := localImagePathResolvedWithinRoots(localPath, roots)
+	// symlinked root or item folder still matches. A not-yet-existent path
+	// (ErrNotExist) is the stable "missing" failure.
+	resolvedPath, resolvedRoot, err := localImagePathResolvedWithinRoots(localPath, confining)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("local image missing: %s", localPath)
 	}
@@ -1293,6 +1313,59 @@ func localImagePathResolvedWithinRoots(path string, roots []string) (string, str
 		}
 	}
 	return "", "", errLocalImageOutsideRoots
+}
+
+// localArtworkItemFolders returns the folders between localPath and its
+// library root that hold one of contentID's present media files. Silo already
+// reads that media through each of these folders, so a local image may
+// resolve through the folder's symlink too: a library whose item folders link
+// to storage elsewhere keeps its sidecar art. A symlink planted below such a
+// folder still leads out of it and is refused. A resolver that cannot report
+// media folders gives none, and the library roots alone confine the read.
+func localArtworkItemFolders(ctx context.Context, resolver LibraryRootResolver, contentID, localPath string, roots []string) ([]string, error) {
+	folderResolver, ok := resolver.(ContentMediaFolderResolver)
+	if !ok || strings.TrimSpace(contentID) == "" {
+		return nil, nil
+	}
+	candidates := localImageAncestorFolders(localPath, roots)
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	return folderResolver.FoldersHoldingContentMedia(ctx, contentID, candidates)
+}
+
+// localImageAncestorFolders lists the directories above localPath that lie
+// strictly inside one of roots, nearest first.
+func localImageAncestorFolders(localPath string, roots []string) []string {
+	var folders []string
+	dir := filepath.Dir(filepath.Clean(localPath))
+	for localImagePathWithinRoots(dir, roots) && !isLibraryRoot(dir, roots) {
+		folders = append(folders, dir)
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return folders
+}
+
+// itemFoldersWithinRoots keeps the item folders that lie inside one of roots.
+func itemFoldersWithinRoots(folders, roots []string) []string {
+	kept := make([]string, 0, len(folders))
+	for _, folder := range folders {
+		folder = filepath.Clean(strings.TrimSpace(folder))
+		if localImagePathWithinRoots(folder, roots) {
+			kept = append(kept, folder)
+		}
+	}
+	return kept
+}
+
+func isLibraryRoot(dir string, roots []string) bool {
+	return slices.ContainsFunc(roots, func(root string) bool {
+		return filepath.Clean(strings.TrimSpace(root)) == dir
+	})
 }
 
 // localImagePathWithinRoots confines path (already cleaned, logical) to the

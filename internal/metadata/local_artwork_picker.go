@@ -127,7 +127,8 @@ func (s *MetadataService) LocalImagePreview(ctx context.Context, contentID strin
 }
 
 // readLocalSidecar reads a file:// sidecar source of contentID, without its
-// fingerprint, under the library-root confinement of readConfinedLocalImage.
+// fingerprint, under the library-root and item-folder confinement of
+// readConfinedLocalImage.
 func (s *MetadataService) readLocalSidecar(ctx context.Context, contentID, source string) ([]byte, error) {
 	if s.libraryRoots == nil {
 		return nil, errors.New("missing library root resolver for local artwork")
@@ -140,7 +141,11 @@ func (s *MetadataService) readLocalSidecar(ctx context.Context, contentID, sourc
 	if err != nil {
 		return nil, fmt.Errorf("resolving library roots: %w", err)
 	}
-	return readConfinedLocalImage(localPath, roots)
+	itemFolders, err := localArtworkItemFolders(ctx, s.libraryRoots, contentID, localPath, roots)
+	if err != nil {
+		return nil, fmt.Errorf("resolving item folders: %w", err)
+	}
+	return readConfinedLocalImage(localPath, roots, itemFolders)
 }
 
 // ApplyLocalItemImageRequest describes a local sidecar image an admin chose
