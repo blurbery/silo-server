@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -1220,6 +1221,41 @@ func (r *FolderRepository) LibraryRootsForContent(ctx context.Context, contentID
 		paths = append(paths, path)
 	}
 	return paths, rows.Err()
+}
+
+// FoldersHoldingContentMedia returns the folders among folders that hold, at
+// any depth, at least one of contentID's present media files. The metadata
+// image-cache processor lets a local file:// image resolve through such a
+// folder's symlink, as the item's media already does
+// (metadata.ContentMediaFolderResolver).
+func (r *FolderRepository) FoldersHoldingContentMedia(ctx context.Context, contentID string, folders []string) ([]string, error) {
+	if strings.TrimSpace(contentID) == "" || len(folders) == 0 {
+		return nil, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT candidate.folder
+		FROM unnest($2::text[]) AS candidate(folder)
+		WHERE EXISTS (
+			SELECT 1
+			FROM media_files mf
+			WHERE mf.content_id = $1
+			  AND mf.missing_since IS NULL
+			  AND starts_with(mf.file_path, candidate.folder || $3)
+		)
+	`, contentID, folders, string(filepath.Separator))
+	if err != nil {
+		return nil, fmt.Errorf("querying media folders for content %q: %w", contentID, err)
+	}
+	defer rows.Close()
+	var held []string
+	for rows.Next() {
+		var folder string
+		if err := rows.Scan(&folder); err != nil {
+			return nil, fmt.Errorf("scanning media folder: %w", err)
+		}
+		held = append(held, folder)
+	}
+	return held, rows.Err()
 }
 
 func (r *FolderRepository) UpdateLastScanned(ctx context.Context, id int, scannedAt time.Time) error {
