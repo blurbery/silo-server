@@ -71,6 +71,35 @@ func (f *ContinueWatchingProgressFilter) SupersededEpisodeProgressIDs(ctx contex
 	return f.SupersededEpisodeProgressIDsCached(ctx, store, profileID, entries, nil)
 }
 
+// exactSupersededEpisodeProgressIDs asks a store that implements
+// userstore.SupersededEpisodeProgressStore for the exact answer. answered is
+// false when the store lacks it, or its query failed while ctx is still live,
+// and the caller then takes the bounded fallback.
+func exactSupersededEpisodeProgressIDs(ctx context.Context, store ProgressLister, profileID string, snapshots []ProgressSnapshot) (superseded map[string]struct{}, answered bool, err error) {
+	candidates := make([]userstore.SupersededEpisodeCandidate, len(snapshots))
+	for i, snapshot := range snapshots {
+		candidates[i] = userstore.SupersededEpisodeCandidate{
+			MediaItemID: snapshot.ContentID,
+			UpdatedAt:   snapshot.UpdatedAt,
+		}
+	}
+	superseded, supported, err := userstore.ExactSupersededEpisodeProgressIDs(ctx, store, profileID, candidates)
+	switch {
+	case !supported:
+		return nil, false, nil
+	case err == nil:
+		if superseded == nil {
+			superseded = map[string]struct{}{}
+		}
+		return superseded, true, nil
+	case ctx.Err() != nil:
+		return nil, true, fmt.Errorf("querying exact superseded episode progress: %w", err)
+	}
+	slog.WarnContext(ctx, "continue-watching: exact superseded-episode query failed; using capped fallback",
+		"error", err)
+	return nil, false, nil
+}
+
 // SupersededEpisodeProgressIDsCached is SupersededEpisodeProgressIDs with a
 // caller-supplied completed-history cache. Callers that ask more than once
 // within a single request — Continue Watching walks its in-progress rows a page
@@ -92,26 +121,8 @@ func (f *ContinueWatchingProgressFilter) SupersededEpisodeProgressIDsCached(ctx 
 	// correctness tradeoff imposed by the fallback's hard page cap. The store
 	// query only matches episodes, so non-episode candidates need no separate
 	// lookup here. SQLite and other stores keep the bounded snapshot path below.
-	if exactStore, ok := store.(userstore.SupersededEpisodeProgressStore); ok {
-		candidates := make([]userstore.SupersededEpisodeCandidate, len(snapshots))
-		for i, snapshot := range snapshots {
-			candidates[i] = userstore.SupersededEpisodeCandidate{
-				MediaItemID: snapshot.ContentID,
-				UpdatedAt:   snapshot.UpdatedAt,
-			}
-		}
-		superseded, err := exactStore.SupersededEpisodeProgressIDs(ctx, profileID, candidates)
-		if err == nil {
-			if superseded == nil {
-				return map[string]struct{}{}, nil
-			}
-			return superseded, nil
-		}
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("querying exact superseded episode progress: %w", err)
-		}
-		slog.WarnContext(ctx, "continue-watching: exact superseded-episode query failed; using capped fallback",
-			"error", err)
+	if superseded, answered, err := exactSupersededEpisodeProgressIDs(ctx, store, profileID, snapshots); answered {
+		return superseded, err
 	}
 
 	inProgress, err := f.episodeSnapshots(ctx, snapshots)

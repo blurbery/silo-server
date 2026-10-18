@@ -725,6 +725,18 @@ func preserveSupersededProgress(wrapped, inner userstore.UserStore) userstore.Us
 		return preserveDeviceSettings(wrapped, inner)
 	}
 	devices, hasSettings := inner.(userstore.DeviceSettingsStore)
+	if preserved := preserveSupersededProgressWithCompletion(wrapped, superseded, devices, hasSettings); preserved != nil {
+		return preserved
+	}
+	if preserved := preserveSupersededProgressWithoutCompletion(wrapped, superseded, devices, hasSettings); preserved != nil {
+		return preserved
+	}
+	return preserveDeviceSettings(wrapped, inner)
+}
+
+// preserveSupersededProgressWithCompletion handles the decorators that keep
+// episode parent completion. It returns nil for any other decorator.
+func preserveSupersededProgressWithCompletion(wrapped userstore.UserStore, superseded userstore.SupersededEpisodeProgressStore, devices userstore.DeviceSettingsStore, hasSettings bool) userstore.UserStore {
 	switch w := wrapped.(type) {
 	case *interestTrackingStoreWithDevicesRollupAndCompletion:
 		if hasSettings {
@@ -774,6 +786,15 @@ func preserveSupersededProgress(wrapped, inner userstore.UserStore) userstore.Us
 			*interestTrackingStoreWithCompletion
 			userstore.SupersededEpisodeProgressStore
 		}{w, superseded}
+	default:
+		return nil
+	}
+}
+
+// preserveSupersededProgressWithoutCompletion handles the decorators without
+// episode parent completion. It returns nil for any other decorator.
+func preserveSupersededProgressWithoutCompletion(wrapped userstore.UserStore, superseded userstore.SupersededEpisodeProgressStore, devices userstore.DeviceSettingsStore, hasSettings bool) userstore.UserStore {
+	switch w := wrapped.(type) {
 	case *interestTrackingStoreWithDevicesAndRollup:
 		if hasSettings {
 			return &struct {
@@ -823,7 +844,7 @@ func preserveSupersededProgress(wrapped, inner userstore.UserStore) userstore.Us
 			userstore.SupersededEpisodeProgressStore
 		}{w, superseded}
 	default:
-		return preserveDeviceSettings(wrapped, inner)
+		return nil
 	}
 }
 

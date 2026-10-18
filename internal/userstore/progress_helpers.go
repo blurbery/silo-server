@@ -196,6 +196,18 @@ type SupersededEpisodeProgressStore interface {
 	SupersededEpisodeProgressIDs(ctx context.Context, profileID string, candidates []SupersededEpisodeCandidate) (map[string]struct{}, error)
 }
 
+// ExactSupersededEpisodeProgressIDs answers from store when it implements
+// SupersededEpisodeProgressStore. supported is false when it does not, and the
+// caller keeps its own fallback.
+func ExactSupersededEpisodeProgressIDs(ctx context.Context, store any, profileID string, candidates []SupersededEpisodeCandidate) (ids map[string]struct{}, supported bool, err error) {
+	exact, ok := store.(SupersededEpisodeProgressStore)
+	if !ok {
+		return nil, false, nil
+	}
+	ids, err = exact.SupersededEpisodeProgressIDs(ctx, profileID, candidates)
+	return ids, true, err
+}
+
 // HomeDismissalItemReader reads a profile's dismissals of specific items on
 // one Home surface, so a caller that needs a series' episodes does not list
 // every dismissal of the surface. Implemented by the Postgres store; callers
