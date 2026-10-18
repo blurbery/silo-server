@@ -7,15 +7,17 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pgvector/pgvector-go"
 
 	"github.com/Silo-Server/silo-server/internal/access"
 	"github.com/Silo-Server/silo-server/internal/catalog"
 	"github.com/Silo-Server/silo-server/internal/embeddingvectors"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pgvector/pgvector-go"
 )
 
 func ensureCanonicalDimensions(vec []float32) ([]float32, error) {
@@ -24,13 +26,13 @@ func ensureCanonicalDimensions(vec []float32) ([]float32, error) {
 
 const embeddingLockSettingKey = "recommendations.embedding_lock"
 
-const minHNSWEfSearch = 200
-
-// maxHNSWEfSearch is the largest hnsw.ef_search pgvector accepts. A larger
-// value fails set_config, so the candidate scan never runs. With iterative
-// scans the index keeps returning rows past ef_search, so the cap does not
-// stop a larger LIMIT at 1000 candidates.
-const maxHNSWEfSearch = 1000
+// hnswEfSearch is the hnsw.ef_search candidate scans run with, whatever their
+// LIMIT. With iterative scans the index keeps returning rows past ef_search,
+// up to hnsw.max_scan_tuples, so a larger value only widens each step of the
+// search. Raised with the LIMIT, it made the planner price the index above
+// reading every embedding, so large candidate scans ran as exact scans,
+// several times slower, for nearly the same candidates.
+const hnswEfSearch = 200
 
 // watchedActivityCTE unifies video watch progress and ebook reader progress
 // into one activity stream. Episodes roll up to their parent series via
@@ -220,11 +222,7 @@ func NewRepo(pool *pgxpool.Pool) *Repo {
 	return &Repo{pool: pool, titleCounts: newTitleCountCache()}
 }
 
-func hnswEfSearch(candidateLimit int) int {
-	return min(max(candidateLimit, minHNSWEfSearch), maxHNSWEfSearch)
-}
-
-func (r *Repo) withHNSWCandidateScan(ctx context.Context, candidateLimit int, fn func(pgx.Tx) error) error {
+func (r *Repo) withHNSWCandidateScan(ctx context.Context, fn func(pgx.Tx) error) error {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin hnsw candidate scan tx: %w", err)
@@ -234,7 +232,7 @@ func (r *Repo) withHNSWCandidateScan(ctx context.Context, candidateLimit int, fn
 	_, err = tx.Exec(ctx, `
 		SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true),
 		       set_config('hnsw.ef_search', $1, true)
-	`, fmt.Sprintf("%d", hnswEfSearch(candidateLimit)))
+	`, strconv.Itoa(hnswEfSearch))
 	if err != nil {
 		return fmt.Errorf("configure hnsw candidate scan: %w", err)
 	}
@@ -358,7 +356,7 @@ func (r *Repo) GetEmbedding(ctx context.Context, itemID string) ([]float32, erro
 		itemID,
 	).Scan(&v)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("get embedding for item %s: %w", itemID, err)
@@ -384,7 +382,7 @@ func (r *Repo) FindSimilar(ctx context.Context, embedding []float32, excludeIDs 
 		"e.media_item_id != ALL($2)",
 		"($4 = '' OR mi.type = $4)",
 	}
-	args := []any{pgvector.NewVector(embedding), excludeIDs, limit, mediaType}
+	args := []any{pgvector.NewHalfVector(embedding), excludeIDs, limit, mediaType}
 	argIdx := len(args) + 1
 	catalog.ApplyLibraryAccessFilter("mi.content_id", filter, &conditions, &args, &argIdx)
 	catalog.ApplyMaturityLimits("mi", filter, &conditions, &args, &argIdx)
@@ -398,7 +396,7 @@ func (r *Repo) FindSimilar(ctx context.Context, embedding []float32, excludeIDs 
 			LIMIT  $3`, strings.Join(conditions, " AND "))
 
 	var items []ScoredItem
-	err := r.withHNSWCandidateScan(ctx, limit, func(tx pgx.Tx) error {
+	err := r.withHNSWCandidateScan(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return err
@@ -483,7 +481,7 @@ func (r *Repo) findTasteProfileCandidates(
 		"mi.type = ANY($3)",
 		"e.media_item_id != ALL($2)",
 	}
-	args := []any{pgvector.NewVector(embedding), excludeIDs, mediaTypes}
+	args := []any{pgvector.NewHalfVector(embedding), excludeIDs, mediaTypes}
 	argIdx := 4
 	genreMatchCountSQL := "0"
 	annLimit := limit
@@ -542,7 +540,7 @@ func (r *Repo) findTasteProfileCandidates(
 
 	var items []ScoredItem
 	genreMap := make(map[string][]string, limit)
-	err := r.withHNSWCandidateScan(ctx, annLimit, func(tx pgx.Tx) error {
+	err := r.withHNSWCandidateScan(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return err
@@ -927,7 +925,7 @@ func (r *Repo) GetTasteProfileMeta(ctx context.Context, userID int, profileID st
 		userID, profileID,
 	).Scan(&countsJSON, &maxContentRating, &updatedAt)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("get taste profile meta for user %d profile %s: %w", userID, profileID, err)
@@ -954,7 +952,7 @@ func (r *Repo) GetTasteProfile(ctx context.Context, userID int, profileID string
 		userID, profileID,
 	).Scan(&v)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("get taste profile for user %d profile %s: %w", userID, profileID, err)
@@ -975,7 +973,7 @@ func (r *Repo) FindSimilarUsers(ctx context.Context, userID int, profileID strin
 
 	allowedPeerRatings := compatiblePeerContentRatings(maxContentRating)
 	var users []UserSimilarity
-	err = r.withHNSWCandidateScan(ctx, limit, func(tx pgx.Tx) error {
+	err = r.withHNSWCandidateScan(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 			SELECT p.user_id,
 			       p.profile_id,
@@ -986,7 +984,7 @@ func (r *Repo) FindSimilarUsers(ctx context.Context, userID int, profileID strin
 			  AND  ($3 OR COALESCE(p.max_content_rating, '') = '' OR p.max_content_rating = ANY($4::text[]))
 			ORDER  BY p.embedding::halfvec(3072) <=> $1::halfvec(3072)
 			LIMIT  $5
-		`, pgvector.NewVector(embedding), userID, maxContentRating == "", allowedPeerRatings, limit)
+		`, pgvector.NewHalfVector(embedding), userID, maxContentRating == "", allowedPeerRatings, limit)
 		if err != nil {
 			return err
 		}
@@ -1139,7 +1137,7 @@ func (r *Repo) GetRecommendationCache(ctx context.Context, userID int, profileID
 	query, args := recommendationCacheLookup(userID, profileID, recType, sourceItemID)
 	err := r.pool.QueryRow(ctx, query, args...).Scan(&itemsJSON)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("get recommendation cache: %w", err)
@@ -1524,6 +1522,8 @@ func (r *Repo) MarkProfilesStaleForItems(ctx context.Context, itemIDs []string) 
 		   OR EXISTS (SELECT 1 FROM user_favorites s JOIN ids ON ids.id = s.media_item_id
 		              WHERE s.user_id = tp.user_id AND s.profile_id = tp.profile_id)
 		   OR EXISTS (SELECT 1 FROM user_watchlist s JOIN ids ON ids.id = s.media_item_id
+		              WHERE s.user_id = tp.user_id AND s.profile_id = tp.profile_id)
+		   OR EXISTS (SELECT 1 FROM user_not_interested s JOIN ids ON ids.id = s.media_item_id
 		              WHERE s.user_id = tp.user_id AND s.profile_id = tp.profile_id)
 		ON CONFLICT (user_id, profile_id) DO UPDATE SET stale_at = NOW()`,
 		itemIDs)
@@ -2595,6 +2595,28 @@ func (r *Repo) GetFavoriteItemIDs(ctx context.Context, userID int, profileID str
 		return nil, fmt.Errorf("get favorite item IDs: %w", err)
 	}
 	return ids, nil
+}
+
+// GetNotInterestedMarks returns the profile's Not interested marks, newest
+// first.
+func (r *Repo) GetNotInterestedMarks(ctx context.Context, userID int, profileID string) ([]NotInterestedMark, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT media_item_id, added_at FROM user_not_interested
+		 WHERE user_id = $1 AND profile_id = $2
+		 ORDER BY added_at DESC, media_item_id DESC`,
+		userID, profileID)
+	if err != nil {
+		return nil, fmt.Errorf("get not interested marks: %w", err)
+	}
+	marks, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (NotInterestedMark, error) {
+		var m NotInterestedMark
+		err := row.Scan(&m.MediaItemID, &m.MarkedAt)
+		return m, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get not interested marks: %w", err)
+	}
+	return marks, nil
 }
 
 // GetRecentCompletedItemIDs returns the most recently completed canonical item

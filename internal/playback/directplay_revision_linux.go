@@ -21,7 +21,7 @@ func directPlayFilesystemRevision(_ *os.File, info os.FileInfo) (string, bool) {
 	// in-place content updates.
 	return fmt.Sprintf(
 		"linux-content-v2:%x:%x:%x:%x",
-		uint64(stat.Dev),
+		stat.Dev,
 		stat.Ino,
 		info.ModTime().UnixNano(),
 		info.Size(),

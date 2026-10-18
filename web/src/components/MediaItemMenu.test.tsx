@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   matchItem: vi.fn(),
   toggleFavorite: vi.fn(),
   toggleWatched: vi.fn(),
+  clearResumePosition: vi.fn(),
   posterSize: "standard" as "compact" | "standard" | "large",
   authState: undefined as { user: { role: "admin" | "user" } } | undefined,
 }));
@@ -45,11 +46,23 @@ vi.mock("@/hooks/queries/watchlist", () => ({
   useToggleWatchlist: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }));
 
+vi.mock("@/hooks/queries/notInterested", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/queries/notInterested")>()),
+  useToggleNotInterested: () => ({ isPending: false, mutate: vi.fn(), mutateAsync: vi.fn() }),
+}));
+
 vi.mock("@/hooks/queries/items", () => ({
   useRefreshItemMetadata: () => ({ isPending: false, mutate: vi.fn() }),
   useWatchedStateMutation: () => ({
     isPending: false,
     mutateAsync: (...args: unknown[]) => mocks.toggleWatched(...args),
+  }),
+}));
+
+vi.mock("@/hooks/queries/progress", () => ({
+  useClearResumePosition: () => ({
+    isPending: false,
+    mutate: (...args: unknown[]) => mocks.clearResumePosition(...args),
   }),
 }));
 
@@ -90,6 +103,7 @@ beforeEach(() => {
   mocks.toggleFavorite.mockResolvedValue(undefined);
   mocks.toggleWatched.mockReset();
   mocks.toggleWatched.mockResolvedValue(undefined);
+  mocks.clearResumePosition.mockReset();
   mocks.posterSize = "standard";
   mocks.authState = undefined;
 });
@@ -111,16 +125,41 @@ describe("buildMediaItemMenuModel", () => {
     expect(actions[1]?.label).toBe("Mark Unwatched");
     expect(actions[2]?.label).toBe("Remove from Favorites");
     expect(actions[3]?.label).toBe("Remove from Watchlist");
-    expect(actions[4]?.label).toBe("View Play History");
-    expect(actions[5]?.label).toBe("Refresh Metadata");
-    expect(actions[6]?.label).toBe("Edit Metadata");
-    expect(actions[7]?.label).toBe("Match Item");
+    expect(actions[4]?.label).toBe("Not Interested");
+    expect(actions[5]?.label).toBe("View Play History");
+    expect(actions[6]?.label).toBe("Refresh Metadata");
+    expect(actions[7]?.label).toBe("Edit Metadata");
+    expect(actions[8]?.label).toBe("Match Item");
     expect(model.some((item) => item.kind === "action" && item.label === "View Play History")).toBe(
       true,
     );
     expect(model.some((item) => item.kind === "action" && item.label === "Refresh Metadata")).toBe(
       true,
     );
+  });
+
+  it("offers Not Interested on movies and series only, and its undo once marked", () => {
+    const labels = (
+      mediaType: "movie" | "series" | "episode" | "audiobook",
+      notInterested = false,
+    ) =>
+      buildMediaItemMenuModel({
+        mediaType,
+        userState: {
+          played: false,
+          is_favorite: false,
+          in_watchlist: false,
+          not_interested: notInterested,
+        },
+        isAdmin: false,
+      })
+        .filter((item) => item.kind === "action")
+        .map((item) => item.label);
+
+    expect(labels("movie")).toContain("Not Interested");
+    expect(labels("series", true)).toContain("Show in Recommendations");
+    expect(labels("episode")).not.toContain("Not Interested");
+    expect(labels("audiobook")).not.toContain("Not Interested");
   });
 
   it("omits favorites and watchlist when showCollectionActions is false", () => {
@@ -255,6 +294,73 @@ describe("buildMediaItemMenuModel", () => {
     expect(
       model.some((item) => item.kind === "action" && item.label === "Play from Beginning"),
     ).toBe(true);
+  });
+
+  it("offers reset progress after the watched toggle for a partly watched movie or episode", () => {
+    for (const mediaType of ["movie", "episode"] as const) {
+      const labels = buildMediaItemMenuModel({
+        mediaType,
+        hasPartialProgress: true,
+        userState: { played: false, is_favorite: false, in_watchlist: false },
+        isAdmin: false,
+        showCollectionActions: false,
+        dismissLabel: "Remove from Continue Watching",
+      }).flatMap((item) => (item.kind === "action" ? [item.label] : []));
+
+      expect(labels).toEqual([
+        "Play from Beginning",
+        "Mark Watched",
+        "Reset Progress",
+        "Remove from Continue Watching",
+      ]);
+    }
+  });
+
+  it("offers reset progress during a rewatch, which keeps the item watched", () => {
+    const labels = buildMediaItemMenuModel({
+      mediaType: "movie",
+      hasPartialProgress: true,
+      userState: { played: true, is_favorite: false, in_watchlist: false },
+      isAdmin: false,
+      showCollectionActions: false,
+    }).flatMap((item) => (item.kind === "action" ? [item.label] : []));
+
+    expect(labels).toEqual(["Play from Beginning", "Mark Unwatched", "Reset Progress"]);
+  });
+
+  it("offers reset progress for a rewatched episode in a list that hides its progress bar", () => {
+    const model = buildMediaItemMenuModel({
+      mediaType: "episode",
+      hasPartialProgress: false,
+      hasResumePosition: true,
+      userState: { played: true, is_favorite: false, in_watchlist: false },
+      isAdmin: false,
+      showCollectionActions: false,
+    });
+
+    expect(model.some((item) => item.kind === "action" && item.key === "resetProgress")).toBe(true);
+  });
+
+  it("offers reset progress only when a movie or episode has a resume position", () => {
+    const cases = [
+      { mediaType: "movie", hasPartialProgress: false, played: true },
+      { mediaType: "episode", hasPartialProgress: false, played: false },
+      { mediaType: "audiobook", hasPartialProgress: true, played: false },
+      { mediaType: "series", hasPartialProgress: true, played: false },
+    ] as const;
+    for (const { mediaType, hasPartialProgress, played } of cases) {
+      const model = buildMediaItemMenuModel({
+        mediaType,
+        hasPartialProgress,
+        userState: { played, is_favorite: false, in_watchlist: false },
+        isAdmin: false,
+      });
+
+      expect(
+        model.some((item) => item.kind === "action" && item.key === "resetProgress"),
+        mediaType,
+      ).toBe(false);
+    }
   });
 
   it("uses listening labels for audiobook state actions", () => {
@@ -593,6 +699,26 @@ describe("MediaItemMenu trigger visibility", () => {
         "false",
       );
     });
+  });
+
+  it("resets a partly watched item's progress from the menu", async () => {
+    render(
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={{ played: false, is_favorite: false, in_watchlist: false }}
+          hasPartialProgress
+          variant="wide"
+        />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Reset Progress" }));
+
+    expect(mocks.clearResumePosition).toHaveBeenCalledWith({ contentId: "movie-1" });
+    expect(mocks.toggleWatched).not.toHaveBeenCalled();
   });
 
   it("rolls the watched eye back when the request fails", async () => {
