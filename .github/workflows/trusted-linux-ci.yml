@@ -223,11 +223,46 @@ jobs:
       # count the target's newer commits as the PR's. The make targets take
       # the merge base with the freshly fetched target branch instead, as the
       # contract checks do.
+      #
+      # Fork: outside pull requests, a file fails the size ratchet only when it
+      # crosses its limit against both upstream main and the fork's main. The
+      # fork's main alone counts upstream's own growth since the last sync, and
+      # upstream main alone counts again what the fork already carries; like
+      # #2522, this fails new problems and leaves existing debt alone.
+      - name: Fetch upstream main as a size ratchet base
+        if: github.event_name != 'pull_request'
+        run: git fetch --no-tags --quiet --filter=blob:none https://github.com/Silo-Server/silo-server.git +refs/heads/main:refs/remotes/upstream/main
       - name: Verify file line limits and bidi controls
         shell: bash
         env:
           BASE_REF: origin/${{ github.base_ref || github.event.repository.default_branch }}
-        run: make verify-size-ratchet verify-bidi
+          FORK_RATCHET_BOTH_BASES: ${{ github.event_name != 'pull_request' && '1' || '' }}
+        run: |
+          if [ -z "$FORK_RATCHET_BOTH_BASES" ]; then
+            make verify-size-ratchet verify-bidi
+            exit
+          fi
+          crossings() {
+            local out status=0
+            out=$(make -s verify-size-ratchet BASE_REF="$1" 2>&1) || status=$?
+            : > "$2"
+            if [ "$status" -eq 0 ]; then
+              return 0
+            fi
+            printf '%s\n' "$out" | sed -n -E 's/^(sizeratchet: )?(.+): [0-9]+ -> [0-9]+ lines crosses limit [0-9]+$/\2/p' | sort -u > "$2"
+            if [ ! -s "$2" ]; then
+              printf '%s\n' "$out" >&2
+              return 1
+            fi
+          }
+          crossings upstream/main "$RUNNER_TEMP/upstream-crossings"
+          crossings "$BASE_REF" "$RUNNER_TEMP/fork-crossings"
+          added=$(comm -12 "$RUNNER_TEMP/upstream-crossings" "$RUNNER_TEMP/fork-crossings")
+          if [ -n "$added" ]; then
+            printf 'The fork pushes these files past their line limit:\n%s\n' "$added" >&2
+            exit 1
+          fi
+          make verify-bidi
       - name: Verify migrations
         shell: bash
         env:
