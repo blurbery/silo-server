@@ -402,18 +402,11 @@ Caching and refresh:
   processor confines each read to the owning library's `media_folders` roots:
   a lexical check on the logical path, then a symlink-resolving re-check (both
   path and roots are resolved, so a legitimately symlinked root stays valid
-  while an intermediate directory symlink escaping a root is rejected). A
-  folder between the file and its library root that holds one of the item's
-  present media files (`media_files`, at any depth) confines like a root too,
-  so a library whose item folders link to storage elsewhere keeps its sidecar
-  art: Silo already reads the item's media through that folder's symlink, while
-  a symlink planted below it still leads out of it and is rejected. This
-  matches discovery, which confines sidecar art to the item's own folders with
-  symlinks resolved. Each library root and item folder is opened as an
-  `os.Root` before the path is resolved, and the file is opened through the
-  handle that is the same directory as the resolved root, so a root or folder
-  swapped for a symlink after that point cannot lead the open out of the
-  library. When
+  while an intermediate directory symlink escaping a root is rejected). Each
+  library root is opened as an `os.Root` before the path is resolved, and the
+  file is opened through the handle that is the same directory as the resolved
+  root, so a root or folder swapped for a symlink after that point cannot lead
+  the open out of the library. When
   the re-check or the read fails, the processor probes, through
   `internal/rootcheck`, the nearest folder that exists at or above the file's
   folder, searching no higher than the library root: unless it lists entries
@@ -440,10 +433,7 @@ Caching and refresh:
   the best remote candidate by the `applyBestImages` rules, for seasons and
   episodes the first remote poster or still that the local one displaced while
   provider results merged, or, when the refresh kept a local source it could
-  not see, the remote one it chose. A local re-apply asks no remote provider, so
-  an item slot it moves to a sidecar keeps the remote image it was serving as
-  the stand-in, and a copy that keeps failing never leaves the slot blank. The
-  slot's source stays the local file, so the
+  not see, the remote one it chose. The slot's source stays the local file, so the
   copy replaces the stand-in through the source-matched update, and a refresh
   that offers no artwork at all leaves the slot, local source included, as it
   is. Locked artwork gets no stand-in, and neither does an image URL an NFO
