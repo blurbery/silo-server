@@ -816,7 +816,11 @@ type hlsToneMapCapabilityInventoryV3 struct {
 // device have validated an executor in that mode. Planning and transport-time
 // validation must share this view or a locally planned recipe can be rejected
 // before FFmpeg starts.
-func (h *PlaybackHandler) localHLSExecutionRegistryV3(ctx context.Context) (*playback.TransformationRegistryV3, error) {
+//
+// It widens base, the transformation registry the caller already read, so
+// the caller judges the result against that read's own error rather than a
+// second probe's.
+func (h *PlaybackHandler) localHLSExecutionRegistryV3(ctx context.Context, base *playback.TransformationRegistryV3) (*playback.TransformationRegistryV3, error) {
 	settings := h.plannerSettingsV3(ctx)
 	policy := tonemap.NewPolicy(settings.HardwareToneMapEnabled, settings.SoftwareToneMapEnabled)
 	inventory := hlsToneMapCapabilityInventoryV3{}
@@ -827,7 +831,7 @@ func (h *PlaybackHandler) localHLSExecutionRegistryV3(ctx context.Context) (*pla
 			return nil, err
 		}
 	}
-	return h.localHLSExecutionRegistryWithInputsV3(ctx, settings, inventory), nil
+	return hlsExecutionRegistryV3(base, settings, inventory), nil
 }
 
 // localHLSExecutionRegistryWithInputsV3 builds the local HLS execution
@@ -837,7 +841,16 @@ func (h *PlaybackHandler) localHLSExecutionRegistryWithInputsV3(
 	settings playback.PlannerSettingsV3,
 	inventory hlsToneMapCapabilityInventoryV3,
 ) *playback.TransformationRegistryV3 {
-	local := h.transformationRegistryV3(ctx)
+	return hlsExecutionRegistryV3(h.transformationRegistryV3(ctx), settings, inventory)
+}
+
+// hlsExecutionRegistryV3 adds the HDR-to-SDR transformation to local when the
+// settings and capability snapshot allow local tone mapping.
+func hlsExecutionRegistryV3(
+	local *playback.TransformationRegistryV3,
+	settings playback.PlannerSettingsV3,
+	inventory hlsToneMapCapabilityInventoryV3,
+) *playback.TransformationRegistryV3 {
 	policy := tonemap.NewPolicy(settings.HardwareToneMapEnabled, settings.SoftwareToneMapEnabled)
 	if policy == tonemap.PolicyNone || !inventory.localTranscodeFallbackOK {
 		return local
@@ -2591,7 +2604,7 @@ func (h *PlaybackHandler) validateLocalTransportCapabilitiesV3(ctx context.Conte
 	localRegistry, registryErr := h.probedTransformationRegistryV3(ctx)
 	if requiresToneMap {
 		var capabilityErr error
-		localRegistry, capabilityErr = h.localHLSExecutionRegistryV3(ctx)
+		localRegistry, capabilityErr = h.localHLSExecutionRegistryV3(ctx, localRegistry)
 		if capabilityErr != nil {
 			return &transportErrorV3{reason: capabilityUnavailableReasonV3, message: "Local transcode capability validation is temporarily unavailable.", retryable: true, cause: capabilityErr}
 		}

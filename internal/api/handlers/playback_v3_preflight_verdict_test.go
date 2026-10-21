@@ -171,6 +171,50 @@ func TestValidateLocalTransportCapabilitiesV3MarksOnlyDefiniteMismatchIneligible
 	}
 }
 
+// TestValidateLocalTransportCapabilitiesV3JudgesOneTransformationRead keeps
+// the tone-map branch on the registry whose error it classifies. A second
+// probe could succeed where the first failed, or fail after the first
+// succeeded, and pair one probe's registry with the other's error.
+func TestValidateLocalTransportCapabilitiesV3JudgesOneTransformationRead(t *testing.T) {
+	result := playback.PlannerResultV3{
+		Plan: &playback.PlanV3{Transformations: []playback.TransformationV3{{
+			Name: playback.TransformationHDRToSDRToneMapV3, Executor: playback.ExecutorServerV3,
+			RecipeVersion: playback.TransformationHDRToSDRToneMapRecipeVersionV3,
+		}}},
+		ToneMapMode: tonemap.ModeSoftware, ToneMapSourceKind: tonemap.SourcePQ,
+	}
+	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0))
+	handler.PlaybackConfig = func() config.PlaybackConfig {
+		return config.PlaybackConfig{HWAccel: playback.HWAccelNone, TranscodeEnabled: true}
+	}
+	var probes atomic.Int32
+	handler.v3RegistryProbe = func(context.Context, string, tonemap.Capabilities) (*playback.TransformationRegistryV3, error) {
+		if probes.Add(1) == 1 {
+			return playback.NewTransformationRegistryV3(nil), context.DeadlineExceeded
+		}
+		return playback.NewTransformationRegistryV3([]playback.TransformationSpecV3{{
+			Name: playback.TransformationHDRToSDRToneMapV3, RecipeVersion: playback.TransformationHDRToSDRToneMapRecipeVersionV3, Available: true,
+		}}), nil
+	}
+	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{
+		config.PlaybackTranscodeSoftwareToneMapSettingKey: "true",
+	}}
+	handler.v3ToneMapProbe = func(context.Context, string, string, string) (tonemap.Capabilities, error) {
+		return tonemap.Capabilities{{
+			Mode: tonemap.ModeSoftware, Backend: tonemap.BackendSoftware, Filter: tonemap.SoftwareFilterBT2390,
+			SourceKinds: []tonemap.SourceKind{tonemap.SourcePQ},
+		}}, nil
+	}
+
+	transportErr := handler.validateLocalTransportCapabilitiesV3(context.Background(), result)
+	if got := probes.Load(); got != 1 {
+		t.Fatalf("transformation probe ran %d times in one validation, want 1", got)
+	}
+	if transportErr == nil || !transportErr.retryable || transportErr.executorIneligible || !errors.Is(transportErr.cause, context.DeadlineExceeded) {
+		t.Fatalf("validation error = %#v, want a retryable failure carrying the probe error, not marked ineligible", transportErr)
+	}
+}
+
 // TestPrepareTransportV3IneligibleLocalExecutorKeepsPreflightRejection runs
 // the route loop as reported in #2266: the API server's own executor can't
 // tone-map the source and a transcode node rejects the file. The node's
