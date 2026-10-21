@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Silo-Server/silo-server/internal/models"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/Silo-Server/silo-server/internal/models"
 )
 
 // Pause the first transaction after it changes its first library counter. The
@@ -24,21 +25,7 @@ func TestLibraryCollectionAggregateTransactionLockOrderDB(t *testing.T) {
 			defer cancel()
 			trigger := fmt.Sprintf("test_library_aggregate_%d", first.libraryID)
 			firstName, secondName := trigger+"_first", trigger+"_second"
-			named := func(name string) *LibraryCollectionRepository {
-				cfg, err := pgxpool.ParseConfig(os.Getenv("SILO_TEST_DATABASE_URL"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				cfg.ConnConfig.RuntimeParams["application_name"] = name
-				cfg.MaxConns = 1
-				pool, err := pgxpool.NewWithConfig(ctx, cfg)
-				if err != nil {
-					t.Fatal(err)
-				}
-				t.Cleanup(pool.Close)
-				return NewLibraryCollectionRepository(pool)
-			}
-			firstRepo, secondRepo := named(firstName), named(secondName)
+			firstRepo, secondRepo := namedLibraryCollectionRepository(t, ctx, firstName), namedLibraryCollectionRepository(t, ctx, secondName)
 			firstRevision, secondRevision := first.revision(t, false), second.revision(t, false)
 			gate, err := first.pool.Begin(ctx)
 			if err != nil {
@@ -56,22 +43,18 @@ func TestLibraryCollectionAggregateTransactionLockOrderDB(t *testing.T) {
 			defer func() {
 				_, _ = first.pool.Exec(context.Background(), fmt.Sprintf(`DROP TRIGGER %s ON library_collection_order_revisions; DROP FUNCTION %s();`, trigger, trigger))
 			}()
-			type result struct {
-				collection *models.LibraryCollection
-				err        error
-			}
-			run := func(repo *LibraryCollectionRepository, fixture libraryCASFixture, target int, revision int64) result {
+			run := func(repo *LibraryCollectionRepository, fixture libraryCASFixture, target int, revision int64) libraryAggregateResult {
 				if operation == "create-opposite-order" {
 					c, err := repo.Create(ctx, CreateLibraryCollectionInput{LibraryIDs: []int{fixture.libraryID, target}, Slug: fmt.Sprintf("opposite-%d", fixture.libraryID), Title: "opposite"})
-					return result{c, err}
+					return libraryAggregateResult{c, err}
 				}
 				in := UpdateLibraryCollectionInput{ID: fixture.collectionID, LibraryIDs: new([]int{target})}
 				if operation == "swap-guarded" {
 					in.ExpectedRevision = &revision
 				}
-				return result{err: repo.Update(ctx, in)}
+				return libraryAggregateResult{err: repo.Update(ctx, in)}
 			}
-			firstDone, secondDone := make(chan result, 1), make(chan result, 1)
+			firstDone, secondDone := make(chan libraryAggregateResult, 1), make(chan libraryAggregateResult, 1)
 			go func() { firstDone <- run(firstRepo, first, second.libraryID, firstRevision) }()
 			waitLibraryCollectionBlocked(t, ctx, first.pool, firstName, "advisory")
 			go func() { secondDone <- run(secondRepo, second, first.libraryID, secondRevision) }()
@@ -80,7 +63,7 @@ func TestLibraryCollectionAggregateTransactionLockOrderDB(t *testing.T) {
 				t.Fatal(err)
 			}
 			firstResult, secondResult := <-firstDone, <-secondDone
-			for _, r := range []result{firstResult, secondResult} {
+			for _, r := range []libraryAggregateResult{firstResult, secondResult} {
 				if r.collection != nil {
 					t.Cleanup(func() {
 						_ = first.repo.Delete(context.Background(), r.collection.ID)
@@ -92,33 +75,70 @@ func TestLibraryCollectionAggregateTransactionLockOrderDB(t *testing.T) {
 				t.Fatalf("first=%v second=%v", firstResult.err, secondResult.err)
 			}
 			if operation == "create-opposite-order" {
-				for i, r := range []result{firstResult, secondResult} {
-					if !slices.Equal(r.collection.LibraryIDs, []int{first.libraryID, second.libraryID}) {
-						t.Fatalf("create scope=%v", r.collection.LibraryIDs)
-					}
-					wantLegacy := first.libraryID
-					if i == 1 {
-						wantLegacy = second.libraryID
-					}
-					if r.collection.LibraryID != wantLegacy {
-						t.Fatalf("submitted primary library changed: got%d want%d", r.collection.LibraryID, wantLegacy)
-					}
-				}
+				checkLibraryAggregateCreates(t, first, second, firstResult, secondResult)
 			} else {
-				for _, pair := range []struct {
-					fixture libraryCASFixture
-					want    int
-				}{{first, second.libraryID}, {second, first.libraryID}} {
-					c, err := pair.fixture.repo.GetByID(ctx, pair.fixture.collectionID)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if !slices.Equal(c.LibraryIDs, []int{pair.want}) {
-						t.Fatalf("swap scope=%v want%d", c.LibraryIDs, pair.want)
-					}
-				}
+				checkLibraryAggregateSwaps(t, ctx, first, second)
 			}
 		})
+	}
+}
+
+type libraryAggregateResult struct {
+	collection *models.LibraryCollection
+	err        error
+}
+
+// namedLibraryCollectionRepository opens a one-connection pool whose sessions
+// carry name as their application_name, so a trigger can pause only them.
+func namedLibraryCollectionRepository(t *testing.T, ctx context.Context, name string) *LibraryCollectionRepository {
+	t.Helper()
+	cfg, err := pgxpool.ParseConfig(os.Getenv("SILO_TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ConnConfig.RuntimeParams["application_name"] = name
+	cfg.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return NewLibraryCollectionRepository(pool)
+}
+
+// checkLibraryAggregateCreates checks that both opposite-order creates kept
+// the full scope and their submitted primary library.
+func checkLibraryAggregateCreates(t *testing.T, first, second libraryCASFixture, results ...libraryAggregateResult) {
+	t.Helper()
+	for i, r := range results {
+		if !slices.Equal(r.collection.LibraryIDs, []int{first.libraryID, second.libraryID}) {
+			t.Fatalf("create scope=%v", r.collection.LibraryIDs)
+		}
+		wantLegacy := first.libraryID
+		if i == 1 {
+			wantLegacy = second.libraryID
+		}
+		if r.collection.LibraryID != wantLegacy {
+			t.Fatalf("submitted primary library changed: got%d want%d", r.collection.LibraryID, wantLegacy)
+		}
+	}
+}
+
+// checkLibraryAggregateSwaps checks that each swapped collection now belongs
+// to the other fixture's library.
+func checkLibraryAggregateSwaps(t *testing.T, ctx context.Context, first, second libraryCASFixture) {
+	t.Helper()
+	for _, pair := range []struct {
+		fixture libraryCASFixture
+		want    int
+	}{{first, second.libraryID}, {second, first.libraryID}} {
+		c, err := pair.fixture.repo.GetByID(ctx, pair.fixture.collectionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(c.LibraryIDs, []int{pair.want}) {
+			t.Fatalf("swap scope=%v want%d", c.LibraryIDs, pair.want)
+		}
 	}
 }
 
