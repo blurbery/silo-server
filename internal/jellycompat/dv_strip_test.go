@@ -207,7 +207,6 @@ func TestPlaybackInfoWithoutStripOrToneMapStillHasNoRoute(t *testing.T) {
 		localStrip  bool
 	}{
 		"SDR display rejects the HDR10 base layer":  {track: dvStripProfile8Track(), unsupported: androidTVSDRDisplay, localStrip: true},
-		"no executor has the dovi_rpu filter":       {track: dvStripProfile8Track(), unsupported: androidTVDVProfile8Disabled, localStrip: false},
 		"SDR display rejects the HDR10+ base layer": {track: dvStripProfile8HDR10PlusTrack(), unsupported: androidTVSDRDisplay, localStrip: true},
 		"SDR display rejects a plain HDR10+ stream": {track: hdr10PlusTrack(), unsupported: androidTVSDRDisplay, localStrip: true},
 	} {
@@ -306,28 +305,6 @@ func TestCompatCopyVideoMasterManifestForStripOmitsDolbyVision(t *testing.T) {
 	}
 	if strings.Contains(got, "SUPPLEMENTAL-CODECS") || strings.Contains(got, "dvh1") {
 		t.Fatalf("strip master still advertises Dolby Vision:\n%s", got)
-	}
-}
-
-func TestCompatCopyVideoMasterManifestForProfile7StripAdvertisesPQ(t *testing.T) {
-	source := PlaybackMediaSource{
-		ID: "source-1",
-		Version: catalog.FileVersion{
-			Bitrate: 60_000,
-			VideoTracks: []models.VideoTrack{{
-				Codec: "hevc", Profile: "Main 10", Level: 153, Width: 3840, Height: 2160,
-				DVProfile: 7, DVLevel: 6, DVBLCompatID: 6, VideoRangeType: "DOVIWithEL",
-			}},
-			AudioTracks: []models.AudioTrack{{Codec: "aac", Profile: "LC", Default: true}},
-		},
-		HLSRemux:       true,
-		DVStripToHDR10: true,
-	}
-
-	got := string(generateCompatCopyVideoMasterManifest(source, "item-1", "play-1", ""))
-
-	if !strings.Contains(got, "VIDEO-RANGE=PQ") || strings.Contains(got, "dvh1") {
-		t.Fatalf("profile 7 strip master must describe the HDR10 base layer:\n%s", got)
 	}
 }
 

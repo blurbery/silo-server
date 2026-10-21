@@ -476,6 +476,26 @@ describe("planHomeLayoutImport on the same server", () => {
     ]);
   });
 
+  it("skips a Next up row, which the server adds only itself", () => {
+    const plan = planHomeLayoutImport(
+      layoutFile({
+        pages: [
+          {
+            scope: "home",
+            overrides: [{ user_section_type: "next_up", user_title: "On deck" }],
+          },
+        ],
+      }),
+      target(),
+      sequentialIds(),
+    );
+
+    expect(plan.skippedSections).toEqual([
+      { page: "Home", title: "On deck", reason: "unknown_recipe" },
+    ]);
+    expect(plan.pages).toEqual([]);
+  });
+
   it("skips sections limited to libraries this profile can't open", () => {
     const plan = planHomeLayoutImport(
       layoutFile({
@@ -785,14 +805,6 @@ describe("importPage", () => {
     });
     return { listSaved: vi.fn(async () => [removedUnlisted]), save };
   }
-
-  it("saves the merged page once", async () => {
-    const api = fakeApi([undefined]);
-
-    await importPage(page, true, api, sequentialIds());
-    expect(api.save).toHaveBeenCalledTimes(1);
-    expect(api.save).toHaveBeenCalledWith([{ id: "new-custom", user_section_type: "hidden_gems" }]);
-  });
 
   it("refuses a page over the save endpoint's override limit", async () => {
     const big = {

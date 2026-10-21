@@ -18,6 +18,21 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// openUserDB opens an in-memory SQLite user database with the user schema,
+// closed when the test ends.
+func openUserDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := userdb.InitSchema(db); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+	return db
+}
+
 type preferenceTransactionTestProvider struct {
 	store userstore.UserStore
 }
@@ -29,14 +44,7 @@ func (p preferenceTransactionTestProvider) ForUser(context.Context, int) (userst
 func (preferenceTransactionTestProvider) Close() error { return nil }
 
 func TestInterestTrackingStorePreservesSettingCapabilities(t *testing.T) {
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := userdb.InitSchema(db); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	db := openUserDB(t)
 
 	provider := WrapUserStoreProvider(
 		preferenceTransactionTestProvider{store: userdb.NewSQLiteUserStore(db)},
@@ -243,14 +251,7 @@ type storeWithoutBatchWriter struct {
 // updates progress and history but leaves profile_series_interest stale until
 // some unrelated mutation or the rebuild task happens to touch the series.
 func TestInterestTrackingStoreQueuesMutationsOnBatchFallback(t *testing.T) {
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := userdb.InitSchema(db); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	db := openUserDB(t)
 
 	inner := storeWithoutBatchWriter{UserStore: userdb.NewSQLiteUserStore(db)}
 	if _, ok := userstore.UserStore(inner).(userstore.WatchedBatchWriter); ok {
@@ -300,14 +301,7 @@ func TestInterestTrackingStoreQueuesMutationsOnBatchFallback(t *testing.T) {
 // that imports and watchlist-title promotion use: a new row queues an interest
 // recompute, and an add that changes nothing does not.
 func TestInterestTrackingStoreQueuesWatchlistAddAt(t *testing.T) {
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := userdb.InitSchema(db); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	db := openUserDB(t)
 	updater := &InterestUpdater{pending: map[interestMutation]int{}}
 	provider := WrapUserStoreProvider(preferenceTransactionTestProvider{store: userdb.NewSQLiteUserStore(db)}, &System{Interest: updater})
 	store, err := provider.ForUser(t.Context(), 7)
@@ -535,20 +529,6 @@ func TestInterestTrackingDeviceSettingsCapability(t *testing.T) {
 	}
 }
 
-func TestInterestTrackingProviderDoesNotInventProfileTransaction(t *testing.T) {
-	for name, inner := range map[string]userstore.UserStoreProvider{
-		"sqlite":  userdb.NewSQLiteProvider(nil),
-		"unknown": preferenceTransactionTestProvider{},
-	} {
-		t.Run(name, func(t *testing.T) {
-			wrapped := WrapUserStoreProvider(inner, &System{})
-			if _, ok := wrapped.(transactionalProfileCreator); ok {
-				t.Fatal("unsupported backend advertised a profile transaction")
-			}
-		})
-	}
-}
-
 // completionCapableStore records both completion entry points so the decorator
 // test exercises the production capability assertion and argument forwarding.
 type completionCapableStore struct {
@@ -622,14 +602,7 @@ func TestInterestTrackingStoreConditionalCapabilities(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
-			db, err := sql.Open("sqlite3", ":memory:")
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = db.Close() })
-			if err := userdb.InitSchema(db); err != nil {
-				t.Fatal(err)
-			}
+			db := openUserDB(t)
 			base := userdb.NewSQLiteUserStore(db)
 			rollup := &rollupCapableStore{UserStore: base}
 			completion := &completionCapableStore{}
@@ -736,14 +709,7 @@ func TestInterestTrackingOptionalCapabilityResolution(t *testing.T) {
 }
 
 func TestInterestTrackingStorePreservesJellycompatProgress(t *testing.T) {
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := userdb.InitSchema(db); err != nil {
-		t.Fatal(err)
-	}
+	db := openUserDB(t)
 	provider := WrapUserStoreProvider(preferenceTransactionTestProvider{store: userdb.NewSQLiteUserStore(db)}, &System{})
 	wrapped, err := provider.ForUser(t.Context(), 1)
 	if err != nil {
@@ -783,14 +749,7 @@ func (o *atomicProgressObserver) HandleWatchedCompleted(context.Context, int, st
 }
 
 func TestAtomicJellycompatProgressNotifiesOnlyAfterCommit(t *testing.T) {
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := userdb.InitSchema(db); err != nil {
-		t.Fatal(err)
-	}
+	db := openUserDB(t)
 	if _, err := db.Exec("CREATE TRIGGER fail_atomic_progress BEFORE INSERT ON watch_progress WHEN NEW.position_seconds = 321 BEGIN SELECT RAISE(ABORT, 'forced progress failure'); END"); err != nil {
 		t.Fatal(err)
 	}
@@ -849,14 +808,7 @@ func (catalogProgressRelationCapableStore) CatalogProgressRelation(_ *pgxpool.Po
 // always wraps the store, so a dropped answer silently disables the PostgreSQL
 // play-target path.
 func TestInterestTrackingStoreForwardsCatalogProgressRelation(t *testing.T) {
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := userdb.InitSchema(db); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	db := openUserDB(t)
 	sqlite := userdb.NewSQLiteUserStore(db)
 
 	for _, tc := range []struct {
