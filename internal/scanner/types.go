@@ -99,9 +99,6 @@ type VideoTrackInfo struct {
 	BitDepth            int
 	PixelFormat         string
 	ReferenceFrames     int
-	// HDR10PlusUnchecked marks a PQ track whose first frame was not read;
-	// see models.VideoTrack.HDR10PlusUnchecked.
-	HDR10PlusUnchecked bool
 }
 
 // AudioTrackInfo describes a probed audio track.

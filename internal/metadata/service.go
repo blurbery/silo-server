@@ -2966,7 +2966,7 @@ func (s *MetadataService) mergeAndPersist(
 	if handleArtwork {
 		prepareItemImagesForQueue(item, existingItem, keepStored)
 		dropGoneItemOnlyArtwork(localArt, item, images)
-		applyLocalArtworkFallback(item, existingItem, images, req.Language)
+		applyLocalArtworkFallback(item, images, req.Language)
 	}
 
 	if isNew && contentID == "" {

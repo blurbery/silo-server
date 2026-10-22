@@ -3,7 +3,7 @@
  * each own card's ⋯ menu, the sharing switch in it, Sync now, and when
  * Shared with me and Server collections show.
  */
-import { act, screen, within } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +11,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import getCollectionOk from "../../../contracts/api/v2/fixtures/get_collection_ok.json";
 import getLibraryCollectionsOk from "../../../contracts/api/v2/fixtures/get_library_collections_ok.json";
 import listCollectionsOk from "../../../contracts/api/v2/fixtures/list_collections_ok.json";
-import { v2Problem } from "@/api/v2/problems.test-support";
 import { personalCapabilities } from "@/test/fixtures/collectionAnswers";
 import { installV2Recorder, v2Recorder } from "@/test/v2Recorder";
 import { renderCollectionsPage } from "./collectionsPage.test-support";
@@ -51,61 +50,6 @@ function serverLibrary(id: string, name: string, collections: unknown[], total =
     total_count: total || collections.length,
     collections,
   };
-}
-
-const ghibli = { ...oscarWinners, id: "lc-ghibli", title: "Studio Ghibli" };
-
-const heistNight = { ...oscarWinners, id: "lc-heist", title: "Heist night" };
-const spaceOperas = { ...oscarWinners, id: "lc-space", title: "Space operas" };
-
-/** A library's Collections tab answer whose whole list holds these collections. */
-function libraryTab(id: string, collections: Array<{ id: string; title: string }>) {
-  const [collection] = getLibraryCollectionsOk.collections;
-  return {
-    ...getLibraryCollectionsOk,
-    library_id: id,
-    collections: collections.map(({ id, title }) => ({ ...collection, id, title })),
-  };
-}
-
-/** Server collections Movies (first card Oscar Winners of `moviesTotal`) and Kids (Studio Ghibli). */
-function answerMoviesAndKids(moviesTotal: number) {
-  v2Recorder.answer("GET /api/v2/collections/server", {
-    libraries: [
-      serverLibrary("1", "Movies", [oscarWinners], moviesTotal),
-      serverLibrary("2", "Kids", [ghibli]),
-    ],
-  });
-  v2Recorder.answer("GET /api/v2/library/{id}/collections", (call: { path: string }) =>
-    call.path === "/api/v2/library/1/collections"
-      ? libraryTab("1", [oscarWinners, heistNight, spaceOperas])
-      : libraryTab("2", [ghibli]),
-  );
-}
-
-/** The libraries whose whole Collections tab list the page read. */
-function libraryReads() {
-  return v2Recorder.callsOf("GET /api/v2/library/{id}/collections").map((call) => call.path);
-}
-
-/** The names of a region's collection cards, in order. */
-function cardsIn(region: HTMLElement) {
-  return within(region)
-    .getAllByRole("link")
-    .map(visibleText)
-    .filter((name) => !name.startsWith("See all"));
-}
-
-/** An element's text without its aria-hidden parts (a captioned card's poster placeholder). */
-function visibleText(element: HTMLElement) {
-  const copy = element.cloneNode(true) as HTMLElement;
-  copy.querySelectorAll("[aria-hidden='true']").forEach((node) => node.remove());
-  return copy.textContent?.trim() ?? "";
-}
-
-/** The library a collection card opens in. */
-function libraryOf(card: HTMLElement) {
-  return new URL(card.getAttribute("href")!, "http://silo.test").searchParams.get("library_id");
 }
 
 beforeEach(() => {
@@ -276,8 +220,14 @@ describe("Server collections", () => {
     expect(screen.queryByRole("region", { name: "Server collections" })).toBeNull();
   });
 
-  it("opens All with each library's first collections and adds the rest after them", async () => {
-    answerMoviesAndKids(3);
+  it("switches libraries with the pills and links See all to the library's tab", async () => {
+    const ghibli = { ...oscarWinners, id: "lc-ghibli", title: "Studio Ghibli" };
+    v2Recorder.answer("GET /api/v2/collections/server", {
+      libraries: [
+        serverLibrary("1", "Movies", [oscarWinners], 12),
+        serverLibrary("2", "Kids", [ghibli]),
+      ],
+    });
     show();
     const server = await screen.findByRole("region", { name: "Server collections" });
     const pills = await within(server).findByRole("group", { name: "Library" });
@@ -285,123 +235,17 @@ describe("Server collections", () => {
       "aria-pressed",
       "true",
     );
-    expect(cardsIn(server)).toEqual([oscarWinners.title, "Studio Ghibli"]);
-    // Opening the page reads no library's whole list.
-    expect(libraryReads()).toEqual([]);
+    expect(within(server).getByRole("link", { name: oscarWinners.title })).toBeInTheDocument();
+    expect(within(server).getByRole("link", { name: "Studio Ghibli" })).toBeInTheDocument();
 
-    await userEvent.click(within(server).getByRole("button", { name: "Load more" }));
-    await within(server).findByRole("link", { name: "Space operas" });
-    expect(cardsIn(server)).toEqual([
-      oscarWinners.title,
-      "Studio Ghibli",
-      "Heist night",
-      "Space operas",
-    ]);
-    // Kids sent all its collections already.
-    expect(libraryReads()).toEqual(["/api/v2/library/1/collections"]);
-    expect(within(server).queryByRole("button", { name: "Load more" })).toBeNull();
-  });
+    await userEvent.click(within(pills).getByRole("button", { name: "Kids" }));
+    expect(within(server).queryByRole("link", { name: oscarWinners.title })).toBeNull();
+    expect(within(server).getByRole("link", { name: "Studio Ghibli" })).toBeInTheDocument();
 
-  it("loads one library's rest each time the end of the grid is reached under All", async () => {
-    const kiki = { ...oscarWinners, id: "lc-kiki", title: "Kiki's Delivery Service" };
-    v2Recorder.answer("GET /api/v2/collections/server", {
-      libraries: [
-        serverLibrary("1", "Movies", [oscarWinners], 3),
-        serverLibrary("2", "Kids", [ghibli], 2),
-      ],
-    });
-    v2Recorder.answer("GET /api/v2/library/{id}/collections", (call: { path: string }) =>
-      call.path === "/api/v2/library/1/collections"
-        ? libraryTab("1", [oscarWinners, heistNight, spaceOperas])
-        : libraryTab("2", [ghibli, kiki]),
-    );
-    show();
-    const server = await screen.findByRole("region", { name: "Server collections" });
-    await userEvent.click(await within(server).findByRole("button", { name: "Load more" }));
-    await within(server).findByRole("link", { name: "Space operas" });
-    expect(libraryReads()).toEqual(["/api/v2/library/1/collections"]);
-    expect(within(server).queryByRole("link", { name: kiki.title })).toBeNull();
-
-    await userEvent.click(await within(server).findByRole("button", { name: "Load more" }));
-    await within(server).findByRole("link", { name: kiki.title });
-    expect(libraryReads()).toEqual([
-      "/api/v2/library/1/collections",
-      "/api/v2/library/2/collections",
-    ]);
-    expect(cardsIn(server)).toEqual([
-      oscarWinners.title,
-      "Studio Ghibli",
-      "Heist night",
-      "Space operas",
-      kiki.title,
-    ]);
-    expect(within(server).queryByRole("button", { name: "Load more" })).toBeNull();
-  });
-
-  it("loads the rest under All once the end of the grid scrolls into view", async () => {
-    const observed: Array<(entries: Array<{ isIntersecting: boolean }>) => void> = [];
-    vi.stubGlobal(
-      "IntersectionObserver",
-      class {
-        constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) {
-          observed.push(callback);
-        }
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-        takeRecords() {
-          return [];
-        }
-      },
-    );
-    try {
-      answerMoviesAndKids(3);
-      show();
-      const server = await screen.findByRole("region", { name: "Server collections" });
-      await within(server).findByRole("link", { name: "Studio Ghibli" });
-      expect(libraryReads()).toEqual([]);
-
-      act(() => observed.at(-1)!([{ isIntersecting: true }]));
-      expect(await within(server).findByRole("link", { name: "Space operas" })).toBeInTheDocument();
-      expect(libraryReads()).toEqual(["/api/v2/library/1/collections"]);
-      expect(within(server).queryByRole("button", { name: "Load more" })).toBeNull();
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("loads a picked library's whole list straight away", async () => {
-    answerMoviesAndKids(3);
-    show();
-    const server = await screen.findByRole("region", { name: "Server collections" });
-    await userEvent.click(await within(server).findByRole("button", { name: "Movies" }));
-    expect(libraryOf(await within(server).findByRole("link", { name: "Space operas" }))).toBe("1");
-    expect(cardsIn(server)).toEqual([oscarWinners.title, "Heist night", "Space operas"]);
-    expect(within(server).queryByRole("button", { name: "Load more" })).toBeNull();
-
-    await userEvent.click(within(server).getByRole("button", { name: "Kids" }));
-    expect(cardsIn(server)).toEqual(["Studio Ghibli"]);
-    expect(libraryReads()).toEqual(["/api/v2/library/1/collections"]);
-  });
-
-  it("keeps a library's first cards and links to its tab when the rest fail to load", async () => {
-    v2Recorder.answer("GET /api/v2/collections/server", {
-      libraries: [
-        serverLibrary("1", "Movies", [oscarWinners], 30),
-        serverLibrary("2", "Kids", [ghibli]),
-      ],
-    });
-    v2Recorder.answer("GET /api/v2/library/{id}/collections", () => {
-      throw v2Problem(500, "internal_error", "Failed to load collections");
-    });
-    show();
-    const server = await screen.findByRole("region", { name: "Server collections" });
-    await userEvent.click(await within(server).findByRole("button", { name: "Load more" }));
+    await userEvent.click(within(pills).getByRole("button", { name: "Movies" }));
     expect(
-      await within(server).findByRole("link", { name: "See all 30 in Movies" }),
+      within(server).getByRole("link", { name: "See all 12 Movies collections" }),
     ).toHaveAttribute("href", "/library/1?tab=collections");
-    expect(cardsIn(server)).toEqual([oscarWinners.title, "Studio Ghibli"]);
-    expect(within(server).queryByRole("link", { name: /in Kids$/ })).toBeNull();
   });
 
   it("opens a collection in several libraries across all of them from All", async () => {
@@ -413,50 +257,17 @@ describe("Server collections", () => {
     });
     show();
     const server = await screen.findByRole("region", { name: "Server collections" });
-    const card = () => within(server).getByRole("link", { name: oscarWinners.title });
+    const libraryOf = () =>
+      new URL(
+        within(server).getByRole("link", { name: oscarWinners.title }).getAttribute("href")!,
+        "http://silo.test",
+      ).searchParams.get("library_id");
 
     await within(server).findByRole("group", { name: "Library" });
     expect(within(server).getAllByRole("link", { name: oscarWinners.title })).toHaveLength(1);
-    expect(libraryOf(card())).toBeNull();
+    expect(libraryOf()).toBeNull();
 
     await userEvent.click(within(server).getByRole("button", { name: "Kids" }));
-    expect(libraryOf(card())).toBe("2");
-  });
-
-  it("keeps the first collections in the server collections answer's order", async () => {
-    v2Recorder.answer("GET /api/v2/collections/server", {
-      libraries: [serverLibrary("1", "Movies", [oscarWinners, heistNight], 3)],
-    });
-    // A library list that disagrees with the first ones, as an older cached copy can.
-    v2Recorder.answer(
-      "GET /api/v2/library/{id}/collections",
-      libraryTab("1", [heistNight, spaceOperas, oscarWinners]),
-    );
-    show();
-    const server = await screen.findByRole("region", { name: "Server collections" });
-    await userEvent.click(await within(server).findByRole("button", { name: "Load more" }));
-    await within(server).findByRole("link", { name: "Space operas" });
-    expect(cardsIn(server)).toEqual([oscarWinners.title, "Heist night", "Space operas"]);
-  });
-
-  it("finds a collection in several libraries among the rest of a library too", async () => {
-    v2Recorder.answer("GET /api/v2/collections/server", {
-      libraries: [
-        serverLibrary("1", "Movies", [oscarWinners], 2),
-        serverLibrary("2", "Kids", [ghibli]),
-      ],
-    });
-    v2Recorder.answer(
-      "GET /api/v2/library/{id}/collections",
-      libraryTab("1", [oscarWinners, ghibli]),
-    );
-    show();
-    const server = await screen.findByRole("region", { name: "Server collections" });
-    const ghibliCard = () => within(server).getByRole("link", { name: "Studio Ghibli" });
-    expect(libraryOf(await within(server).findByRole("link", { name: "Studio Ghibli" }))).toBe("2");
-
-    await userEvent.click(within(server).getByRole("button", { name: "Load more" }));
-    await vi.waitFor(() => expect(libraryOf(ghibliCard())).toBeNull());
-    expect(cardsIn(server)).toEqual([oscarWinners.title, "Studio Ghibli"]);
+    expect(libraryOf()).toBe("2");
   });
 });

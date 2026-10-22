@@ -433,17 +433,7 @@ Caching and refresh:
   library root is opened as an `os.Root` before the path is resolved, and the
   file is opened through the handle that is the same directory as the resolved
   root, so a root or folder swapped for a symlink after that point cannot lead
-  the open out of the library. A path whose folders lead out of every root
-  through a symlink, as a per-title folder linked into another tree does, is
-  read only when a folder it physically sits in, below the library root, also
-  holds a present `media_files` row of the same title (the series, for season
-  and episode images): the scanner reached that file through the same link.
-  That folder is opened as an `os.Root`, that file must be the same file
-  reached through it, and the image is read through it. Anything else
-  stays the outside-roots failure, except that an I/O error while checking,
-  or a check that tried as many cataloged files as it lists (32) without a
-  match, is a read failure retried as usual. The admin image picker reads sidecars the
-  same way. When
+  the open out of the library. When
   the re-check or the read fails, the processor probes, through
   `internal/rootcheck`, the nearest folder that exists at or above the file's
   folder, searching no higher than the library root: unless it lists entries
@@ -470,12 +460,7 @@ Caching and refresh:
   the best remote candidate by the `applyBestImages` rules, for seasons and
   episodes the first remote poster or still that the local one displaced while
   provider results merged, or, when the refresh kept a local source it could
-  not see, the remote one it chose. When the refresh offers no remote image for
-  an item slot, which is always so for a local re-apply because it asks no
-  remote provider, the remote image the slot was serving stays as the stand-in,
-  as a cached copy would, so a copy that keeps failing never leaves the slot
-  blank; clear art stored as the logo is the exception and never stands in. The
-  slot's source stays the local file, so the
+  not see, the remote one it chose. The slot's source stays the local file, so the
   copy replaces the stand-in through the source-matched update, and a refresh
   that offers no artwork at all leaves the slot, local source included, as it
   is. Locked artwork gets no stand-in, and neither does an image URL an NFO

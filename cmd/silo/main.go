@@ -3067,7 +3067,6 @@ func main() {
 		// does: those processes have the libraries mounted.
 		if deps.FileRepo != nil {
 			taskMgr.Register(tasks.NewBackfillMatroskaTrackNumbersTask(deps.DB, scanner.NewMatroskaTrackBackfiller(deps.FileRepo)))
-			taskMgr.Register(tasks.NewBackfillHDR10PlusTask(deps.DB, scanner.NewHDR10PlusBackfiller(deps.FileRepo, scanner.FFprobePathFromFFmpeg(cfg.Playback.FFmpegPath))))
 		}
 		taskMgr.Register(tasks.NewRefreshSeriesAirDatesTask(catalog.NewEpisodeRepository(deps.DB)))
 		if deps.Blobs.Assets != nil {
@@ -4789,7 +4788,7 @@ func reloadMarkerPluginProviders(
 				}
 				refreshedRuntimes[installation.ID] = true
 			}
-			pluginProvider, err := markers.NewPluginProvider(markers.PluginProviderOptions{
+			provider, err := markers.NewPluginProvider(markers.PluginProviderOptions{
 				InstallationID:      installation.ID,
 				CapabilityID:        capability.ID,
 				DisplayName:         firstNonEmptyMarkerText(descriptor.GetDisplayName(), capability.ID),
@@ -4799,10 +4798,6 @@ func reloadMarkerPluginProviders(
 			}, resolver)
 			if err != nil {
 				return err
-			}
-			var provider markers.Provider = pluginProvider
-			if !markers.PluginSupportsContributionFromMetadata(metadataMap) {
-				provider = markers.NewReadOnlyPluginProvider(pluginProvider)
 			}
 			providers = append(providers, provider)
 
