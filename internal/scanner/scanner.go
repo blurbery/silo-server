@@ -43,7 +43,8 @@ var ignoredDirNames = map[string]bool{
 // ignoredMovieSupplementalDirNames holds movie-library directory names whose
 // contents are never playable content (noise). Extras-shaped directories
 // (Trailers/, Featurettes/, ...) are NOT in this set: they are walked and
-// classified via extrasDirKinds instead of discarded.
+// classified via extrasDirKinds instead of discarded. Subtitle discovery
+// reads the subtitle folders (subtitleDirLabels) on its own.
 var ignoredMovieSupplementalDirNames = map[string]bool{
 	"sample":    true,
 	"samples":   true,
@@ -900,7 +901,7 @@ func (s *Scanner) scanPaths(
 	var wg sync.WaitGroup
 	pathCh := make(chan string, s.workerCount())
 	var newCount, updatedCount, unchangedCount, errorCount, processedCount atomic.Int64
-	subtitleCache := newExternalSubtitleDirCache()
+	subtitleCache := newExternalSubtitleDirCache(folder.Type)
 
 	for range s.workerCount() {
 		wg.Go(func() {
@@ -1758,7 +1759,7 @@ func (s *Scanner) scanScope(
 	var wg sync.WaitGroup
 	pathCh := make(chan string, s.workerCount())
 	var newCount, updatedCount, unchangedCount, errorCount, processedCount atomic.Int64
-	subtitleCache := newExternalSubtitleDirCache()
+	subtitleCache := newExternalSubtitleDirCache(folder.Type)
 
 	for range s.workerCount() {
 		wg.Go(func() {
@@ -2399,13 +2400,13 @@ func (s *Scanner) syncPresentState(ctx context.Context, folderID int, scope pres
 		ON CONFLICT (content_id, media_folder_id) DO NOTHING
 	`,
 		},
-		{
-			// target_episode selects the episodes in scope; candidate then
-			// re-joins every active file of those episodes so first_seen_at
-			// and the scan-run provenance aggregate over the whole episode,
-			// not just the scanned path.
-			desc: "restoring episode folder memberships",
-			sql: `
+	}
+
+	// target_episode selects the episodes in scope; candidate then re-joins
+	// every active file of those episodes so first_seen_at and the scan-run
+	// provenance aggregate over the whole episode, not just the scanned path.
+	// It returns the parent series of the genuinely new links.
+	restoreEpisodeMembershipsSQL := `
 		WITH target_episode AS (
 			SELECT DISTINCT mf.episode_id, mf.media_folder_id
 			FROM media_files mf
@@ -2438,23 +2439,12 @@ func (s *Scanner) syncPresentState(ctx context.Context, folderID int, scope pres
 			SELECT episode_id, media_folder_id, first_seen_at, first_seen_scan_run_id
 			FROM candidate
 			ON CONFLICT (episode_id, media_folder_id) DO NOTHING
-			RETURNING episode_id, first_seen_at
+			RETURNING episode_id
 		)
-		-- Bump each parent series' latest-episode-added denorm for the
-		-- genuinely new links ("Latest Episodes" sort, issue #202).
-		UPDATE media_items mi
-		SET latest_episode_added_at = GREATEST(mi.latest_episode_added_at, sub.latest_added)
-		FROM (
-			SELECT e.series_id, MAX(i.first_seen_at) AS latest_added
-			FROM inserted i
-			JOIN episodes e ON e.content_id = i.episode_id
-			GROUP BY e.series_id
-		) sub
-		WHERE mi.content_id = sub.series_id
-		  AND mi.type = 'series'
-	`,
-		},
-	}
+		SELECT COALESCE(array_agg(DISTINCT e.series_id), ARRAY[]::text[])
+		FROM inserted i
+		JOIN episodes e ON e.content_id = i.episode_id
+	`
 
 	// One transaction: a crash part-way through must not leave a row with some
 	// links cleared and its memberships unrepaired.
@@ -2468,6 +2458,17 @@ func (s *Scanner) syncPresentState(ctx context.Context, folderID int, scope pres
 		if _, err := tx.Exec(ctx, stmt.sql, args...); err != nil {
 			return fmt.Errorf("%s: %w", stmt.desc, err)
 		}
+	}
+	var linkedSeriesIDs []string
+	if err := tx.QueryRow(ctx, restoreEpisodeMembershipsSQL, args...).Scan(&linkedSeriesIDs); err != nil {
+		return fmt.Errorf("restoring episode folder memberships: %w", err)
+	}
+	// New links move the series' membership denorms ("Latest Episodes",
+	// issue #202; "Latest Episode Air Date", issue #2741). Recompute them in
+	// a later statement: one that waited on a concurrent air-date
+	// correction's series lock would still apply the older episode dates.
+	if err := catalog.RecomputeSeriesEpisodeMembershipDenorms(ctx, tx, linkedSeriesIDs); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -2790,7 +2791,7 @@ func (s *Scanner) ScanFile(ctx context.Context, filePath string, folder *models.
 		return fmt.Errorf("loading group overrides for file: %w", err)
 	}
 	applyGroupOverrides(&groupInference, groupOverrides)
-	_, _, err = s.processFile(ctx, filePath, folder, existingByPath, existingContentStatuses, rootInference.Assignments[filepath.Clean(filePath)], groupInference.Assignments[filepath.Clean(filePath)], newExternalSubtitleDirCache())
+	_, _, err = s.processFile(ctx, filePath, folder, existingByPath, existingContentStatuses, rootInference.Assignments[filepath.Clean(filePath)], groupInference.Assignments[filepath.Clean(filePath)], newExternalSubtitleDirCache(folder.Type))
 	if err != nil {
 		return err
 	}
@@ -3013,8 +3014,10 @@ func (s *Scanner) processFile(
 		var subErr error
 		externalSubs, subErr = subtitleCache.Detect(filePath)
 		if subErr != nil {
+			// Keep what was found (sidecars beside the video when only a
+			// Subs/ folder failed), but leave the set unchecked so the
+			// failure never reads as a change to the stored sidecars.
 			slog.WarnContext(ctx, "scanner: subtitle detection failed", "component", "scanner", "path", filePath, "error", subErr)
-			externalSubs = nil
 			externalSubsChecked = false
 			return externalSubs
 		}
