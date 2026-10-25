@@ -18616,6 +18616,8 @@ export interface components {
        * @description RFC 3339 instant in UTC with millisecond precision
        */
       updated_at: string;
+      /** @description Keeps the section off every client but the web app while it is its page's first featured section, the one the web shows as the banner: a viewer section read then answers it only to a caller whose X-Silo-Client-Family is web. Once another featured section comes first, every client gets it as a regular row. Always false on a section that is not featured. */
+      web_only: boolean;
     };
     AdminSectionBulkCreate: {
       /** @description A recipe's configuration document; its keys are fixed by the recipe named in section_type. */
@@ -18652,6 +18654,8 @@ export interface components {
        * @enum {string}
        */
       state: "available" | "disabled" | "not_configured" | "unsupported";
+      /** @description Admin sections accept and answer web_only, and viewer section reads honor it */
+      web_only: boolean;
     };
     AdminSectionCreate: {
       /** @description A recipe's configuration document; its keys are fixed by the recipe named in section_type. */
@@ -18676,6 +18680,8 @@ export interface components {
       scope: "home" | "library";
       section_type: string;
       title: string;
+      /** @description Keep the featured section off every client but the web app; ignored unless featured is true. Send it only when getAdminSectionCapabilities reports web_only */
+      web_only?: boolean;
     };
     AdminSectionDefaults: {
       reset_profiles?: boolean;
@@ -18729,6 +18735,8 @@ export interface components {
       position?: number;
       section_type?: string;
       title?: string;
+      /** @description Keep the featured section off every client but the web app. Absent keeps the saved value, except that an update making the section featured saves false; a section that is not featured after the update always saves false. Send it only when getAdminSectionCapabilities reports web_only */
+      web_only?: boolean;
     };
     AdminSensitiveStatus: {
       configured: string[];
@@ -107287,6 +107295,8 @@ export interface operations {
         "X-Profile-Id": string;
         /** @description Verification proof for a PIN-locked profile, issued by POST /api/v2/profiles/{id}/verify-pin; required only when the declared profile is locked */
         "X-Profile-Token"?: string;
+        /** @description The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404 */
+        "X-Silo-Client-Family"?: string;
       };
       path?: never;
       cookie?: never;
@@ -107406,6 +107416,8 @@ export interface operations {
         "X-Profile-Id": string;
         /** @description Verification proof for a PIN-locked profile, issued by POST /api/v2/profiles/{id}/verify-pin; required only when the declared profile is locked */
         "X-Profile-Token"?: string;
+        /** @description The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404 */
+        "X-Silo-Client-Family"?: string;
       };
       path?: never;
       cookie?: never;
@@ -107525,6 +107537,8 @@ export interface operations {
         "X-Profile-Id": string;
         /** @description Verification proof for a PIN-locked profile, issued by POST /api/v2/profiles/{id}/verify-pin; required only when the declared profile is locked */
         "X-Profile-Token"?: string;
+        /** @description The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404 */
+        "X-Silo-Client-Family"?: string;
       };
       path: {
         /** @description Section identifier from the home layout */
@@ -112311,6 +112325,8 @@ export interface operations {
         "X-Profile-Id": string;
         /** @description Verification proof for a PIN-locked profile, issued by POST /api/v2/profiles/{id}/verify-pin; required only when the declared profile is locked */
         "X-Profile-Token"?: string;
+        /** @description The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404 */
+        "X-Silo-Client-Family"?: string;
       };
       path: {
         /** @description Library identifier */
@@ -112433,6 +112449,8 @@ export interface operations {
         "X-Profile-Id": string;
         /** @description Verification proof for a PIN-locked profile, issued by POST /api/v2/profiles/{id}/verify-pin; required only when the declared profile is locked */
         "X-Profile-Token"?: string;
+        /** @description The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404 */
+        "X-Silo-Client-Family"?: string;
       };
       path: {
         /** @description Library identifier */
@@ -112555,6 +112573,8 @@ export interface operations {
         "X-Profile-Id": string;
         /** @description Verification proof for a PIN-locked profile, issued by POST /api/v2/profiles/{id}/verify-pin; required only when the declared profile is locked */
         "X-Profile-Token"?: string;
+        /** @description The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404 */
+        "X-Silo-Client-Family"?: string;
       };
       path: {
         /** @description Library identifier */
