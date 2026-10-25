@@ -4524,8 +4524,6 @@ export interface PageSectionConfig {
   item_limit: number;
   config: Record<string, unknown>;
   enabled: boolean;
-  /** The hero banner is kept off the apps. Absent from a server that predates it. */
-  web_only?: boolean;
   created_at: string;
   updated_at: string;
 }
