@@ -59,7 +59,7 @@ func TestPostgresSupersededEpisodeProgressIDs(t *testing.T) {
 	suffix := time.Now().UnixNano()
 	id := func(label string) string { return fmt.Sprintf("cw-exact-%s-%d", label, suffix) }
 	profileID := id("shared-profile")
-	seriesIDs := []string{id("newer"), id("older"), id("hidden"), id("equal"), id("other-user")}
+	seriesIDs := []string{id("newer"), id("older"), id("hidden"), id("equal"), id("other-user"), id("special")}
 	episodeID := func(seriesIndex, episode int) string {
 		return id(fmt.Sprintf("s%d-e%d", seriesIndex, episode))
 	}
@@ -97,6 +97,13 @@ func TestPostgresSupersededEpisodeProgressIDs(t *testing.T) {
 	}
 
 	seedSupersededProgressCatalog(t, ctx, pool, seriesIDs, episodeID, movieID)
+	specialID := id("s5-special")
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO episodes (content_id, series_id, season_number, episode_number, title)
+		VALUES ($1, $2, 0, 5, 'Special')
+	`, specialID, seriesIDs[5]); err != nil {
+		t.Fatalf("seed special: %v", err)
+	}
 
 	base := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	seedSupersededProgressCompletions(t, ctx, pool, userID, otherUserID, profileID, episodeID, id("imported-"), base)
@@ -107,6 +114,7 @@ func TestPostgresSupersededEpisodeProgressIDs(t *testing.T) {
 		{MediaItemID: episodeID(2, 1), UpdatedAt: base},
 		{MediaItemID: episodeID(3, 1), UpdatedAt: base},
 		{MediaItemID: episodeID(4, 1), UpdatedAt: base},
+		{MediaItemID: specialID, UpdatedAt: base},
 		{MediaItemID: movieID, UpdatedAt: base},
 		{MediaItemID: " ", UpdatedAt: base},
 		{MediaItemID: episodeID(0, 1)},
@@ -156,6 +164,7 @@ func seedSupersededProgressCompletions(t *testing.T, ctx context.Context, pool *
 	// Series 1: completion predates the candidate and must not supersede it.
 	// Series 2: completion is newer but hidden by its watermark.
 	// Series 3: equal timestamps do not satisfy the strict freshness gate.
+	// Series 5: a regular episode finished later leaves a special in progress.
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO user_watch_progress
 			(user_id, profile_id, media_item_id, position_seconds, duration_seconds, completed, updated_at)
@@ -164,10 +173,11 @@ func seedSupersededProgressCompletions(t *testing.T, ctx context.Context, pool *
 			($1, $2, $4, 0, 1200, TRUE, $7),
 			($1, $2, $5, 0, 1200, TRUE, $8),
 			($1, $2, $6, 0, 1200, TRUE, $7),
-			($9, $2, $10, 0, 1200, TRUE, $8)
+			($9, $2, $10, 0, 1200, TRUE, $8),
+			($1, $2, $11, 0, 1200, TRUE, $8)
 	`, userID, profileID,
 		episodeID(0, 2), episodeID(1, 2), episodeID(2, 2), episodeID(3, 2),
-		base, base.Add(time.Minute), otherUserID, episodeID(4, 2)); err != nil {
+		base, base.Add(time.Minute), otherUserID, episodeID(4, 2), episodeID(5, 2)); err != nil {
 		t.Fatalf("seed completed progress: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `

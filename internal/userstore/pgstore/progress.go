@@ -789,6 +789,7 @@ const supersededEpisodeProgressQuery = `
 		WHERE later_episode.series_id = current_episode.series_id
 		  AND (later_episode.season_number, later_episode.episode_number)
 		      > (current_episode.season_number, current_episode.episode_number)
+		  AND (later_episode.season_number = 0) = (current_episode.season_number = 0)
 		  AND NOT EXISTS (
 			SELECT 1
 			FROM user_history_hidden_items hidden
