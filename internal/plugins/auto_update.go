@@ -58,7 +58,10 @@ func compareVersions(a, b string) int {
 
 const pluginIDTMDB = "silo.tmdb"
 
-var defaultPluginIDs = []string{pluginIDTMDB, "silo.tvdb", "silo.theintrodb"}
+// pluginIDFanartTV comes from the fork's own catalogue (ForkRepositoryURL).
+const pluginIDFanartTV = "blurbery.fanarttv"
+
+var defaultPluginIDs = []string{pluginIDTMDB, "silo.tvdb", "silo.theintrodb", pluginIDFanartTV}
 
 type autoUpdateRepositoryStore interface {
 	List(ctx context.Context) ([]*Repository, error)
@@ -128,6 +131,10 @@ type AutoUpdateService struct {
 	// requiredPlugins lists more plugins to install like the defaults, for as
 	// long as it keeps returning them. Optional; see SetRequiredPlugins.
 	requiredPlugins func(context.Context) ([]string, error)
+
+	// onInstalled runs after a default or required plugin is newly installed.
+	// Optional; see SetOnInstalled.
+	onInstalled func(context.Context, *Installation)
 }
 
 // NewAutoUpdateService creates a new AutoUpdateService. onChange is optional and
@@ -163,6 +170,14 @@ func NewAutoUpdateService(
 // existing data drops off it once that has happened. Call it before Run.
 func (s *AutoUpdateService) SetRequiredPlugins(required func(context.Context) ([]string, error)) {
 	s.requiredPlugins = required
+}
+
+// SetOnInstalled sets a hook that runs once for each default or required
+// plugin a check newly installs (fork carry). An uploaded plugin joins the
+// libraries' provider chains through the upload handler; this lets a plugin
+// installed at startup do the same. Call it before Run.
+func (s *AutoUpdateService) SetOnInstalled(onInstalled func(context.Context, *Installation)) {
+	s.onInstalled = onInstalled
 }
 
 // Check runs a plugin update pass. It can be used by startup, scheduled tasks,
@@ -374,11 +389,15 @@ func (s *AutoUpdateService) handleNewPlugin(ctx context.Context, pluginID string
 		PluginID:     pluginID,
 		Version:      version,
 	})
+	var result *InstallResult
 	if err == nil {
-		_, err = s.installResolvedCatalogTarget(ctx, target)
+		result, err = s.installResolvedCatalogTarget(ctx, target)
 	}
 	if err != nil {
 		return false, err
+	}
+	if s.onInstalled != nil && result != nil && result.Installation != nil {
+		s.onInstalled(ctx, result.Installation)
 	}
 	return true, nil
 }

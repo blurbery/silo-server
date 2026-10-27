@@ -1919,6 +1919,12 @@ func main() {
 				return watchsync.FirstPartyPluginsToInstall(ctx, watchProviderRepo)
 			})
 		}
+		// Fork carry: see fork_plugin_chains.go.
+		autoInstallChains := metadata.NewChainRepository(deps.DB)
+		pluginAutoUpdater.SetOnInstalled(appendInstalledMetadataProviders(installationStore, autoInstallChains,
+			func(ctx context.Context, installationID int, capabilityID, level string) metadata.SeedPlacement {
+				return metadata.LookupSeedPlacement(ctx, autoInstallChains.Pool(), installationID, capabilityID, level)
+			}))
 		go func() {
 			defer close(pluginAutoUpdateDone)
 			if err := pluginAutoUpdater.Run(appCtx); err != nil {

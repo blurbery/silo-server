@@ -7,8 +7,15 @@ const (
 	ApprovedCommunityRepositoryURL  = "https://raw.githubusercontent.com/Silo-Community/silo-plugins/main/manifest.json"
 	ApprovedCommunityRepositoryName = "Approved community"
 
+	// ForkRepositoryURL is this fork's own catalogue (fork carry): the
+	// fanart.tv plugin's latest release, installed by default and kept up to
+	// date like the official plugins.
+	ForkRepositoryURL  = "https://github.com/blurbery/silo-plugin-metadata-fanarttv/releases/latest/download/catalog.json"
+	ForkRepositoryName = "fanart.tv"
+
 	OfficialRepositoryManagedKey          = "official"
 	ApprovedCommunityRepositoryManagedKey = "approved-community"
+	ForkRepositoryManagedKey              = "fork-fanarttv"
 
 	RepositorySourceSilo              = "silo"
 	RepositorySourceApprovedCommunity = "approved_community"
@@ -37,6 +44,13 @@ var managedRepositoryDefinitions = []managedRepositoryDefinition{
 		URL:         ApprovedCommunityRepositoryURL,
 		DisplayName: ApprovedCommunityRepositoryName,
 		SourceKind:  RepositorySourceApprovedCommunity,
+	},
+	{
+		Key:         ForkRepositoryManagedKey,
+		URL:         ForkRepositoryURL,
+		DisplayName: ForkRepositoryName,
+		// Silo-maintained source, so startup installs its default plugins.
+		SourceKind: RepositorySourceSilo,
 	},
 }
 
