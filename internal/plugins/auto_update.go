@@ -58,10 +58,14 @@ func compareVersions(a, b string) int {
 
 const pluginIDTMDB = "silo.tmdb"
 
-// pluginIDFanartTV comes from the fork's own catalogue (ForkRepositoryURL).
+var defaultPluginIDs = []string{pluginIDTMDB, "silo.tvdb", "silo.theintrodb"}
+
+// pluginIDFanartTV comes from the fork's own catalog (ForkRepositoryURL).
 const pluginIDFanartTV = "blurbery.fanarttv"
 
-var defaultPluginIDs = []string{pluginIDTMDB, "silo.tvdb", "silo.theintrodb", pluginIDFanartTV}
+// forkDefaultPluginIDs install at startup after the official defaults (fork
+// carry). A separate list keeps the upstream one untouched across syncs.
+var forkDefaultPluginIDs = []string{pluginIDFanartTV}
 
 type autoUpdateRepositoryStore interface {
 	List(ctx context.Context) ([]*Repository, error)
@@ -357,7 +361,7 @@ func (s *AutoUpdateService) ensureManagedRepositoryRows(ctx context.Context) (in
 func (s *AutoUpdateService) pluginsToAutoInstall(ctx context.Context, opts AutoUpdateOptions, summary *AutoUpdateSummary) []string {
 	var pluginIDs []string
 	if opts.AutoInstallDefaults {
-		pluginIDs = slices.Clone(defaultPluginIDs)
+		pluginIDs = append(slices.Clone(defaultPluginIDs), forkDefaultPluginIDs...)
 	}
 	if s.requiredPlugins == nil {
 		return pluginIDs

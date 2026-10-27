@@ -7,7 +7,7 @@ const (
 	ApprovedCommunityRepositoryURL  = "https://raw.githubusercontent.com/Silo-Community/silo-plugins/main/manifest.json"
 	ApprovedCommunityRepositoryName = "Approved community"
 
-	// ForkRepositoryURL is this fork's own catalogue (fork carry): the
+	// ForkRepositoryURL is this fork's own catalog (fork carry): the
 	// fanart.tv plugin's latest release, installed by default and kept up to
 	// date like the official plugins.
 	ForkRepositoryURL  = "https://github.com/blurbery/silo-plugin-metadata-fanarttv/releases/latest/download/catalog.json"

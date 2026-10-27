@@ -10,7 +10,7 @@ import (
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
 )
 
-// Fork carry: fanart.tv installs by default from the fork's own catalogue.
+// Fork carry: fanart.tv installs by default from the fork's own catalog.
 
 // installingAutoUpdateInstaller reports the installation it created, which the
 // shared fake leaves empty.
@@ -26,7 +26,7 @@ func (f installingAutoUpdateInstaller) InstallBinary(ctx context.Context, req In
 	return &InstallResult{Installation: f.installed}, nil
 }
 
-func TestAutoUpdateInstallsFanartTVFromTheForkCatalogueOnce(t *testing.T) {
+func TestAutoUpdateInstallsFanartTVFromTheForkCatalogOnce(t *testing.T) {
 	catalog := &fakeAutoUpdateCatalog{
 		entries: []CatalogEntry{
 			{RepositoryID: 7, SourceKind: RepositorySourceSilo, Manifest: &pluginv1.PluginManifest{PluginId: pluginIDTMDB, Version: "1.0.0"}},
@@ -53,7 +53,7 @@ func TestAutoUpdateInstallsFanartTVFromTheForkCatalogueOnce(t *testing.T) {
 	}
 	if summary.DefaultPluginsInstalled != 1 || len(catalog.resolveRequests) != 1 ||
 		catalog.resolveRequests[0].PluginID != pluginIDFanartTV || catalog.resolveRequests[0].RepositoryID != 8 {
-		t.Fatalf("installs = %d, resolved = %+v, want fanart.tv from the fork catalogue", summary.DefaultPluginsInstalled, catalog.resolveRequests)
+		t.Fatalf("installs = %d, resolved = %+v, want fanart.tv from the fork catalog", summary.DefaultPluginsInstalled, catalog.resolveRequests)
 	}
 	if len(hooked) != 1 || hooked[0] != installed {
 		t.Fatalf("install hook ran for %v, want once for the new installation", hooked)
@@ -70,7 +70,7 @@ func TestAutoUpdateInstallsFanartTVFromTheForkCatalogueOnce(t *testing.T) {
 	}
 }
 
-func TestForkCatalogueIsAManagedSiloSource(t *testing.T) {
+func TestForkCatalogIsAManagedSiloSource(t *testing.T) {
 	var fork *managedRepositoryDefinition
 	for i := range managedRepositoryDefinitions {
 		if managedRepositoryDefinitions[i].Key == ForkRepositoryManagedKey {
@@ -78,10 +78,10 @@ func TestForkCatalogueIsAManagedSiloSource(t *testing.T) {
 		}
 	}
 	if fork == nil {
-		t.Fatal("the fork catalogue is not a managed repository")
+		t.Fatal("the fork catalog is not a managed repository")
 	}
 	if fork.URL != ForkRepositoryURL || fork.SourceKind != RepositorySourceSilo {
-		t.Fatalf("fork catalogue = %+v, want %s as a Silo source", fork, ForkRepositoryURL)
+		t.Fatalf("fork catalog = %+v, want %s as a Silo source", fork, ForkRepositoryURL)
 	}
 }
 
