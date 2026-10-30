@@ -20,29 +20,10 @@ type LibraryViewInput struct {
 	ID ID `path:"id" doc:"Library identifier" example:"1"`
 }
 
-// SectionClient is the client family a viewer section read declares. It
-// decides whether a featured section an administrator kept off the apps is
-// part of the answer.
-type SectionClient struct {
-	ClientFamily string `header:"X-Silo-Client-Family" doc:"The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404" example:"tv"`
-}
-
-// web reports whether the caller declared the web client family.
-func (c SectionClient) web() bool {
-	return handlers.IsWebClientFamily(c.ClientFamily)
-}
-
-// LibraryLayoutInput is the getLibraryLayout query.
-type LibraryLayoutInput struct {
-	ID ID `path:"id" doc:"Library identifier" example:"1"`
-	SectionClient
-}
-
 // LibrarySectionsInput is the listLibrarySections query.
 type LibrarySectionsInput struct {
 	ID ID `path:"id" doc:"Library identifier" example:"1"`
 	ArtworkQuery
-	SectionClient
 }
 
 // LibrarySectionItemsInput is the getLibrarySectionItems query.
@@ -50,7 +31,6 @@ type LibrarySectionItemsInput struct {
 	ID        ID     `path:"id" doc:"Library identifier" example:"1"`
 	SectionID string `path:"section_id" minLength:"1" doc:"Section identifier from the layout" example:"recently_added"`
 	ArtworkQuery
-	SectionClient
 }
 
 // SectionLayoutEntry is one section of a page layout, without items.
@@ -239,8 +219,8 @@ func viewerIdentity(ctx context.Context) (int, string, *Problem) {
 // sectionViewer is what the section seams need beyond the context. The v2
 // listener does not read a device header, so the access filter carries no
 // device id.
-func sectionViewer(ctx context.Context, art imagesize.Request, client SectionClient) handlers.SectionViewer {
-	return handlers.SectionViewer{Access: handlers.AccessFilterFromContext(ctx, ""), ImageSize: art.Size, ImageWidths: art.Widths, Web: client.web()}
+func sectionViewer(ctx context.Context, art imagesize.Request) handlers.SectionViewer {
+	return handlers.SectionViewer{Access: handlers.AccessFilterFromContext(ctx, ""), ImageSize: art.Size, ImageWidths: art.Widths}
 }
 
 func (reg *Registry) librarySections() (LibrarySectionService, *Problem) {
@@ -257,7 +237,7 @@ func (reg *Registry) libraryCollections() (LibraryCollectionService, *Problem) {
 	return reg.deps.LibraryCollections, nil
 }
 
-func (reg *Registry) getLibraryLayout(ctx context.Context, in *LibraryLayoutInput) (*SectionLayoutOutput, error) {
+func (reg *Registry) getLibraryLayout(ctx context.Context, in *LibraryViewInput) (*SectionLayoutOutput, error) {
 	svc, p := reg.librarySections()
 	if p != nil {
 		return nil, p
@@ -269,7 +249,7 @@ func (reg *Registry) getLibraryLayout(ctx context.Context, in *LibraryLayoutInpu
 	if _, _, p := viewerIdentity(ctx); p != nil {
 		return nil, p
 	}
-	view, err := svc.LibraryLayout(ctx, id, handlers.SectionViewer{Web: in.web()})
+	view, err := svc.LibraryLayout(ctx, id)
 	if err != nil {
 		return nil, serviceProblem(err)
 	}
@@ -304,7 +284,7 @@ func (reg *Registry) listLibrarySections(ctx context.Context, in *LibrarySection
 	if _, _, p := viewerIdentity(ctx); p != nil {
 		return nil, p
 	}
-	view, err := svc.LibrarySections(ctx, id, sectionViewer(ctx, in.Artwork(), in.SectionClient))
+	view, err := svc.LibrarySections(ctx, id, sectionViewer(ctx, in.Artwork()))
 	if err != nil {
 		return nil, serviceProblem(err)
 	}
@@ -328,7 +308,7 @@ func (reg *Registry) getLibrarySectionItems(ctx context.Context, in *LibrarySect
 	if _, _, p := viewerIdentity(ctx); p != nil {
 		return nil, p
 	}
-	view, err := svc.LibrarySectionItems(ctx, id, in.SectionID, sectionViewer(ctx, in.Artwork(), in.SectionClient))
+	view, err := svc.LibrarySectionItems(ctx, id, in.SectionID, sectionViewer(ctx, in.Artwork()))
 	if err != nil {
 		return nil, serviceProblem(err)
 	}

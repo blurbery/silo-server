@@ -3,7 +3,6 @@ package sections
 import (
 	"encoding/json"
 	"reflect"
-	"slices"
 	"sort"
 	"strings"
 
@@ -45,7 +44,6 @@ func Resolve(admin []*PageSection, overrides []ProfileSectionOverride) []Resolve
 			ItemLimit:   ClampItemLimit(s.ItemLimit),
 			Config:      s.Config,
 			Position:    s.Position,
-			WebOnly:     s.WebOnly,
 		}
 
 		if hasOverride {
@@ -116,7 +114,6 @@ func ResolveForSettings(admin []*PageSection, overrides []ProfileSectionOverride
 			ItemLimit:   ClampItemLimit(s.ItemLimit),
 			Config:      s.Config,
 			Position:    s.Position,
-			WebOnly:     s.WebOnly,
 		}
 
 		if hasOverride {
@@ -159,20 +156,6 @@ func ResolveForSettings(admin []*PageSection, overrides []ProfileSectionOverride
 	})
 
 	return result
-}
-
-// ForClient returns the sections a client receives, in display order. The
-// web app receives every section. Any other client loses the page's hero
-// banner when the admin limited it to the web: the web shows the first
-// featured section as the banner and any later one as a regular row, and the
-// apps show every section as a regular row, so only that first one is the
-// web's alone. The input slice is never modified.
-func ForClient(resolved []ResolvedSection, web bool) []ResolvedSection {
-	hero := slices.IndexFunc(resolved, func(s ResolvedSection) bool { return s.Featured })
-	if web || hero < 0 || !resolved[hero].WebOnly {
-		return resolved
-	}
-	return slices.Delete(slices.Clone(resolved), hero, hero+1)
 }
 
 // resolveUserAdded converts a user-added ProfileSectionOverride into a

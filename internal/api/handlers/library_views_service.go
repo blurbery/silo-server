@@ -12,7 +12,6 @@ import (
 	"github.com/Silo-Server/silo-server/internal/imagesize"
 	"github.com/Silo-Server/silo-server/internal/models"
 	"github.com/Silo-Server/silo-server/internal/sections"
-	"github.com/Silo-Server/silo-server/internal/settingscontract"
 	"github.com/Silo-Server/silo-server/internal/usercollections"
 )
 
@@ -29,10 +28,6 @@ type SectionViewer struct {
 	// ImageWidths are per-slot target widths overriding ImageSize; only the
 	// native v2 API carries them.
 	ImageWidths imagesize.Widths
-	// Web is true when the caller declared the web client family
-	// (X-Silo-Client-Family: web). Only the web app receives a hero row an
-	// admin kept off the apps (sections.ForClient).
-	Web bool
 }
 
 // Artwork is the viewer's artwork preference.
@@ -41,13 +36,7 @@ func (v SectionViewer) Artwork() imagesize.Request {
 }
 
 func sectionViewerFromRequest(r *http.Request) SectionViewer {
-	return SectionViewer{Access: requestAccessFilter(r), ImageSize: requestImageSize(r), Web: IsWebClientFamily(r.Header.Get(clientFamilyHeader))}
-}
-
-// IsWebClientFamily reports whether an X-Silo-Client-Family value names the
-// web app. Any other value, or none, is a client that is not the web app.
-func IsWebClientFamily(family string) bool {
-	return settingscontract.ClientFamily(family) == settingscontract.ClientFamilyWeb
+	return SectionViewer{Access: requestAccessFilter(r), ImageSize: requestImageSize(r)}
 }
 
 // SectionLayoutView is a page's section layout without items.
@@ -91,8 +80,8 @@ type LibraryCollectionTabUngroupedView = libraryTabUngrouped
 
 // HomeLayout answers the home page's section layout for the profile on the
 // context.
-func (h *SectionHandler) HomeLayout(ctx context.Context, viewer SectionViewer) (SectionLayoutView, error) {
-	view, err := h.HomeLayoutWithItems(ctx, viewer, 0)
+func (h *SectionHandler) HomeLayout(ctx context.Context) (SectionLayoutView, error) {
+	view, err := h.HomeLayoutWithItems(ctx, SectionViewer{}, 0)
 	return view.Layout, err
 }
 
@@ -136,8 +125,8 @@ func requireEnabledLibrary(ctx context.Context, folders *catalog.FolderRepositor
 }
 
 // LibraryLayout answers the library's section layout for the profile on
-// the context. Only the viewer's client family is read from viewer.
-func (h *SectionHandler) LibraryLayout(ctx context.Context, libraryID int, viewer SectionViewer) (SectionLayoutView, error) {
+// the context.
+func (h *SectionHandler) LibraryLayout(ctx context.Context, libraryID int) (SectionLayoutView, error) {
 	if err := h.requireViewableLibrary(ctx, libraryID); err != nil {
 		return SectionLayoutView{}, err
 	}
@@ -145,7 +134,7 @@ func (h *SectionHandler) LibraryLayout(ctx context.Context, libraryID int, viewe
 	if err != nil {
 		return SectionLayoutView{}, apiError(http.StatusInternalServerError, "internal_error", "Failed to load sections")
 	}
-	return sectionLayoutOf(sections.ForClient(resolved, viewer.Web)), nil
+	return sectionLayoutOf(resolved), nil
 }
 
 func sectionLayoutOf(resolved []sections.ResolvedSection) SectionLayoutView {
@@ -173,7 +162,6 @@ func (h *SectionHandler) LibrarySections(ctx context.Context, libraryID int, vie
 	if err != nil {
 		return SectionsView{}, apiError(http.StatusInternalServerError, "internal_error", "Failed to load sections")
 	}
-	resolved = sections.ForClient(resolved, viewer.Web)
 	userID := viewer.Access.UserID
 	withItems := h.fetcher.FetchAll(ctx, resolved, &libraryID, nil, userID, profileID, accessFilter)
 	withItems = applyDiversityFilter(withItems)
@@ -198,8 +186,6 @@ func (h *SectionHandler) librarySectionItems(ctx context.Context, libraryID int,
 	if err != nil {
 		return SectionView{}, apiError(http.StatusInternalServerError, "internal_error", "Failed to load sections")
 	}
-	// A row the viewer's client does not receive is not found.
-	resolved = sections.ForClient(resolved, viewer.Web)
 	userID := viewer.Access.UserID
 	for _, s := range resolved {
 		if s.ID != sectionID {
