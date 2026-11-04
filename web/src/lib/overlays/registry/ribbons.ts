@@ -35,12 +35,14 @@ export const RIBBON_OVERLAYS: readonly OverlayDef[] = [
     category: "ribbons",
     label: "Show Status",
     description: "Series lifecycle: Returning, Ended, Cancelled",
-    defaultPosition: "top-right",
+    defaultPosition: "right-edge",
     defaultEnabled: false,
     iconId: "tv",
     iconCapable: true,
     availabilityNote: "Populated by metadata plugins (TMDB/TVDB updates pending)",
     getValue: (d) => formatShowStatus(d.show_status),
+    getValueKey: (d) => formatShowStatus(d.show_status),
+    valueKeySuggestions: ["Returning", "Ended", "Cancelled", "Upcoming"],
   },
   {
     id: "request_status",
@@ -62,11 +64,11 @@ export const RIBBON_OVERLAYS: readonly OverlayDef[] = [
     label: "Unwatched Episodes",
     description:
       "How many episodes of a series or season you haven't finished, counting down as you watch; hidden once you've seen them all",
-    defaultPosition: "top-right",
+    defaultPosition: "right-edge",
     defaultEnabled: false,
     iconId: "tv",
     iconCapable: true,
-    introducedInManifest: 25,
+    introducedInManifest: 26,
     getValue: (d) =>
       d.unwatched_episodes != null && d.unwatched_episodes > 0
         ? String(d.unwatched_episodes)

@@ -96,6 +96,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/metadata/tmdb"
 	"github.com/Silo-Server/silo-server/internal/netaccess"
 	"github.com/Silo-Server/silo-server/internal/netadmin"
+	"github.com/Silo-Server/silo-server/internal/overlays"
 
 	// Built-in metadata providers self-register into the metadata package's
 	// builtin registry on import; buildProviders resolves their seeded chain
@@ -1426,6 +1427,19 @@ func main() {
 		ratelimit.NewOutboundLimiter(tmdbRedisClient, "outbound:tmdb", tmdb.RequestsPerSecond))
 	defer tmdbClient.Close()
 
+	// The playback control relay bounds each lane ownership read and write
+	// at one second; this client's sockets give up at that deadline.
+	var playbackControlRedisClient *redis.Client
+	if apiRedisClient != nil {
+		controlClient, controlErr := cache.NewDeadlineRedisClientForRole(cfg.Redis, "api")
+		if controlErr != nil {
+			slog.Warn("redis client init failed; administrator playback commands reach only sessions on this replica", "error", controlErr)
+		} else if controlClient != nil {
+			defer func() { _ = cache.CloseRedisClient(controlClient) }()
+			playbackControlRedisClient = controlClient
+		}
+	}
+
 	if mode == "" || mode == "integrated" || mode == "api" {
 		streamTelemetryRegistry = newStreamTelemetryRegistry(appCtx, nodeID, apiRedisClient)
 		streamTelemetryRegistry.Start(appCtx)
@@ -1471,6 +1485,7 @@ func main() {
 		SecretCipher:                 dataCipher,
 		EventBus:                     eventBus,
 		RedisClient:                  apiRedisClient,
+		PlaybackControlRedisClient:   playbackControlRedisClient,
 		TMDB:                         tmdbClient,
 		DownloadBandwidthRedis:       downloadBandwidthRedis,
 		LogStreamHub:                 logStreamHub,
@@ -3762,6 +3777,13 @@ func main() {
 	// API and the frontend handler.
 	deps.BrandingService = brandingSvc
 	server.Branding = brandingSvc
+	// Card overlay images share the assets store with branding; without one the
+	// library lists nothing new and uploads report storage as unconfigured.
+	var overlayImageStore overlays.ImageStore
+	if deps.Blobs.Assets != nil {
+		overlayImageStore = deps.Blobs.Assets
+	}
+	deps.OverlayImages = overlays.NewImageLibrary(deps.DB, overlayImageStore)
 	var transitionPrivate blobstore.Store
 	if deps.S3Private != nil {
 		transitionPrivate = deps.Blobs.Operational
