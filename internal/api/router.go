@@ -28,6 +28,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/animeids"
 	"github.com/Silo-Server/silo-server/internal/api/handlers"
 	apimw "github.com/Silo-Server/silo-server/internal/api/middleware"
+	"github.com/Silo-Server/silo-server/internal/apiusage"
 	"github.com/Silo-Server/silo-server/internal/apiv2"
 	"github.com/Silo-Server/silo-server/internal/artworkurl"
 	"github.com/Silo-Server/silo-server/internal/auth"
@@ -46,6 +47,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/httpstream"
 	"github.com/Silo-Server/silo-server/internal/intromarkers"
 	"github.com/Silo-Server/silo-server/internal/invitations"
+	"github.com/Silo-Server/silo-server/internal/keptsub"
 	"github.com/Silo-Server/silo-server/internal/libraryingest"
 	"github.com/Silo-Server/silo-server/internal/literaryworks"
 	"github.com/Silo-Server/silo-server/internal/logstream"
@@ -62,6 +64,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/notifications"
 	"github.com/Silo-Server/silo-server/internal/onboarding"
 	"github.com/Silo-Server/silo-server/internal/opslog"
+	"github.com/Silo-Server/silo-server/internal/overlays"
 	"github.com/Silo-Server/silo-server/internal/passwordreset"
 	"github.com/Silo-Server/silo-server/internal/playback"
 	"github.com/Silo-Server/silo-server/internal/playback/connectionstore"
@@ -91,6 +94,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/subtitles/subsource"
 	"github.com/Silo-Server/silo-server/internal/taskmanager"
 	"github.com/Silo-Server/silo-server/internal/taskmanager/repository"
+	"github.com/Silo-Server/silo-server/internal/taskmanager/tasks"
 	"github.com/Silo-Server/silo-server/internal/themedelivery"
 	"github.com/Silo-Server/silo-server/internal/themesongs"
 	"github.com/Silo-Server/silo-server/internal/trickplay"
@@ -107,10 +111,10 @@ var _ apiv2.AdminRequestUsageService = (*mediarequests.Service)(nil)
 
 // Dependencies holds all shared dependencies that handlers need.
 // ArtworkDelivery describes how clients read artwork. External is true only
-// when reads go through a separately configured public or token endpoint that
-// can lag behind a storage write; that is the one case the delivery verifier
-// and the per-response published-variant lookup exist for. Scope changes when
-// the delivery configuration does, invalidating earlier verification.
+// when reads go through a separately configured public or token endpoint, the
+// one case seek-preview sheets confirm before clients read them there (see
+// internal/trickplay). Scope changes when the delivery configuration does,
+// invalidating earlier confirmations.
 type ArtworkDelivery struct {
 	Scope    string
 	External bool
@@ -154,6 +158,7 @@ type Dependencies struct {
 	}
 	S3Private         *s3client.Client              // private internal bucket client (may be nil)
 	BrandingService   *branding.Service             // white-label branding (nil when DB unavailable)
+	OverlayImages     *overlays.ImageLibrary        // card overlay image library (nil when DB unavailable)
 	EmailBrand        *mail.BrandLoader             // server branding for outgoing email (nil sends Silo's default)
 	FolderRepo        *catalog.FolderRepository     // media folder repository (may be nil)
 	FileRepo          *scanner.FileRepository       // media file repository (may be nil)
@@ -228,12 +233,16 @@ type Dependencies struct {
 	Trickplay                 interface{ ReconcileSoon() }   // seek preview service, reconciled after a library's trickplay setting changes (nil when not configured)
 	TrickplayReader           *trickplay.Reader              // published seek previews for players (nil when not configured)
 	TrickplayAdmin            *trickplay.Admin               // seek preview status and regeneration for administrators (nil when not configured)
+	KeptSubtitles             *keptsub.Store                 // embedded subtitle tracks kept in the assets store, read before demuxing a source (nil without a database or blob storage)
+	SubtitlePrefetch          *keptsub.Prefetcher            // reads the subtitle tracks a playback will likely want, at playback start (nil without KeptSubtitles)
 	LibraryMonitoring         apiv2.LibraryMonitoringService // real-time monitoring status for the v2 admin read (may be nil)
 	ActivityLogWriter         activitylog.Writer
 	ActivityLogRepo           *activitylog.Repo
+	APIUsage                  *apiusage.Store // per-session API request summaries (nil without a database)
 	OpsLogRepo                *opslog.Repo
 	FFmpegLogSink             playback.FFmpegLogSink
 	RedisClient               *redis.Client              // for session listing (may be nil)
+	DownloadBandwidthRedis    *redis.Client              // deadline-enabled client for shared download budgets (may be nil)
 	TaskManager               *taskmanager.TaskManager   // task manager (may be nil)
 	ArtifactManager           *downloads.ArtifactManager // download prepare-to-file pipeline (may be nil)
 	AdminJobCancelRegistry    *adminjob.CancelRegistry
@@ -343,6 +352,13 @@ type Dependencies struct {
 	// its own port (internal/lantls), published in the connections document.
 	// Empty when the listener does not answer TLS (tests).
 	LocalTLSPin string
+
+	// PlaybackControlRedisClient records playback control lane ownership. Its
+	// sockets honor context deadlines (cache.NewDeadlineRedisClientForRole),
+	// so a stalled Redis cannot hold an administrator request or the
+	// ownership worker past the relay's one-second bound. Without it there is
+	// no control relay (may be nil).
+	PlaybackControlRedisClient *redis.Client
 }
 
 // absHandler is the narrow interface the router needs from the ABS handler.
@@ -660,6 +676,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 			settingsRepo,
 			deps.UserStoreProvider,
 		)
+		authService.OnSessionsRevoked(deps.OnUserSessionsRevoked)
 		for _, registration := range deps.AuthProviders {
 			authService.RegisterProvider(registration.Info, registration.Provider)
 		}
@@ -720,7 +737,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 		authMiddleware = apimw.NewAuthMiddleware(jwtService, sessionRepo, apiKeyRepo, userRepo)
 		if deps.UserStoreProvider != nil {
 			if deps.PolicySystem != nil {
-				viewerResolver = policy.NewViewerResolver(userRepo, deps.UserStoreProvider, profileTokenService, deps.PolicySystem.PDP(), accessGroupStore).WithUnratedContentPolicy(unratedContent).WithAdminDefaults(adminDefaults)
+				viewerResolver = policy.NewViewerResolver(userRepo, deps.UserStoreProvider, profileTokenService, deps.PolicySystem.PDP(), accessGroupStore).WithUnratedContentPolicy(unratedContent).WithAdminDefaults(adminDefaults).WithSharedTables(deps.DB)
 			} else {
 				// Legacy resolver: proxy/test wiring without a policy system. Production integrated/api modes always take the policy path. Removed with the legacy cleanup phase.
 				viewerResolver = access.NewResolver(userRepo, deps.UserStoreProvider, profileTokenService, accessGroupStore).WithUnratedContentPolicy(unratedContent).WithAdminDefaults(adminDefaults)
@@ -768,6 +785,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 				nil,
 				checkPrimaryProfile,
 				householdRequiresProfile,
+				accessGroupStore,
 			).RequireMarkerEdit
 		}
 	}
@@ -812,6 +830,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 		libraryHandler.ScanQueue = deps.LibraryScanQueue
 		libraryHandler.RealtimeMonitor = deps.LibraryMonitor
 		libraryHandler.Trickplay = deps.Trickplay
+		if deps.TaskManager != nil {
+			libraryHandler.BoxSets = boxSetSyncStarter{tasks: deps.TaskManager}
+		}
 		libraryHandler.MovieMatchQueueRepo = deps.MovieMatchQueueRepo
 		libraryHandler.SeriesMatchQueueRepo = deps.SeriesRootMatchQueueRepo
 		libraryHandler.RawMatchBacklogRepo = deps.FileRepo
@@ -1040,6 +1061,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 		catalogHandler = handlers.NewCatalogHandler(catalogResolver, itemsHandler)
 		shuffleService = shuffle.NewService(deps.DB, catalogResolver)
 		catalogHandler.SetWorkSummaryProvider(literaryRepo)
+		catalogHandler.SetBoxSetRepository(catalog.NewBoxSetRepository(deps.DB))
 
 		requestsRepo := mediarequests.NewRepository(deps.DB, deps.SecretCipher)
 		requestSvc := mediarequests.NewService(
@@ -1138,6 +1160,12 @@ func newChiRouter(deps Dependencies) chi.Router {
 			}
 			// Fully qualify webhook URLs when the public base URL is known.
 			autoscanHandler.SetPublicURL(deps.PublicURL)
+			// The v1 and v2 webhook routes share the autoscan_webhook budget,
+			// which only refuses unknown tokens: arr does not retry a refused
+			// delivery, so one with a real token over it is still admitted.
+			if deps.RateLimitMW != nil {
+				deps.RateLimitMW.AdmitOverEndpointBudget("autoscan_webhook", autoscanHandler.KnowsWebhookToken)
+			}
 		}
 
 		if deps.PersonRepo != nil {
@@ -1173,6 +1201,10 @@ func newChiRouter(deps Dependencies) chi.Router {
 	// Personal collections without an uploaded or imported poster show a
 	// collage of their titles; it needs artwork storage and poster signing.
 	var personalCollages *catalog.PersonalCollectionCollages
+	var personalMemberCounts *catalog.PersonalCollectionMemberCounts
+	if deps.DB != nil {
+		personalMemberCounts = catalog.NewPersonalCollectionMemberCounts(deps.DB)
+	}
 	if deps.DB != nil && detailSvc != nil {
 		if gen := handlers.NewPersonalCollectionCollageGenerator(deps.Blobs.Assets, detailSvc, deps.ArtworkSigner, nil); gen != nil {
 			personalCollages = deps.PersonalCollectionCollages
@@ -1259,6 +1291,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 		}
 		collectionHandler.CollectionOwners = collectionOwners
 		collectionHandler.Collages = personalCollages
+		collectionHandler.MemberCounts = personalMemberCounts
 		// The import handler is built beside the collection handler so the v1
 		// route group and the v2 operations share one instance; the v1 routes
 		// keep their userImportHandler != nil condition.
@@ -1509,6 +1542,10 @@ func newChiRouter(deps Dependencies) chi.Router {
 		if subtitleRepo != nil {
 			playbackHandler.SubtitleRepo = subtitleRepo
 		}
+		if deps.KeptSubtitles != nil {
+			playbackHandler.SubtitleTrackFacts = deps.KeptSubtitles
+			playbackHandler.SubtitlePrefetch = deps.SubtitlePrefetch
+		}
 		if deps.RecWorker != nil {
 			playbackHandler.SetSignalsChangedNotifier(deps.RecWorker)
 		}
@@ -1617,6 +1654,30 @@ func newChiRouter(deps Dependencies) chi.Router {
 			}
 		}
 		adminPlaybackControlHandler = handlers.NewAdminPlaybackControlHandler(playbackHandler)
+		// Administrator commands run on the replica holding the session's
+		// control lane; the relay forwards them there over Redis.
+		if relay := playback.NewControlRelay(realtimeHub, deps.PlaybackControlRedisClient); relay != nil && deps.EventBus != nil {
+			publish := func(ctx context.Context, payload string) error {
+				// The relay's own client, so a stalled Redis cannot hold the
+				// publish past the reply timeout.
+				return cache.PublishEvent(ctx, deps.PlaybackControlRedisClient, cache.ChannelPlaybackControl, cache.Event{Type: cache.EventPlaybackControlRelay, Payload: payload})
+			}
+			subscribe := func(ctx context.Context, handler func(string)) error {
+				return deps.EventBus.Subscribe(ctx, cache.ChannelPlaybackControl, func(event cache.Event) {
+					if event.Type == cache.EventPlaybackControlRelay {
+						handler(event.Payload)
+					}
+				})
+			}
+			relayCtx := deps.AppContext
+			if relayCtx == nil {
+				relayCtx = context.Background()
+			}
+			adminPlaybackControlHandler.UseControlRelay(relay)
+			if err := relay.Start(relayCtx, publish, subscribe); err != nil {
+				slog.Warn("playback control relay unavailable; retrying subscription; administrator commands reach only sessions on this replica", "component", "api", "error", err)
+			}
+		}
 
 		if deps.DB != nil && deps.FileRepo != nil && viewerResolver != nil && deps.Config != nil && detailSvc != nil {
 			roomTokenService := watchtogether.NewRoomTokenService(deps.Config.Auth.JWTSecret, 24*time.Hour)
@@ -1669,6 +1730,11 @@ func newChiRouter(deps Dependencies) chi.Router {
 		streamHandler.SubtitleCache = playback.NewSubtitleCache(func() string {
 			return deps.CurrentConfig().Playback.TranscodeDir
 		})
+		// Downloads and translation share this cache, so they read kept
+		// tracks too.
+		if deps.KeptSubtitles != nil {
+			streamHandler.SubtitleCache.SetEmbeddedSource(deps.KeptSubtitles)
+		}
 	}
 
 	restartStatus := deps.ServerRestartStatus
@@ -2180,6 +2246,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 		libraryCollectionHandler.UserCollectionPool = deps.DB
 		libraryCollectionHandler.CollectionOwners = collectionOwners
 		libraryCollectionHandler.PersonalCollages = personalCollages
+		libraryCollectionHandler.PersonalMemberCounts = personalMemberCounts
 		libraryCollectionHandler.EventsHub = deps.EventsHub
 		libraryCollectionHandler.SortPreferenceCleaner = collectionSortCleaner
 		if deps.FolderRepo != nil {
@@ -2282,6 +2349,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 			deps.Config.Download.ServerBandwidthBPS,
 			deps.Config.Download.UserBandwidthBPS,
 		)
+		downloadBandwidth.SetSharedBudget(deps.DownloadBandwidthRedis, downloads.BandwidthRates(deps.DB))
 		downloadLimiter := downloads.NewQuantityLimiter(
 			downloadRepo,
 			deps.Config.Download.MaxConcurrentPerUser,
@@ -2623,6 +2691,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 	if deps.BrandingService != nil {
 		v2deps.Branding = deps.BrandingService
 	}
+	if deps.OverlayImages != nil {
+		v2deps.OverlayImages = deps.OverlayImages
+	}
 
 	if inviteCodeRepo != nil {
 		v2deps.AdminInviteCodes = inviteCodeRepo
@@ -2833,6 +2904,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 		v2deps.AndroidPushRetirement = deps.Notifications.PushDevices
 		v2deps.OrderedApplePush = handlers.NewOrderedApplePushV2(deps.Notifications.PushDevices, jwtService, sessionRepo, userRepo, viewerResolver, actingAdmin)
 		v2deps.ApplePushRetirement = deps.Notifications.PushDevices
+		v2deps.ApplePushReset = deps.Notifications.PushDevices
 		v2deps.AdminNotificationPush = deps.Notifications
 		v2deps.AdminNotificationDiscord = deps.Notifications
 		v2deps.NotificationChannels = deps.Notifications
@@ -2910,6 +2982,9 @@ func newChiRouter(deps Dependencies) chi.Router {
 	})
 	v2deps.AdminTelemetryParity = &handlers.StreamTelemetryParityHandler{Registry: deps.StreamTelemetry, ViewCache: deps.StreamTelemetryViewCache, Pool: deps.DB, Redis: deps.RedisClient}
 	v2deps.AdminFilesystem = handlers.NewFilesystemHandler()
+	if deps.APIUsage != nil {
+		v2deps.AdminAPIClients = deps.APIUsage
+	}
 	if adminHandler != nil {
 		v2deps.AdminDashboardInsights = adminHandler
 		v2deps.AdminDashboardStats = adminHandler
@@ -3036,6 +3111,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 	}
 	if catalogHandler != nil {
 		v2deps.CatalogBrowse = catalogHandler
+		v2deps.BoxSets = catalogHandler
 	}
 	if catalogResourceHandler != nil {
 		v2deps.CatalogItems = catalogResourceHandler
@@ -3340,6 +3416,8 @@ func newChiRouter(deps Dependencies) chi.Router {
 		// Silo session; the URL's bearer token authenticates the delivery and
 		// maps it to its Autoscan source. Rate limited per-IP (plus the
 		// "autoscan_webhook" per-endpoint limit) since it is unauthenticated.
+		// The per-endpoint limit only refuses unknown tokens (see
+		// AdmitOverEndpointBudget where the handler is built).
 		if autoscanHandler != nil {
 			if deps.RateLimitMW != nil {
 				r.With(deps.RateLimitMW.AuthEndpointHandler("autoscan_webhook")).
@@ -4888,7 +4966,7 @@ func useBaseMiddleware(r chi.Router, deps Dependencies) {
 	// media routes unwrapped so their io.ReaderFrom/sendfile path survives,
 	// and serving validator-bearing v2 responses identity-encoded so a strong
 	// ETag names exactly one representation (apiv2.IdentityEncoded).
-	r.Use(httpstream.CompressWithExclusions(5, skipNativeMediaCompression, apiv2.IdentityEncoded))
+	r.Use(httpstream.CompressWithExclusions(skipNativeMediaCompression, apiv2.IdentityEncoded))
 
 	// Activity logging (before auth — captures all requests including failed auth).
 	if deps.ActivityLogWriter != nil {
@@ -5209,6 +5287,7 @@ func llmConfigFromServer(cfg *config.Config) llm.Config {
 	return llm.Config{
 		AuthMode:        cfg.AI.AuthMode,
 		ReasoningEffort: cfg.AI.ReasoningEffort,
+		ServiceTier:     cfg.AI.ServiceTier,
 		BaseURL:         cfg.AI.BaseURL,
 		APIKey:          cfg.AI.APIKey,
 		ChatModel:       cfg.AI.ChatModel,
@@ -5374,4 +5453,16 @@ func newDiscordNotificationsHandler(deps Dependencies, tokens *access.ProfileTok
 	h.Stores = deps.UserStoreProvider
 	h.ProfileTokens = tokens
 	return h
+}
+
+// boxSetSyncStarter starts the box set sync task when a library turns box
+// sets on. A run already in progress looks the library up before it ends.
+type boxSetSyncStarter struct {
+	tasks *taskmanager.TaskManager
+}
+
+func (s boxSetSyncStarter) SyncBoxSetsSoon() {
+	if _, err := s.tasks.StartTask(tasks.SyncMovieBoxSetsTaskKey); err != nil {
+		slog.Debug("box set sync not started", "component", "api", "error", err)
+	}
 }
