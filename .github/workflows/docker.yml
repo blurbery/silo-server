@@ -139,7 +139,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: Silo-Server/silo-server/.github/workflows/omnibus-build.yml@main
+    # Fork: build with this repository's copy of the workflow.
+    uses: ./.github/workflows/omnibus-build.yml
     with:
       platform: ${{ matrix.platform }}
       base_tag: ${{ github.event.workflow_run.head_sha || github.sha }}-base
