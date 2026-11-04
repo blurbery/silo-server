@@ -210,7 +210,6 @@ export function AddRowDialog({
             titleFollowsVariant: draft.titleFollowsVariant,
             itemLimit: draft.itemLimit,
             hero: draft.hero,
-            webOnly: draft.webOnly,
           }
         : fresh,
     );
@@ -470,7 +469,6 @@ export function AddRowDialog({
             onVariant={(presetKey) => setDraft(withVariant(draft, def, presetKey))}
             libraryPages={copyPages}
             contentLocked={session?.kindLocked}
-            webOnlyChoice={adapter.capabilities.webOnlyHero === true}
           />
         </div>
       ) : null}

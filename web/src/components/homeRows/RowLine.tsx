@@ -25,12 +25,6 @@ export interface RowLineProps extends Pick<
   /** Where the row's poster peek comes from; null keeps its icon. */
   peek: PeekRequest | null;
   switchDisabled?: boolean;
-  /**
-   * The row is the page's hero banner (its first shown hero) and an admin kept
-   * it off the apps. A later hero reaches the apps as a regular row, so only
-   * the banner is tagged web only.
-   */
-  webOnlyBanner?: boolean;
   onShownChange: (shown: boolean) => void;
 }
 
@@ -63,7 +57,6 @@ export function RowLine({
   icon,
   peek,
   switchDisabled,
-  webOnlyBanner = false,
   onShownChange,
   ...rest
 }: RowLineProps) {
@@ -80,7 +73,7 @@ export function RowLine({
           {row.hero ? (
             <span className="bg-warning/15 text-warning ring-warning/30 inline-flex h-[22px] shrink-0 items-center gap-1 rounded-full px-2 text-xs font-semibold ring-1 ring-inset max-sm:hidden">
               <Star className="size-3" aria-hidden />
-              {webOnlyBanner ? "Hero banner · Web only" : "Hero banner"}
+              Hero banner
             </span>
           ) : null}
           {row.own ? (
@@ -96,8 +89,7 @@ export function RowLine({
             // Phones have no room for the tag next to the name.
             <span className="text-warning font-semibold sm:hidden">
               <Star className="mr-1 inline size-3 align-[-1px]" aria-hidden />
-              {/* The short label fits the phone line, which the description shares. */}
-              {webOnlyBanner ? "Web-only hero" : "Hero banner"}
+              Hero banner
               <MetaDot />
             </span>
           ) : null}
