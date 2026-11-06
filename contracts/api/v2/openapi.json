@@ -18145,10 +18145,6 @@
             "pattern": "^(?:[1-9][0-9]{3}|0[1-9][0-9]{2}|00[1-9][0-9]|000[2-9])-",
             "patternDescription": "a non-zero RFC 3339 instant",
             "type": "string"
-          },
-          "web_only": {
-            "description": "Keeps the section off every client but the web app while it is its page's first featured section, the one the web shows as the banner: a viewer section read then answers it only to a caller whose X-Silo-Client-Family is web. Once another featured section comes first, every client gets it as a regular row. Always false on a section that is not featured.",
-            "type": "boolean"
           }
         },
         "required": [
@@ -18162,7 +18158,6 @@
           "item_limit",
           "config",
           "enabled",
-          "web_only",
           "created_at",
           "updated_at"
         ],
@@ -18269,17 +18264,12 @@
               "unsupported"
             ],
             "type": "string"
-          },
-          "web_only": {
-            "description": "Admin sections accept and answer web_only, and viewer section reads honor it",
-            "type": "boolean"
           }
         },
         "required": [
           "available",
           "reset_profiles",
           "preview",
-          "web_only",
           "revision",
           "state",
           "allowed"
@@ -18336,10 +18326,6 @@
           "title": {
             "maxLength": 500,
             "type": "string"
-          },
-          "web_only": {
-            "description": "Keep the featured section off every client but the web app; ignored unless featured is true. Send it only when getAdminSectionCapabilities reports web_only",
-            "type": "boolean"
           }
         },
         "required": [
@@ -18528,10 +18514,6 @@
             "maxLength": 500,
             "minLength": 1,
             "type": "string"
-          },
-          "web_only": {
-            "description": "Keep the featured section off every client but the web app. Absent keeps the saved value, except that an update making the section featured saves false; a section that is not featured after the update always saves false. Send it only when getAdminSectionCapabilities reports web_only",
-            "type": "boolean"
           }
         },
         "type": "object"
@@ -172152,18 +172134,6 @@
               "minimum": 1,
               "type": "integer"
             }
-          },
-          {
-            "description": "The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404",
-            "in": "header",
-            "name": "X-Silo-Client-Family",
-            "schema": {
-              "description": "The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404",
-              "examples": [
-                "tv"
-              ],
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -172421,18 +172391,6 @@
               "maximum": 7680,
               "minimum": 1,
               "type": "integer"
-            }
-          },
-          {
-            "description": "The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404",
-            "in": "header",
-            "name": "X-Silo-Client-Family",
-            "schema": {
-              "description": "The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404",
-              "examples": [
-                "tv"
-              ],
-              "type": "string"
             }
           }
         ],
@@ -172705,18 +172663,6 @@
               "maximum": 7680,
               "minimum": 1,
               "type": "integer"
-            }
-          },
-          {
-            "description": "The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404",
-            "in": "header",
-            "name": "X-Silo-Client-Family",
-            "schema": {
-              "description": "The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404",
-              "examples": [
-                "tv"
-              ],
-              "type": "string"
             }
           }
         ],
@@ -179652,18 +179598,6 @@
               "minLength": 1,
               "type": "string"
             }
-          },
-          {
-            "description": "The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404",
-            "in": "header",
-            "name": "X-Silo-Client-Family",
-            "schema": {
-              "description": "The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404",
-              "examples": [
-                "tv"
-              ],
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -179936,18 +179870,6 @@
               "minimum": 1,
               "type": "integer"
             }
-          },
-          {
-            "description": "The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404",
-            "in": "header",
-            "name": "X-Silo-Client-Family",
-            "schema": {
-              "description": "The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404",
-              "examples": [
-                "tv"
-              ],
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -180217,18 +180139,6 @@
               "maximum": 7680,
               "minimum": 1,
               "type": "integer"
-            }
-          },
-          {
-            "description": "The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404",
-            "in": "header",
-            "name": "X-Silo-Client-Family",
-            "schema": {
-              "description": "The caller's client family: tv, mobile, tablet, desktop or web. Only web receives a featured section an administrator limited to the web app (an admin section's web_only). For any other value, or none, layouts and lists leave that section out and reading it alone answers 404",
-              "examples": [
-                "tv"
-              ],
-              "type": "string"
             }
           }
         ],

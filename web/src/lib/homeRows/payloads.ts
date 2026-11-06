@@ -213,7 +213,6 @@ export function buildRowCreateRequest(
       page.kind,
       page.kind === "library" ? page.libraryId : null,
     ),
-    ...webOnlyMember(draft),
     position,
   };
 }
@@ -256,18 +255,6 @@ function rowUpdateConfig(draft: RowDraft): Record<string, unknown> {
 }
 
 /**
- * The admin save's web_only, sent only when a hero row's choice differs from
- * `saved` (false for a new row). A server that predates web_only refuses the
- * member, so other saves leave it out; the server clears it on a row that is
- * not a hero.
- */
-function webOnlyMember(draft: RowDraft, saved = false): { web_only?: boolean } {
-  return draft.hero && draft.webOnly !== undefined && draft.webOnly !== saved
-    ? { web_only: draft.webOnly }
-    : {};
-}
-
-/**
  * The update request for a row saved from Edit row: the row editor's bytes.
  * The draft starts from the stored config; keys removed by a variant change
  * stay removed. Collection and rule rows send the draft's config as it is, so an
@@ -289,7 +276,6 @@ export function buildRowUpdateRequest(
     section_type: draft.sectionType,
     item_limit: draft.itemLimit,
     featured: draft.hero,
-    ...webOnlyMember(draft, section.featured && section.web_only === true),
     enabled: section.enabled,
     config: rowUpdateConfig(draft),
   };
