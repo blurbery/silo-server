@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,5 +143,12 @@ func TestCatalogTransferPersistsJobsAndSignedLink(t *testing.T) {
 	}
 	if request.LocalPath != path || saved.Status != adminjob.StatusQueued || saved.CompletedAt != nil || saved.CreatedByUserID != userID {
 		t.Fatalf("unexpected queued import: %#v", saved)
+	}
+}
+
+func TestCatalogImportSourceProblemNamesDownloadLimit(t *testing.T) {
+	apiErr, ok := errors.AsType[*APIError](catalogImportSourceProblem(catalogseed.ErrRemoteBundleTooLarge))
+	if !ok || apiErr.Status != http.StatusBadRequest || !strings.Contains(apiErr.Message, "GiB download limit") {
+		t.Fatalf("oversize source problem = %+v, want a 400 naming the download limit", apiErr)
 	}
 }
