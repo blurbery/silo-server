@@ -21,6 +21,11 @@ const imageCacheExpirySafetyMargin = 5 * time.Minute
 // roughly the ten thousand most recently served items on each node.
 const imageCacheMaxEntries = 32_768
 
+// imageCachePruneInterval is the least time between sweeps that drop expired
+// entries. Without them an entry would hold its signed URL until the map
+// filled up and evicted it, long after the URL stopped being served.
+const imageCachePruneInterval = time.Minute
+
 type cachedImage struct {
 	url       string
 	expiresAt time.Time
@@ -37,8 +42,10 @@ type ImageCache struct {
 	// when list and detail responses carry signed tags.
 	byTag   imageCacheMap
 	byRoute imageCacheMap
-	ttl     time.Duration
-	now     func() time.Time
+	// lastPrune is when expired entries were last swept; guarded by mu.
+	lastPrune time.Time
+	ttl       time.Duration
+	now       func() time.Time
 }
 
 // NewImageCache creates a new cache for compat image lookups.
@@ -103,6 +110,11 @@ func (c *ImageCache) RememberSizedUntil(routeID, imageType, imageURL, size strin
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if now.Sub(c.lastPrune) >= imageCachePruneInterval {
+		c.byTag.dropExpired(now)
+		c.byRoute.dropExpired(now)
+		c.lastPrune = now
+	}
 	if tag != "" {
 		c.byTag.put(tag, entry)
 	}
@@ -152,7 +164,8 @@ func (c *ImageCache) lookupRoute(key string) (string, bool) {
 }
 
 // lookup only reads, so concurrent image requests share the read lock. An
-// expired entry stays until it is overwritten or evicted.
+// expired entry stays until it is overwritten, evicted, or swept by a later
+// write.
 func (c *ImageCache) lookup(entries *imageCacheMap, key string) (string, bool) {
 	now := c.now()
 	c.mu.RLock()
@@ -249,6 +262,17 @@ func (m *imageCacheMap) put(key string, image cachedImage) {
 	if m.order.Len() > m.limit {
 		oldest, _ := m.order.Remove(m.order.Back()).(string)
 		delete(m.entries, oldest)
+	}
+}
+
+// dropExpired removes every entry that lookup would no longer serve. It
+// requires the owning ImageCache's write lock.
+func (m *imageCacheMap) dropExpired(now time.Time) {
+	for key, slot := range m.entries {
+		if !slot.image.expiresAt.After(now) {
+			m.order.Remove(slot.order)
+			delete(m.entries, key)
+		}
 	}
 }
 

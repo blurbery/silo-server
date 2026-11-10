@@ -188,6 +188,37 @@ func TestImageCacheSkipsExpiredSignedURL(t *testing.T) {
 	}
 }
 
+func TestImageCacheDropsExpiredEntriesOnLaterWrite(t *testing.T) {
+	now := fixedNow()
+	cache := NewImageCache(24*time.Hour, func() time.Time { return now })
+	shortLived := "/api/v2/artwork/short.webp?exp=" + strconv.FormatInt(now.Add(time.Hour).Unix(), 10) + "&sig=x"
+	cache.RememberSized("short", "Primary", shortLived, compatCardImageSize)
+	cache.RememberSized("long", "Primary", "https://image.example.test/long.jpg", compatCardImageSize)
+
+	// A write inside the prune interval leaves the expired entry in place.
+	now = now.Add(time.Hour)
+	cache.lastPrune = now
+	cache.RememberSized("other", "Primary", "https://image.example.test/other.jpg", compatCardImageSize)
+	if got := len(cache.byRoute.entries); got != 3 {
+		t.Fatalf("route entries inside the prune interval = %d, want 3", got)
+	}
+
+	now = now.Add(imageCachePruneInterval)
+	cache.RememberSized("other", "Primary", "https://image.example.test/other.jpg", compatCardImageSize)
+
+	for name, m := range map[string]*imageCacheMap{"route": &cache.byRoute, "tag": &cache.byTag} {
+		if len(m.entries) != 2 || m.order.Len() != 2 {
+			t.Fatalf("%s map holds %d entries and %d order keys after the sweep, want 2 and 2", name, len(m.entries), m.order.Len())
+		}
+	}
+	if _, ok := cache.byRoute.get(routeImageKey("short", "Primary", compatCardImageSize)); ok {
+		t.Fatal("expired entry survived the sweep")
+	}
+	if got, ok := cache.LookupSized("long", "Primary", "", compatCardImageSize); !ok || got != "https://image.example.test/long.jpg" {
+		t.Fatalf("LookupSized(long) = (%q, %v), want the unexpired entry kept", got, ok)
+	}
+}
+
 func TestSignedImageURLExpiry(t *testing.T) {
 	signedAt := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	tests := []struct {

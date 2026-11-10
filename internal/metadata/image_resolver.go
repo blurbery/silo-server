@@ -29,6 +29,12 @@ const (
 	// storedArtworkTimeout bounds the stored artwork lookup in a shared batch,
 	// which no longer ends with the caller that started it.
 	storedArtworkTimeout = 30 * time.Second
+	// resolvedURLCacheMaxEntries caps the resolved URL cache. An entry is
+	// one image path in one size variant and costs up to about a kilobyte
+	// (the key plus a signed URL), so a full cache stays near 30 MB however
+	// much of the catalogue a client walks before the URLs expire. The cap
+	// matches jellycompat's image cache, which remembers the same URLs.
+	resolvedURLCacheMaxEntries = 32_768
 )
 
 // PluginImageResolverSource provides image URL resolution for a single plugin.
@@ -84,7 +90,7 @@ type PluginImageResolver struct {
 func NewPluginImageResolver() *PluginImageResolver {
 	return &PluginImageResolver{
 		sources:  make(map[string][]pluginImageResolverSourceEntry),
-		urlCache: cache.NewTTLCache[catalog.ResolvedImageURL](),
+		urlCache: cache.NewBoundedTTLCache[catalog.ResolvedImageURL](resolvedURLCacheMaxEntries),
 	}
 }
 
