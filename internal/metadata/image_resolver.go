@@ -32,7 +32,7 @@ const (
 	// resolvedURLCacheMaxEntries caps the resolved URL cache. An entry is
 	// one image path in one size variant and costs up to about a kilobyte
 	// (the key plus a signed URL), so a full cache stays near 30 MB however
-	// much of the catalogue a client walks before the URLs expire. The cap
+	// much of the catalog a client walks before the URLs expire. The cap
 	// matches jellycompat's image cache, which remembers the same URLs.
 	resolvedURLCacheMaxEntries = 32_768
 )

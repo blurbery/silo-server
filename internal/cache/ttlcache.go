@@ -106,18 +106,24 @@ func (c *TTLCache[V]) Set(key string, value V, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.order != nil {
-		if old, exists := c.entries[key]; exists {
-			e.order = old.order
-			c.order.MoveToFront(e.order)
-		} else {
-			if len(c.entries) >= c.limit {
-				oldest, _ := c.order.Back().Value.(string)
-				c.deleteLocked(oldest)
-			}
-			e.order = c.order.PushFront(key)
-		}
+		e.order = c.useLocked(key)
 	}
 	c.entries[key] = e
+}
+
+// useLocked returns key's place in the use order of a bounded cache, moved to
+// the front, making room for a new key by evicting the least recently used
+// one. The caller holds the write lock.
+func (c *TTLCache[V]) useLocked(key string) *list.Element {
+	if old, exists := c.entries[key]; exists {
+		c.order.MoveToFront(old.order)
+		return old.order
+	}
+	if len(c.entries) >= c.limit {
+		oldest, _ := c.order.Back().Value.(string)
+		c.deleteLocked(oldest)
+	}
+	return c.order.PushFront(key)
 }
 
 // deleteLocked removes key and its place in the use order. The caller holds
