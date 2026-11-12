@@ -348,6 +348,12 @@ func writeSortedInts(b *strings.Builder, values []int) {
 
 // FetchOne runs one section query and returns it with items.
 func (f *Fetcher) FetchOne(ctx context.Context, resolved ResolvedSection, libraryID *int, libraryIDs []int, userID int, profileID string, filter catalog.AccessFilter) (SectionWithItems, error) {
+	result, err := f.fetchOne(ctx, resolved, libraryID, libraryIDs, userID, profileID, filter)
+	keepTitleKeyForOwnTitle(resolved, &result)
+	return result, err
+}
+
+func (f *Fetcher) fetchOne(ctx context.Context, resolved ResolvedSection, libraryID *int, libraryIDs []int, userID int, profileID string, filter catalog.AccessFilter) (SectionWithItems, error) {
 	start := time.Now()
 	var result SectionWithItems
 	var err error
@@ -437,7 +443,7 @@ func (f *Fetcher) FetchOne(ctx context.Context, resolved ResolvedSection, librar
 	// callers that bypass SectionWithItems construction.
 	if resolved.SectionType == SectionSeasonalThemed && len(items) > 0 {
 		if pick, ok := f.activeSeasonalPick(resolved.Config); ok && pick.Title != "" {
-			resolved.Title = pick.Title
+			resolved.Title, resolved.TitleKey, resolved.TitleArgs = pick.Title, pick.TitleKey, nil
 		}
 	}
 
@@ -1431,7 +1437,7 @@ func (f *Fetcher) fetchCollection(ctx context.Context, s ResolvedSection, librar
 	// sort applies here — a viewer's personal override is honored on the
 	// collection's own browse page.
 	queryAccess := collectionRailQueryAccess(filter, libraryID, libraryIDs)
-	membership, err := catalog.ResolveLibraryCollectionMembership(collection, queryAccess.AllowedLibraryIDs)
+	membership, err := catalog.ResolveLibraryCollectionMembership(collection, queryAccess)
 	if err != nil {
 		// The stored query no longer parses or validates, e.g. a legacy
 		// per-profile rule. Like jellycompat, list nothing rather than fail

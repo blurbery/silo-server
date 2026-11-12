@@ -147,6 +147,14 @@ export const FEATURE_NATIVE_HLS_PLAYBACK_V3 = "native_hls_playback_v1";
 export const FEATURE_PLAN_INVALIDATED_V3 = "plan_invalidated_v1";
 
 /**
+ * `progressive` delivery feature: the client reopens a progressive remux at its
+ * current position when the stream refuses a mid-stream range. The server then
+ * answers such a range 409 instead of streaming from the origin again, which
+ * the media element would read again from byte zero.
+ */
+export const FEATURE_PROGRESSIVE_RANGE_REFUSAL_V3 = "progressive_range_refusal_v1";
+
+/**
  * `original_http` validated claim: the client maps `selected_tracks.audio.index`
  * onto the file's own audio tracks, so a non-default track needs no remux.
  */
@@ -552,6 +560,8 @@ export interface SubtitleInventoryItemV3 {
    * downloaded tracks whose timing the server can correct.
    */
   sync_key?: string;
+  /** Stored row identity, independent of timing support and delivery. */
+  stored_subtitle_id?: number;
 }
 
 export interface SubtitleDecisionV3 {

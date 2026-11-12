@@ -1,15 +1,14 @@
 # Stopping idle plugin processes
 
 A plugin that is not resident starts on its first RPC. The host stops it again
-once nothing has used it for `SILO_PLUGIN_IDLE_STOP_AFTER`, and the next RPC
-starts it as the first one did. A server whose libraries never call a plugin
-(an audiobook metadata provider on a Movies and Series server) does not keep
-that process in memory.
+once nothing has used it for 30 minutes, and the next RPC starts it as the first
+one did. A server whose libraries never call a plugin (an audiobook metadata
+provider on a Movies and Series server) does not keep that process in memory.
 
-`SILO_PLUGIN_IDLE_STOP_AFTER` is a Go duration or whole seconds. The default
-is `15m`, `0` keeps every plugin running, and a shorter period than one minute
-is raised to one minute. It is read once at start-up on the API server. Proxy
-nodes run only resident plugins and ignore it.
+The period is fixed (`pluginhost.IdleStopAfter`). Thirty minutes covers a burst
+of calls, and a plugin that caches responses for up to half an hour keeps that
+cache through a quiet spell. Proxy nodes build their plugin host without an idle
+period, so nothing there is stopped for being idle.
 
 ## What counts as use
 
@@ -44,19 +43,28 @@ reads (`Host.Running`, which backs the admin `runtime.state`) are not use.
 - The idle check and the removal from the host's instance map happen under the
   lock `Host.Client` takes to record a use. A caller either finds the process
   and keeps it alive for another idle period, or finds none and starts one.
+  The same decision marks the process as stopping under the lock that admits
+  plugin callbacks, so a callback the plugin starts afterwards is refused with
+  `Unavailable` instead of being cut off mid-flight.
 - The watcher holds the installation's start slot until the old process has
   exited, so a restart never overlaps the process it replaces. A `Start`
   already in flight wins: it cancels the watcher. `Stop` and `Shutdown` also
-  wait for that exit.
+  wait for that exit. The one exception is a process that still has not
+  exited `DefaultIdleStopTimeout` after being killed (stuck in uninterruptible
+  I/O): the watcher logs a warning and releases the slot, so a restart can
+  overlap it and `Stop` or `Shutdown` can return before it exits.
 - The first call after an idle stop waits for a cold start before it is sent:
   the binary is verified again, the process launches, and the host reads its
   manifest and configures it. A start that fails is recorded as any failed
   lazy start is.
 - An idle stop is a deliberate stop. The client is not marked unhealthy, the
-  exit handler is not called, no lazy start failure is recorded, and the
-  installation reports `stopped`, which the admin UI shows as a healthy plugin
-  that is not running. The process is asked to shut down and is only killed if
-  it has not exited after two seconds.
+  exit handler is not called, and no lazy start failure is recorded. The
+  installation reports `stopped`, and the admin UI shows it as **Active**, like
+  any other healthy plugin that is not running. The stop is logged at info.
+- The process is asked to shut down and is killed if it has not exited after
+  two seconds. go-plugin's shutdown request has no deadline, so a process that
+  is frozen when its idle period ends is killed after `DefaultIdleStopTimeout`
+  instead of holding the start slot, and every caller waiting on it, for good.
 - State a plugin keeps in memory does not survive an idle stop. Host-held
   state (configuration, instance state, OAuth and device-code flow state, scan
   markers, sync cursors) is sent again with each call. A plugin must not rely

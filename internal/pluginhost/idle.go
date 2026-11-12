@@ -2,63 +2,35 @@ package pluginhost
 
 import (
 	"context"
-	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
-	// EnvIdleStopAfter sets how long a lazily started plugin process may sit
-	// unused before the host stops it: a Go duration or whole seconds. Zero
-	// keeps every plugin running.
-	EnvIdleStopAfter = "SILO_PLUGIN_IDLE_STOP_AFTER"
-	// DefaultIdleStopAfter is long enough that a plugin called in bursts (a
-	// scan, a metadata refresh, someone browsing) stays up across the burst.
-	DefaultIdleStopAfter = 15 * time.Minute
-	// MinIdleStopAfter keeps a configured period well above the longest gap
-	// between a caller resolving a plugin client and making its call.
-	MinIdleStopAfter = time.Minute
+	// IdleStopAfter is how long a lazily started plugin process may go unused
+	// before the host stops it. It is long enough that a plugin called in
+	// bursts (a scan, a metadata refresh, someone browsing) stays up across the
+	// burst, and a plugin that caches responses for up to half an hour keeps
+	// that cache through a quiet spell. It is also far above the longest gap between a caller
+	// resolving a plugin client and making its call.
+	IdleStopAfter = 30 * time.Minute
 	// DefaultIdleCheckInterval is how often a running plugin is checked.
 	DefaultIdleCheckInterval = 30 * time.Second
-
-	maxIdleStopAfter = time.Duration(1<<63 - 1)
+	// DefaultIdleStopTimeout bounds an idle stop. go-plugin asks the plugin to
+	// shut down with no deadline, so a frozen process would otherwise hold the
+	// installation's start slot, and every caller waiting on it, forever.
+	DefaultIdleStopTimeout = 10 * time.Second
 
 	// pluginServicePrefix selects the Silo plugin protocol. The health probe
 	// and go-plugin's own broker, stdio and controller calls share the
 	// connection and say nothing about whether the plugin is in use.
 	pluginServicePrefix = "/silo.plugin.v1."
 )
-
-// ParseIdleStopAfter reads EnvIdleStopAfter's value. Empty takes the default
-// and zero disables idle stops. A shorter period than MinIdleStopAfter is
-// raised to it. An unreadable value is an error and yields the default.
-func ParseIdleStopAfter(value string) (time.Duration, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return DefaultIdleStopAfter, nil
-	}
-	period, err := time.ParseDuration(value)
-	if err != nil {
-		seconds, secondsErr := strconv.ParseInt(value, 10, 64)
-		if secondsErr != nil || seconds > int64(maxIdleStopAfter/time.Second) {
-			return DefaultIdleStopAfter, fmt.Errorf("invalid duration %q: %w", value, err)
-		}
-		period = time.Duration(seconds) * time.Second
-	}
-	switch {
-	case period < 0:
-		return DefaultIdleStopAfter, fmt.Errorf("negative duration %q", value)
-	case period == 0:
-		return 0, nil
-	case period < MinIdleStopAfter:
-		return MinIdleStopAfter, nil
-	}
-	return period, nil
-}
 
 // activity records when one plugin process was last used and how many calls
 // are in flight, in either direction. The idle watcher reads it to decide
@@ -73,6 +45,10 @@ type activity struct {
 	// capability RPC is unary today; a stream has no end this type can see,
 	// so a process that opens one is never stopped for being idle.
 	pinned bool
+	// stopping is set when the idle stop commits to stopping the process.
+	// Callbacks the plugin starts after that are refused rather than cut
+	// off by the teardown.
+	stopping bool
 }
 
 func newActivity(now func() time.Time) *activity {
@@ -104,7 +80,24 @@ func (a *activity) end() {
 func (a *activity) idleFor(period time.Duration) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.idleForLocked(period)
+}
+
+func (a *activity) idleForLocked(period time.Duration) bool {
 	return !a.pinned && a.inFlight == 0 && a.now().Sub(a.last) >= period
+}
+
+// commitStop marks the process as stopping if it is still idle for period.
+// The check and the mark share a.mu with callback admission, so no callback
+// can start between them.
+func (a *activity) commitStop(period time.Duration) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.idleForLocked(period) {
+		return false
+	}
+	a.stopping = true
+	return true
 }
 
 // unaryClient counts host calls to the plugin for as long as they run.
@@ -129,7 +122,14 @@ func (a *activity) streamClient(ctx context.Context, desc *grpc.StreamDesc, cc *
 // unaryServer counts the plugin's calls back to the host. A callback with no
 // host call in flight is the only sign of work the plugin does on its own.
 func (a *activity) unaryServer(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-	a.begin()
+	a.mu.Lock()
+	if a.stopping {
+		a.mu.Unlock()
+		return nil, status.Error(codes.Unavailable, "plugin process is stopping after being idle")
+	}
+	a.inFlight++
+	a.last = a.now()
+	a.mu.Unlock()
 	defer a.end()
 	return handler(ctx, req)
 }
@@ -174,7 +174,7 @@ func (h *Host) stopIfIdle(ctx context.Context, installationID int, instance *ins
 
 	h.mu.Lock()
 	current, ok := h.instances[installationID]
-	if !ok || current != instance || !instance.activity.idleFor(h.idleStopAfter) {
+	if !ok || current != instance || !instance.activity.commitStop(h.idleStopAfter) {
 		h.mu.Unlock()
 		return false
 	}
@@ -183,12 +183,41 @@ func (h *Host) stopIfIdle(ctx context.Context, installationID int, instance *ins
 	h.idleStopping[installationID] = exited
 	h.mu.Unlock()
 
-	h.logger.Debug("stopping idle plugin", "installation_id", installationID, "idle_for", h.idleStopAfter)
-	h.teardown(instance, true)
+	h.logger.Info("stopping idle plugin", "installation_id", installationID, "idle_for", h.idleStopAfter)
+	h.teardownIdle(installationID, instance)
 
 	h.mu.Lock()
 	delete(h.idleStopping, installationID)
 	h.mu.Unlock()
 	close(exited)
 	return true
+}
+
+// teardownIdle stops an idle instance gracefully, and kills its process when
+// it has not shut down within the idle stop timeout (see
+// DefaultIdleStopTimeout).
+func (h *Host) teardownIdle(installationID int, instance *instance) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.teardown(instance, true)
+	}()
+	select {
+	case <-done:
+		return
+	case <-time.After(h.idleStopTimeout):
+	}
+
+	h.logger.Warn("idle plugin did not shut down in time, killing it", "installation_id", installationID, "timeout", h.idleStopTimeout)
+	if instance.command != nil && instance.command.Process != nil {
+		_ = instance.command.Process.Kill()
+	}
+	select {
+	case <-done:
+	case <-time.After(h.idleStopTimeout):
+		// The process is stuck in the kernel (uninterruptible I/O) and cannot
+		// die yet. Release the start slot anyway: a new process is better than
+		// a plugin no caller can reach until the server restarts.
+		h.logger.Warn("idle plugin process has not exited after being killed", "installation_id", installationID)
+	}
 }

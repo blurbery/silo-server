@@ -6,9 +6,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type idleClock struct {
@@ -48,31 +51,6 @@ func idleTestHost(t *testing.T, clock *idleClock, installationID int) (*Host, *i
 	}
 	host.instances[installationID] = inst
 	return host, inst, exited
-}
-
-func TestParseIdleStopAfter(t *testing.T) {
-	tests := []struct {
-		value   string
-		want    time.Duration
-		wantErr bool
-	}{
-		{value: "", want: DefaultIdleStopAfter},
-		{value: " 30m ", want: 30 * time.Minute},
-		{value: "600", want: 10 * time.Minute},
-		{value: "0", want: 0},
-		{value: "0s", want: 0},
-		{value: "5s", want: MinIdleStopAfter},
-		{value: "-1m", want: DefaultIdleStopAfter, wantErr: true},
-		{value: "-5", want: DefaultIdleStopAfter, wantErr: true},
-		{value: "soon", want: DefaultIdleStopAfter, wantErr: true},
-		{value: "99999999999999999999", want: DefaultIdleStopAfter, wantErr: true},
-	}
-	for _, tt := range tests {
-		got, err := ParseIdleStopAfter(tt.value)
-		if got != tt.want || (err != nil) != tt.wantErr {
-			t.Errorf("ParseIdleStopAfter(%q) = %v, %v; want %v, error %v", tt.value, got, err, tt.want, tt.wantErr)
-		}
-	}
 }
 
 func TestStopIfIdleStopsAnIdleInstanceQuietly(t *testing.T) {
@@ -315,30 +293,61 @@ func TestStopAndShutdownWaitForAnIdleStopInProgress(t *testing.T) {
 			host, inst, _ := idleTestHost(t, clock, 7)
 			clock.Advance(testIdlePeriod)
 
-			// Stands in for a process that takes a while to exit.
-			exiting := make(chan struct{})
-			exit := make(chan struct{})
-			inst.cancelMonitors = func() {
-				close(exiting)
-				<-exit
-			}
-			go host.stopIfIdle(context.Background(), 7, inst)
-			<-exiting
-
-			var exitedFirst atomic.Bool
-			returned := make(chan error, 1)
-			go func() {
-				err := wait(host)
-				if err == nil && !exitedFirst.Load() {
-					err = errors.New("returned while the idle process was still exiting")
+			synctest.Test(t, func(t *testing.T) {
+				// Stands in for a process that takes a while to exit.
+				exiting := make(chan struct{})
+				exit := make(chan struct{})
+				inst.cancelMonitors = func() {
+					close(exiting)
+					<-exit
 				}
-				returned <- err
-			}()
-			exitedFirst.Store(true)
-			close(exit)
-			if err := <-returned; err != nil {
-				t.Fatal(err)
-			}
+				go host.stopIfIdle(context.Background(), 7, inst)
+				<-exiting
+
+				returned := make(chan error, 1)
+				go func() { returned <- wait(host) }()
+				synctest.Wait()
+				select {
+				case err := <-returned:
+					t.Fatalf("returned (%v) while the idle process was still exiting", err)
+				default:
+				}
+				close(exit)
+				if err := <-returned; err != nil {
+					t.Fatal(err)
+				}
+			})
 		})
+	}
+}
+
+// Once the idle stop has decided, a callback the plugin starts on its own is
+// refused instead of being cut off mid-flight by the teardown.
+func TestIdleStopRefusesACallbackAfterTheDecision(t *testing.T) {
+	clock := &idleClock{now: time.Unix(1000, 0)}
+	host, inst, _ := idleTestHost(t, clock, 7)
+
+	// Hold the teardown open: the callback lands while the process is being
+	// stopped, the window the decision has to cover.
+	inTeardown := make(chan struct{})
+	release := make(chan struct{})
+	inst.cancelMonitors = func() {
+		close(inTeardown)
+		<-release
+	}
+	clock.Advance(testIdlePeriod)
+	stopped := make(chan bool, 1)
+	go func() { stopped <- host.stopIfIdle(context.Background(), 7, inst) }()
+	<-inTeardown
+
+	ran := false
+	handler := func(context.Context, any) (any, error) { ran = true; return nil, nil }
+	_, err := inst.activity.unaryServer(context.Background(), nil, &grpc.UnaryServerInfo{}, handler)
+	close(release)
+	if !<-stopped {
+		t.Fatal("did not stop an instance idle for the whole period")
+	}
+	if status.Code(err) != codes.Unavailable || ran {
+		t.Fatalf("callback during the idle stop: err = %v, handler ran = %v; want Unavailable without running it", err, ran)
 	}
 }

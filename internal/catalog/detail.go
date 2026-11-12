@@ -675,7 +675,7 @@ type VersionSubtitleTrack struct {
 	Default         bool   `json:"default"`
 	HearingImpaired bool   `json:"hearing_impaired"`
 	External        bool   `json:"external"`
-	FileName        string `json:"file_name,omitempty"`
+	FileName        string `json:"file_name,omitempty" doc:"An external track's file name; absent for viewers without file-path visibility, except on audiobooks and ebooks"`
 	// IndexOnly is models.SubtitleTrack.IndexOnly, for planners that read
 	// this projection.
 	IndexOnly bool `json:"-"`
@@ -1785,12 +1785,27 @@ func (s *DetailService) GetItemDetailWithOptions(ctx context.Context, contentID 
 	}
 }
 
-const detailTypeAudiobook = "audiobook"
+const (
+	detailTypeAudiobook = "audiobook"
+	detailTypeEbook     = "ebook"
+)
 
 // GetItemVersions builds the browse version selector without loading unrelated
 // presentation data. It shares detail authorization and playback metadata, but
 // does not require localization, credits, artwork, or recommendations to succeed.
 func (s *DetailService) GetItemVersions(ctx context.Context, contentID string, filter AccessFilter) ([]FileVersion, error) {
+	return s.GetItemVersionsWithOptions(ctx, contentID, filter, ItemVersionsOptions{})
+}
+
+// ItemVersionsOptions shapes what GetItemVersionsWithOptions answers.
+type ItemVersionsOptions struct {
+	// HideFileIdentity strips file identity for a viewer who may not see it
+	// (see HideFileIdentity).
+	HideFileIdentity bool
+}
+
+// GetItemVersionsWithOptions is GetItemVersions shaped by opts.
+func (s *DetailService) GetItemVersionsWithOptions(ctx context.Context, contentID string, filter AccessFilter, opts ItemVersionsOptions) ([]FileVersion, error) {
 	target, err := s.resolveDetailTarget(ctx, contentID, filter)
 	if err != nil {
 		return nil, err
@@ -1821,6 +1836,13 @@ func (s *DetailService) GetItemVersions(ctx context.Context, contentID string, f
 	}
 	files = s.prepareBrowseFiles(ctx, files)
 	versions, _, _, _, _, _, _ := s.buildPlaybackInfo(ctx, files, filter, audioPreferenceContentID)
+	if opts.HideFileIdentity {
+		itemType := ""
+		if target.item != nil {
+			itemType = target.item.Type
+		}
+		HideFileIdentity(versions, itemType)
+	}
 	return versions, nil
 }
 
@@ -2082,16 +2104,22 @@ func (s *DetailService) GetEpisodeDetailsForSeries(
 			episodesByID[episode.ContentID] = episode
 		}
 	}
+	// One membership read for the page. Each episode must itself be in the
+	// presentation library, as validatePresentationItemAccess requires of one ID.
+	var inLibrary map[string]bool
+	if filter.PresentationLibraryID != nil {
+		inLibrary, err = s.itemRepo.GetItemsInLibrary(ctx, episodeContentIDs, *filter.PresentationLibraryID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	for _, contentID := range episodeContentIDs {
 		episode := episodesByID[contentID]
 		if episode == nil {
 			continue
 		}
-		if err := s.validatePresentationItemAccess(ctx, filter, contentID); err != nil {
-			if errors.Is(err, ErrItemNotFound) {
-				continue
-			}
-			return nil, err
+		if filter.PresentationLibraryID != nil && !inLibrary[contentID] {
+			continue
 		}
 		detail, err := s.buildEpisodeDetail(ctx, episode, seriesCtx, filter)
 		if err != nil {
@@ -3497,6 +3525,7 @@ func (s *DetailService) buildSeasonDetail(ctx context.Context, season *models.Se
 		SeasonNumber:               &seasonNumber,
 		EpisodeCount:               &episodeCount,
 		IsSpecials:                 season.SeasonNumber == 0,
+		LockedFields:               season.LockedFields,
 		Cast:                       castCredits,
 		Crew:                       crewCredits,
 		Versions:                   []FileVersion{},
@@ -3631,6 +3660,7 @@ func (s *DetailService) buildEpisodeDetail(ctx context.Context, episode *models.
 		SeasonNumber:               &seasonNumber,
 		SeasonID:                   episode.SeasonID,
 		EpisodeNumber:              &episodeNumber,
+		LockedFields:               episode.LockedFields,
 		Cast:                       seriesCtx.castCredits,
 		Crew:                       seriesCtx.crewCredits,
 		Versions:                   []FileVersion{},
@@ -4577,7 +4607,7 @@ func (s *DetailService) buildPlaybackInfoWith(
 			key := fmt.Sprintf("external:%s:%s:%v:%v", sub.Language, sub.Format, sub.Forced, sub.HearingImpaired)
 			if _, exists := subtitleSet[key]; !exists {
 				subtitleSet[key] = SubtitleInfo{
-					Source:          "external",
+					Source:          subtitleSourceExternal,
 					Language:        sub.Language,
 					Codec:           sub.Format,
 					Forced:          sub.Forced,
@@ -4955,7 +4985,7 @@ func buildVersionSubtitleTracks(file *models.MediaFile) []VersionSubtitleTrack {
 			Index:           nextExternalIndex + i,
 			Language:        sub.Language,
 			Codec:           sub.Format,
-			Title:           firstNonEmpty(sub.Title, fspath.Display(filepath.Base(sub.Path))),
+			Title:           firstNonEmpty(sub.Title, sub.FileName()),
 			TitleIsFallback: strings.TrimSpace(sub.Title) == "",
 			EmbeddedTitle:   sub.EmbeddedTitle,
 			Resolution:      sub.Resolution,
@@ -4963,7 +4993,7 @@ func buildVersionSubtitleTracks(file *models.MediaFile) []VersionSubtitleTrack {
 			Default:         sub.Default,
 			HearingImpaired: sub.HearingImpaired,
 			External:        true,
-			FileName:        fspath.Display(filepath.Base(sub.Path)),
+			FileName:        sub.FileName(),
 		})
 	}
 	return tracks

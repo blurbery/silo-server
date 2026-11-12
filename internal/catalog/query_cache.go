@@ -13,7 +13,8 @@ import (
 
 // queryCachePruneInterval is the least time between sweeps that drop expired
 // entries. Without them a value nobody asks for again would stay until newer
-// values pushed it out of the budget, which a quiet cache never does.
+// values pushed it out of the budget. Sweeps run on lookups, so a cache that
+// gets none keeps its entries, still within its budget.
 const queryCachePruneInterval = time.Minute
 
 // queryCache holds values derived from catalog queries in memory, keyed by a
@@ -108,9 +109,11 @@ func (c *queryCache[V]) get(ctx context.Context, key string, load func(context.C
 // expired entries.
 func (c *queryCache[V]) lookup(key string) (V, bool) {
 	var zero V
-	now := c.now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Read the clock once the lock is held, so a lookup that waited for it
+	// does not judge freshness by the time it started waiting.
+	now := c.now()
 	c.pruneExpiredLocked(now)
 	item, ok := c.entries[key]
 	if !ok {

@@ -106,8 +106,9 @@ func (r *Resolver) Resolve(ctx context.Context, input ResolveInput) (Scope, erro
 	}
 
 	preferences := ResolveViewerPreferences(ctx, store, r.defaults, input.ProfileID)
+	var profile *userstore.Profile
 	if input.ProfileID != "" {
-		profile, err := store.GetProfile(ctx, input.ProfileID)
+		profile, err = store.GetProfile(ctx, input.ProfileID)
 		if err != nil {
 			return Scope{}, fmt.Errorf("loading profile %s: %w", input.ProfileID, err)
 		}
@@ -257,14 +258,14 @@ func subtractInts(src, exclude []int) []int {
 }
 
 // ProfileMaturity is the profile's maturity limits under the server's
-// unrated-content decision, as Resolve applies them.
+// unrated-content decision, with its allowed titles, as Resolve applies them.
 func ProfileMaturity(profile *userstore.Profile, allowUnrated bool) MaturityLimits {
 	return MaturityLimits{
 		MaxContentRating:    profile.MaxContentRating,
 		AllowUnratedContent: allowUnrated,
 		MaxAdvisoryAge:      profile.MaxAdvisoryAge,
 		RequireAdvisoryAge:  profile.RequireAdvisoryAge && profile.MaxAdvisoryAge > 0,
-	}
+	}.WithAllowedTitles(profile.AllowedTitleIDs)
 }
 
 // ProfileLibraries is the libraries a profile may see under its account's
@@ -275,17 +276,30 @@ func ProfileLibraries(accountLibraryIDs []int, profile *userstore.Profile) ([]in
 	return effectiveLibraries(accountLibraryIDs, profile)
 }
 
+// ProfileLibraryLimit is the profile's own library limit: the libraries it is
+// limited to, and whether it has a limit. The primary profile never has one:
+// it inherits its account's libraries and narrows what it browses only by
+// hiding libraries (ui.disabled_library_ids), which it can undo. A limit
+// stored on a primary profile, by an older server or a restored backup, is
+// ignored.
+func ProfileLibraryLimit(profile *userstore.Profile) ([]int, bool) {
+	if profile == nil || profile.IsPrimary || !profile.LibraryRestrictionsEnabled {
+		return nil, false
+	}
+	return profile.AllowedLibraryIDs, true
+}
+
 func effectiveLibraries(accountLibraryIDs []int, profile *userstore.Profile) ([]int, bool) {
 	accountRestricted := accountLibraryIDs != nil
-	profileRestricted := profile.LibraryRestrictionsEnabled
+	profileLibraryIDs, profileRestricted := ProfileLibraryLimit(profile)
 
 	switch {
 	case accountRestricted && profileRestricted:
-		return intersectInts(accountLibraryIDs, profile.AllowedLibraryIDs), true
+		return intersectInts(accountLibraryIDs, profileLibraryIDs), true
 	case accountRestricted:
 		return cloneInts(accountLibraryIDs), true
 	case profileRestricted:
-		return sortedUniqueInts(profile.AllowedLibraryIDs), true
+		return sortedUniqueInts(profileLibraryIDs), true
 	default:
 		return nil, false
 	}

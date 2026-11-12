@@ -1336,8 +1336,29 @@ func NewPlaybackHandler(
 	if adder, ok := sessionMgr.(sessionExpirationHookAdder); ok {
 		adder.AddExpirationHook(h.handleExpiredSession)
 	}
+	if registrar, ok := sessionMgr.(compatAdminEndRegistrar); ok {
+		registrar.SetCompatAdminEnd(h.endUpstreamSessionAsAdmin)
+	}
 	return h
 }
+
+// compatAdminEndRegistrar and transportStopWatcher are probed for on the
+// session manager at run time, so a manager without them would switch an
+// administrator's end, or the abort of a progressive remux, off without a
+// sign. The assertions below fail the build if the production manager stops
+// providing either.
+type compatAdminEndRegistrar interface {
+	SetCompatAdminEnd(playback.CompatAdminEnd)
+}
+
+type transportStopWatcher interface {
+	WatchTransportStop(sessionID string) (<-chan struct{}, func())
+}
+
+var (
+	_ compatAdminEndRegistrar = (*playback.SessionManager)(nil)
+	_ transportStopWatcher    = (*playback.SessionManager)(nil)
+)
 
 func (h *PlaybackHandler) handleExpiredSession(session *playback.Session) {
 	if h == nil || h.tm == nil || session == nil {
@@ -1345,6 +1366,86 @@ func (h *PlaybackHandler) handleExpiredSession(session *playback.Session) {
 	}
 	sessionCopy := *session
 	go h.tm.CloseTranscodeSession(sessionCopy.ID, sessionCopy.TranscodeNodeURL)
+}
+
+// endUpstreamSessionAsAdmin ends the play attached to an upstream session an
+// administrator stopped or terminated, and reports whether it found one.
+// Stopping the native session does not end a Jellyfin play: the client's next
+// segment, manifest or progress request would rebuild the session from the
+// play's row and adopt the transcode, which runs in this handler's manager.
+// The row is retired first, so those requests answer not found on every
+// server sharing the store, and then the local transcode is closed.
+//
+// Only a play whose stream the server produces is ended this way. A
+// direct-play play keeps its row (adminEndRetiresPlay) and is not reported
+// as found.
+//
+// The native session is left to the administrator path that called this,
+// which stops it and records the play. A request already past its row lookup
+// can still rebuild what this ends, and no later request reaches what it
+// rebuilt. After the session stop, it registers the session and a transcode
+// again, and the idle sweep reaps the session and closes the transcode.
+// Between the close below and the session stop, it restarts the transcode
+// under a session that is then stopped, which no expiry hook reaches; the
+// second close, once the session has stopped, is for that transcode.
+func (h *PlaybackHandler) endUpstreamSessionAsAdmin(ctx context.Context, upstreamSessionID string) bool {
+	if h == nil || h.playbackStore == nil || upstreamSessionID == "" {
+		return false
+	}
+	retired, err := h.playbackStore.RetireUpstreamSession(upstreamSessionID)
+	if err != nil {
+		slog.WarnContext(ctx, "jellycompat could not retire a play an administrator ended; retrying", "component", "jellycompat",
+			"upstream_session_id", upstreamSessionID, "error", err)
+		h.scheduleCompatAdminEndRetry(upstreamSessionID, time.Now().Add(playback.MaxTokenTTL), 1)
+	}
+	if h.tm != nil {
+		h.tm.CloseTranscodeSession(upstreamSessionID, "")
+		if retired {
+			h.closeTranscodeOnceSessionStops(upstreamSessionID)
+		}
+	}
+	return retired
+}
+
+// compatAdminEndStopWait bounds the wait for the administrator path to stop
+// the native session of a play this handler retired. The stop follows the
+// retirement at once; the bound only ends the wait if it never comes.
+const compatAdminEndStopWait = 30 * time.Second
+
+// closeTranscodeOnceSessionStops closes the play's transcode again once its
+// native session has stopped, so a transcode a request started in between is
+// not left without a session to expire it. A session this server does not
+// hold counts as stopped, and closing an absent transcode does nothing.
+func (h *PlaybackHandler) closeTranscodeOnceSessionStops(upstreamSessionID string) {
+	watcher, ok := h.sessionMgr.(transportStopWatcher)
+	if !ok {
+		return
+	}
+	stopped, release := watcher.WatchTransportStop(upstreamSessionID)
+	go func() {
+		defer release()
+		select {
+		case <-stopped:
+		case <-time.After(compatAdminEndStopWait):
+		}
+		h.tm.CloseTranscodeSession(upstreamSessionID, "")
+	}()
+}
+
+// scheduleCompatAdminEndRetry repeats a retirement whose write failed until
+// the store accepts it, as scheduleCompatTerminalHide does for a client's
+// stop, so the other servers do not keep routing the play. It retries by
+// upstream session, not by play: a server that does not hold the play never
+// learned its id. deadline is the default lifetime of a play's row.
+func (h *PlaybackHandler) scheduleCompatAdminEndRetry(upstreamSessionID string, deadline time.Time, attempt int) {
+	time.AfterFunc(compatTerminalRetryDelay(attempt), func() {
+		if !time.Now().Before(deadline) {
+			return
+		}
+		if _, err := h.playbackStore.RetireUpstreamSession(upstreamSessionID); err != nil {
+			h.scheduleCompatAdminEndRetry(upstreamSessionID, deadline, attempt+1)
+		}
+	})
 }
 
 func (h *PlaybackHandler) segmentRetentionSeconds() int {
@@ -1464,6 +1565,9 @@ func (h *PlaybackHandler) buildProxyRedirectURL(
 		claims.RoutingExecution = string(noderouting.ExecutionProxy)
 		claims.RoutingExecutionNodeID = proxyNode.ID
 	case string(playback.PlayTranscode):
+		if targetAudioCodec == compatCopyCodec {
+			claims.CopyAudioCodec = compatSourceAudioCodec(source)
+		}
 		claims.RoutingWorkload = string(noderouting.WorkloadVideoTranscode)
 		if compatHLSCopiesVideo(source) {
 			claims.RoutingWorkload = string(noderouting.WorkloadRemux)
@@ -1806,6 +1910,7 @@ func (h *PlaybackHandler) startRemoteTranscodeWithToneMapMode(
 	}
 	if !compatHLSTranscodesAudio(source) {
 		reqBody.TargetCodecAudio = compatCopyCodec
+		reqBody.CopyAudioCodec = compatSourceAudioCodec(source)
 	}
 	// Jellyfin-compat remote starts are not otherwise waited on. Let the node
 	// wait only when its live auto pipeline can fall back.
@@ -1960,6 +2065,10 @@ func (h *PlaybackHandler) startRemoteTranscodeWithToneMapMode(
 		h.tm.StopRemoteTranscode(upstreamSessionID, transcodeNodeURL)
 		return fmt.Errorf("%w: %w", errRemoteTranscodeStartFailed, err)
 	}
+	if err := transcodenode.ValidateCopyAudioCodecAttestation(reqBody, nodeResponse); err != nil {
+		h.tm.StopRemoteTranscode(upstreamSessionID, transcodeNodeURL)
+		return fmt.Errorf("%w: %w", errRemoteTranscodeStartFailed, err)
+	}
 	if reqBody.ToneMapMode != "" && nodeResponse.ToneMapMode != reqBody.ToneMapMode {
 		h.tm.StopRemoteTranscode(upstreamSessionID, transcodeNodeURL)
 		err := errors.New("remote transcode node did not confirm tone-map mode")
@@ -2017,6 +2126,7 @@ func (h *PlaybackHandler) startRemoteTranscodeWithToneMapMode(
 		StartSegmentNumber:     reqBody.StartSegmentNumber,
 		TargetCodecVideo:       reqBody.TargetCodecVideo,
 		TargetCodecAudio:       reqBody.TargetCodecAudio,
+		CopyAudioCodec:         reqBody.CopyAudioCodec,
 		TargetResolution:       reqBody.TargetResolution,
 		SubtitleBurnIn:         reqBody.SubtitleBurnIn,
 		SubtitleTrackIndex:     reqBody.SubtitleTrackIndex,
@@ -2339,6 +2449,9 @@ func (h *PlaybackHandler) HandlePlaybackInfo(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	unreadableSkipped := false
+	// The bitrate-cap check below finishes each version again without the cap,
+	// with the downloaded subtitles this loop looked up.
+	downloadedByFile := make(map[int][]subtitles.DownloadedSubtitle, len(detail.Versions))
 	for _, version := range detail.Versions {
 		source := h.buildPlaybackSource(routeItemID, playSessionID, version, profile, req, allow4KTranscode, allowHEVCEncoding)
 		if req.MediaSourceID != "" && !mediaSourceIDsEqual(source.ID, req.MediaSourceID) {
@@ -2373,6 +2486,7 @@ func (h *PlaybackHandler) HandlePlaybackInfo(w http.ResponseWriter, r *http.Requ
 				)
 			}
 		}
+		downloadedByFile[source.Version.FileID] = downloaded
 		source.DefaultSubtitleStreamIndex = compatDetailSubtitleStreamIndex(detail, source.Version, downloaded, savedSubtitleMode, effectiveCompatAudioStreamIndex(source))
 		var requestedSubtitleIndex *int
 		if index, ok := req.SubtitleStreamIndex.get(); ok {
@@ -2509,12 +2623,71 @@ func (h *PlaybackHandler) HandlePlaybackInfo(w http.ResponseWriter, r *http.Requ
 	if !slices.ContainsFunc(sources, func(source PlaybackMediaSource) bool {
 		return source.SupportsDirectPlay || source.SupportsDirectStream || source.SupportsTranscoding
 	}) {
+		// The server's bitrate cap is to blame only when the versions, built
+		// again without it and put through the same subtitle, tone-map and
+		// HEVC-executor checks as above, have a route. When a lower client or
+		// profile limit, or a profile that takes no encode the server makes,
+		// rules them out, they have no route either way (#3215).
+		uncapped := req
+		uncapped.serverBitrateCapKbps = 0
+		// A tone-map lookup this check is the first to need can fail for a
+		// moment; like the loop above, that is retryable, not "nothing plays".
+		toneMapUnavailable := ""
+		capRemovesRoutes := req.serverBitrateCapKbps > 0 && slices.ContainsFunc(sources, func(capped PlaybackMediaSource) bool {
+			source := h.buildPlaybackSource(routeItemID, playSessionID, capped.Version, profile, uncapped, allow4KTranscode, allowHEVCEncoding)
+			source = h.applyCompatDVStrip(r.Context(), routeItemID, playSessionID, source, profile, uncapped, allow4KTranscode)
+			source.DefaultSubtitleStreamIndex = capped.DefaultSubtitleStreamIndex
+			source.SelectedSubtitleStreamIndex = capped.SelectedSubtitleStreamIndex
+			source.HLSRemuxMPEGTS = compatWebOSDVMPEGTS(r.UserAgent(), source) || compatRokuMPEGTS(r.UserAgent(), profile, source) ||
+				source.hlsRemuxInTS && compatHLSCopiesVideo(source) && !source.DVStripToHDR10
+			applyCompatSubtitleDelivery(&source, profile, uncapped.AlwaysBurnInSubtitleWhenTranscoding)
+			applyCompatDownloadedSubtitleDelivery(&source, profile, downloadedByFile[capped.Version.FileID])
+			if source.SupportsTranscoding && !compatHLSCopiesVideo(source) && compatVersionRequiresToneMap(source.Version) {
+				if !toneMapPolicyLoaded {
+					policy, err := h.toneMapPolicyResult(r.Context())
+					if err != nil {
+						// Unknown policy: the encode can't be shown to be possible.
+						if !source.SupportsDirectPlay && !source.SupportsDirectStream {
+							toneMapUnavailable = "Tone-map policy is temporarily unavailable"
+						}
+						source.SupportsTranscoding = false
+					} else {
+						toneMapPolicy, toneMapPolicyLoaded = policy, true
+					}
+				}
+				if toneMapPolicyLoaded && !toneMapCapabilitiesLoaded {
+					if toneMapPolicy != tonemap.PolicyNone {
+						toneMapCapabilities, toneMapCapabilityErr = h.availableCompatToneMapCapabilities(r.Context(), compatToneMapNegotiationTimeout)
+					}
+					toneMapCapabilitiesLoaded = true
+				}
+				if toneMapPolicyLoaded && toneMapCapabilityErr != nil && !source.SupportsDirectPlay && !source.SupportsDirectStream {
+					resolution := tonemap.ResolveSource(tonemap.MetadataForFile(&models.MediaFile{HDR: source.Version.HDR, VideoTracks: source.Version.VideoTracks}))
+					if resolution.Kind != "" && toneMapCapabilities.PreferredMode(toneMapPolicy, resolution.Kind) == "" {
+						toneMapUnavailable = "Tone-map capability discovery is temporarily unavailable"
+					}
+				}
+				if toneMapPolicyLoaded {
+					source = applyCompatToneMapAvailabilityWithPolicy(source, toneMapCapabilities, toneMapPolicy)
+				}
+			}
+			if source.SupportsTranscoding && compatSourceTargetVideoCodec(source) == compatVideoCodecHEVC &&
+				!h.compatHEVCExecutable(r.Context(), source) {
+				source.TargetVideoCodec = compatTargetVideoCodec
+				source.TargetBitrateKbps, source.TargetResolution = source.h264TargetBitrateKbps, source.h264TargetResolution
+				source.SupportsTranscoding = profile.supportsTranscodingOutput(source.Version, source.TargetAudioChannels, source.TargetBitrateKbps, source.TargetResolution)
+			}
+			return source.SupportsDirectPlay || source.SupportsDirectStream || source.SupportsTranscoding
+		})
 		message := "No media source supports the requested playback constraints"
-		if req.serverBitrateCapKbps > 0 {
+		if capRemovesRoutes {
 			message = "This stream exceeds the server bitrate limit, and no compliant transcoding route is available"
 		}
 		// Clients rarely surface this body, so record why each version was
-		// refused (issue #2683).
+		// refused (issue #2683). The HLS containers and HEVC encoding say why
+		// no encode fit: H.264 is encoded only into MPEG-TS segments, so a
+		// profile that lists only fMP4 needs HEVC (#3215).
+		hlsContainers := profile.hlsVideoTranscodingContainers()
 		for _, source := range sources {
 			slog.InfoContext(r.Context(), "jellycompat playback info found no route", "component", "jellycompat",
 				"content_id", detail.ContentID, "media_source_id", source.ID, "message", message,
@@ -2522,9 +2695,23 @@ func (h *PlaybackHandler) HandlePlaybackInfo(w http.ResponseWriter, r *http.Requ
 				"video_codec", source.Version.CodecVideo, "audio_codec", compatSourceAudioCodec(source),
 				"source_bitrate_kbps", source.Version.Bitrate, "max_streaming_bitrate", req.MaxStreamingBitrate,
 				"server_bitrate_cap_kbps", req.serverBitrateCapKbps,
+				"hls_transcoding_containers", hlsContainers, "hevc_encoding", allowHEVCEncoding,
 			)
 		}
-		writeError(w, http.StatusBadRequest, "PlaybackUnavailable", message)
+		if capRemovesRoutes {
+			writeError(w, http.StatusBadRequest, "PlaybackUnavailable", message)
+			return
+		}
+		if toneMapUnavailable != "" {
+			writeError(w, http.StatusServiceUnavailable, "PlaybackUnavailable", toneMapUnavailable)
+			return
+		}
+		// Answer as Jellyfin does when nothing can play, so the client shows an
+		// error instead of waiting on a failed request (#3215).
+		writeJSON(w, http.StatusOK, playbackInfoResponseDTO{
+			MediaSources: []mediaSourceDTO{},
+			ErrorCode:    playbackErrorNoCompatibleStream,
+		})
 		return
 	}
 
@@ -3036,7 +3223,8 @@ func buildMediaStreamsWithSelection(routeItemID, mediaSourceID string, version c
 	}
 
 	for index, track := range version.VideoTracks {
-		bitrate := track.Bitrate
+		// Silo stores bitrates in kbps; Jellyfin's BitRate is bits per second.
+		bitrate := track.Bitrate * 1000
 		if bitrate == 0 && version.Bitrate > 0 {
 			bitrate = version.Bitrate * 1000
 		}
@@ -3104,8 +3292,9 @@ func buildMediaStreamsWithSelection(routeItemID, mediaSourceID string, version c
 			SupportsExternalStream: false,
 			Profile:                track.Profile,
 			AudioSpatialFormat:     compatAudioSpatialFormat(track.Profile),
+			ChannelLayout:          compatChannelLayout(track.Layout),
 			Channels:               track.Channels,
-			BitRate:                track.Bitrate,
+			BitRate:                track.Bitrate * 1000,
 		})
 	}
 
@@ -3602,6 +3791,14 @@ func audioCodecDisplayName(codec string) string {
 	default:
 		return strings.ToUpper(strings.TrimSpace(codec))
 	}
+}
+
+// compatChannelLayout trims ffprobe's layout variant the way Jellyfin's
+// ParseChannelLayout does ("5.1(side)" becomes "5.1"); clients match their
+// channel badges against that form.
+func compatChannelLayout(layout string) string {
+	base, _, _ := strings.Cut(layout, "(")
+	return base
 }
 
 func audioChannelsDisplayName(channels int) string {
