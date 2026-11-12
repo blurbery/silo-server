@@ -13,7 +13,10 @@ import {
   type WebCapabilityProbe,
 } from "./client-context-v3";
 import { readMeasuredBandwidthKbps } from "./bandwidth-probe";
-import { FEATURE_NATIVE_HLS_PLAYBACK_V3, FEATURE_PROGRESSIVE_RANGE_REFUSAL_V3 } from "./protocol-v3";
+import {
+  FEATURE_NATIVE_HLS_PLAYBACK_V3,
+  FEATURE_PROGRESSIVE_RANGE_REFUSAL_V3,
+} from "./protocol-v3";
 
 afterEach(() => {
   vi.unstubAllGlobals();
