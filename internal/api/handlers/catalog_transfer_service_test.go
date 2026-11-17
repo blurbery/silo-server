@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -31,6 +32,9 @@ func (s *catalogTransferStore) PresignGetURL(_ context.Context, _, _ string, exp
 	return "https://example.invalid/seed.json.gz", nil
 }
 func (*catalogTransferStore) GetObject(context.Context, string, string) ([]byte, error) {
+	return nil, errors.New("unexpected storage read")
+}
+func (*catalogTransferStore) GetObjectStream(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, errors.New("unexpected storage read")
 }
 func (*catalogTransferStore) UploadFile(context.Context, string, string, string, string) (int64, error) {
