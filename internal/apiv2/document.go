@@ -52,6 +52,15 @@ const (
 // it holds.
 const securitySchemeBearer = "bearerAuth"
 
+// bearerAuthDescription says how each credential is sent and, for an API
+// key, which profile it acts as: what a script needs before its first call.
+const bearerAuthDescription = "A session token or an API key in the Authorization header. The server decides which it holds. " +
+	"An API key is sent as `Authorization: Bearer sa_…`. " +
+	"A profile key (created with profile_id) always acts as its profile: the server supplies X-Profile-Id, and a request naming another profile is 403 permission_denied. " +
+	"An account key chooses the profile per request with X-Profile-Id and needs no X-Profile-Token, even for a PIN-protected profile; GET /api/v2/profiles lists the IDs. " +
+	"Most profile operations require the header and answer 422 validation_failed without it. The few that accept its absence, such as GET /api/v2/profiles and GET /api/v2/user/libraries, then answer for the account as a whole. " +
+	"A key carrying scopes reaches only the operations those scopes admit and is 403 permission_denied everywhere else; GET /api/v2/api-keys/scopes lists them."
+
 // profileHeader is the header every profile-resolving class reads;
 // profileTokenHeader is the proof it reads alongside it for a PIN-locked
 // profile.
@@ -174,7 +183,7 @@ func profileTokenHeaderParam() *huma.Param {
 // householdProfileHeaderDescription documents X-Profile-Id on an operation
 // that runs the household profile gate (Operation.HouseholdProfileGate): the
 // header is optional only while no profile on the account is limited.
-const householdProfileHeaderDescription = "Optional while no profile on the authenticated account is PIN-protected or access-restricted (content-rating, advisory-age or library limits). Otherwise it is required: a request without it, or with an empty value, is refused with 422 validation_failed at header.x-profile-id; API keys are exempt. When present, it must name a profile of the authenticated account."
+const householdProfileHeaderDescription = "Optional while no profile on the authenticated account is PIN-protected or access-restricted (content-rating, advisory-age or library limits). Otherwise it is required: a request without it, or with an empty value, is refused with 422 validation_failed at header.x-profile-id. An API key, on an operation that admits one, is not held to this: a profile key's binding supplies the header and refuses any other profile, and an account key may name any profile on its account without X-Profile-Token, or send no header and act with the account's own access rather than one profile's limits and state. When present, it must name a profile of the authenticated account."
 
 // profileHeaderParam documents X-Profile-Id the way the class's gate chain
 // really reads it. Only ClassProfileScoped runs RequireProfile, so only it
@@ -644,6 +653,7 @@ func registerAll(reg *Registry) {
 	registerAdminNodeCommands(reg)
 	registerAdminNodeDrain(reg)
 	registerAdminNodeReload(reg)
+	registerAdminNodeKey(reg)
 	registerAdminNodeConfiguration(reg)
 	registerAdminServerStatus(reg)
 	registerAdminBrandingAssets(reg)
@@ -806,45 +816,34 @@ func GenerateOpenAPI() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// NullEnumWithheld lists the nullable members whose enum keeps null out,
-// keyed Schema.member, each with its reason. Such a member is nullable in
-// the document only because Patch documents every member that way, while
-// its handler refuses null; leaving null out of the enum is the part of its
-// schema that says so. The spec lint (internal/contractspec) reads the same
-// table and fails an entry that no longer names a nullable enum.
-var NullEnumWithheld = map[string]string{
-	"DownloadSubscriptionPatchBody.quality": "updateDownloadSubscription answers 400 for a null monitor field",
-}
-
 // admitNullInNullableEnums adds null to the enum of every nullable schema in
-// the components, except the members NullEnumWithheld lists. JSON Schema
-// applies type and enum separately, so ["string", "null"] with an enum of
-// strings alone still refuses null. The pass runs on the document only:
-// Huma's request validator accepts null on a nullable schema before it
-// checks the enum, and leaving the registered enum alone keeps null out of
-// its 422 message.
+// the components. JSON Schema applies type and enum separately, so
+// ["string", "null"] with an enum of strings alone still refuses null. The
+// pass runs on the document only: Huma's request validator accepts null on
+// a nullable schema before it checks the enum, and leaving the registered
+// enum alone keeps null out of its 422 message.
 func admitNullInNullableEnums(components map[string]*huma.Schema) {
-	var walk func(where string, s *huma.Schema)
-	walk = func(where string, s *huma.Schema) {
+	var walk func(s *huma.Schema)
+	walk = func(s *huma.Schema) {
 		if s == nil {
 			return
 		}
-		if _, withheld := NullEnumWithheld[where]; s.Nullable && len(s.Enum) > 0 && !slices.Contains(s.Enum, nil) && !withheld {
+		if s.Nullable && len(s.Enum) > 0 && !slices.Contains(s.Enum, nil) {
 			s.Enum = append(slices.Clip(s.Enum), nil)
 		}
-		for name, property := range s.Properties {
-			walk(where+"."+name, property)
+		for _, property := range s.Properties {
+			walk(property)
 		}
-		walk(where+".items", s.Items)
+		walk(s.Items)
 		if value, ok := s.AdditionalProperties.(*huma.Schema); ok {
-			walk(where+".additionalProperties", value)
+			walk(value)
 		}
 		for _, sub := range slices.Concat(s.OneOf, s.AnyOf, s.AllOf) {
-			walk(where, sub)
+			walk(sub)
 		}
 	}
-	for name, s := range components {
-		walk(name, s)
+	for _, s := range components {
+		walk(s)
 	}
 }
 

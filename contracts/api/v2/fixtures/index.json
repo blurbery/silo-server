@@ -7417,7 +7417,7 @@
       "response_headers": {
         "Cache-Control": "private, no-cache",
         "Content-Type": "application/json",
-        "ETag": "\"e524a14c4883542923d7e2be58ae12ff5a2e649615878e7fcafd8ff387f88801\""
+        "ETag": "\"e77118ae6a2649ae25baba0f650bd324b8bc731fa5e8775ff165ade34686e8d8\""
       },
       "response_media_type": "application/json",
       "schema": "#/components/schemas/HomeCapabilities",
@@ -7547,6 +7547,27 @@
       "response_media_type": "application/json",
       "schema": "#/components/schemas/Section",
       "body_file": "get_home_section_items_capped_ok.json"
+    },
+    {
+      "name": "get_home_section_items_collections_ok",
+      "operation_id": "getHomeSectionItems",
+      "scenario": "A row of collections: its cards are the collections the viewer can see, in collections, with no items; total_count is their number.",
+      "request": {
+        "method": "GET",
+        "path": "/api/v2/home/sections/franchises/items",
+        "headers": {
+          "Authorization": "Bearer tok-member",
+          "X-Profile-Id": "p-owner"
+        }
+      },
+      "expected_status": 200,
+      "response_headers": {
+        "Cache-Control": "no-store",
+        "Content-Type": "application/json"
+      },
+      "response_media_type": "application/json",
+      "schema": "#/components/schemas/Section",
+      "body_file": "get_home_section_items_collections_ok.json"
     },
     {
       "name": "get_home_section_items_item_limit_out_of_range",
@@ -9333,12 +9354,12 @@
     },
     {
       "name": "invitation_accepted",
-      "operation_id": "acceptInvitation",
+      "operation_id": "acceptInvitationLink",
       "scenario": "Invitation lifecycle with synthetic identities and credentials.",
       "request": {
         "method": "POST",
-        "path": "/api/v2/invitations/pending/accept",
-        "body": "{\"password\":\"synthetic-password\"}"
+        "path": "/api/v2/invitations/accept",
+        "body": "{\"token\":\"pending\",\"password\":\"synthetic-password\"}"
       },
       "expected_status": 201,
       "response_headers": {
@@ -9351,12 +9372,12 @@
     },
     {
       "name": "invitation_accepted_sign_in_required",
-      "operation_id": "acceptInvitation",
+      "operation_id": "acceptInvitationLink",
       "scenario": "Invitation lifecycle with synthetic identities and credentials.",
       "request": {
         "method": "POST",
-        "path": "/api/v2/invitations/sign-in-required/accept",
-        "body": "{\"password\":\"synthetic-password\"}"
+        "path": "/api/v2/invitations/accept",
+        "body": "{\"token\":\"sign-in-required\",\"password\":\"synthetic-password\"}"
       },
       "expected_status": 201,
       "response_headers": {
@@ -9386,11 +9407,12 @@
     },
     {
       "name": "invitation_lookup",
-      "operation_id": "lookupInvitation",
+      "operation_id": "lookupInvitationLink",
       "scenario": "Invitation lifecycle with synthetic identities and credentials.",
       "request": {
-        "method": "GET",
-        "path": "/api/v2/invitations/pending"
+        "method": "POST",
+        "path": "/api/v2/invitations/lookup",
+        "body": "{\"token\":\"pending\"}"
       },
       "expected_status": 200,
       "response_headers": {
@@ -9400,6 +9422,24 @@
       "response_media_type": "application/json",
       "schema": "#/components/schemas/InvitationLookup",
       "body_file": "invitation_lookup.json"
+    },
+    {
+      "name": "invitation_lookup_not_found",
+      "operation_id": "lookupInvitationLink",
+      "scenario": "Invitation lifecycle with synthetic identities and credentials.",
+      "request": {
+        "method": "POST",
+        "path": "/api/v2/invitations/lookup",
+        "body": "{\"token\":\"expired\"}"
+      },
+      "expected_status": 404,
+      "response_headers": {
+        "Cache-Control": "no-store",
+        "Content-Type": "application/problem+json"
+      },
+      "response_media_type": "application/problem+json",
+      "schema": "#/components/schemas/Problem",
+      "body_file": "invitation_lookup_not_found.json"
     },
     {
       "name": "link_account_identity_with_credentials_directory_refused",
@@ -12635,6 +12675,28 @@
       "body_file": null
     },
     {
+      "name": "notification_mute_many_notification_series",
+      "operation_id": "muteManyNotificationSeries",
+      "scenario": "The acting profile mutes several series at once; each distinct series gets an outcome in request order, and a series the viewer may not see is not_found.",
+      "request": {
+        "method": "POST",
+        "path": "/api/v2/notifications/series/mute",
+        "headers": {
+          "Authorization": "Bearer tok-member",
+          "X-Profile-Id": "p-owner"
+        },
+        "body": "{\"series_ids\":[\"series:bear\",\"series:wire\",\"series:hidden\"]}"
+      },
+      "expected_status": 200,
+      "response_headers": {
+        "Cache-Control": "no-store",
+        "Content-Type": "application/json"
+      },
+      "response_media_type": "application/json",
+      "schema": "#/components/schemas/NotificationSeriesMuteResults",
+      "body_file": "notification_mute_many_notification_series.json"
+    },
+    {
       "name": "notification_mute_notification_series",
       "operation_id": "muteNotificationSeries",
       "scenario": "The acting profile mutes one series: no new-episode notification for it on any channel until it unmutes. Repeating the call changes nothing.",
@@ -12798,6 +12860,28 @@
       "body_file": "notification_sync_notifications.json"
     },
     {
+      "name": "notification_unmute_many_notification_series",
+      "operation_id": "unmuteManyNotificationSeries",
+      "scenario": "The acting profile unmutes several series at once; a series that was not muted is unchanged.",
+      "request": {
+        "method": "POST",
+        "path": "/api/v2/notifications/series/unmute",
+        "headers": {
+          "Authorization": "Bearer tok-member",
+          "X-Profile-Id": "p-owner"
+        },
+        "body": "{\"series_ids\":[\"series:wire\",\"series:bear\"]}"
+      },
+      "expected_status": 200,
+      "response_headers": {
+        "Cache-Control": "no-store",
+        "Content-Type": "application/json"
+      },
+      "response_media_type": "application/json",
+      "schema": "#/components/schemas/NotificationSeriesMuteResults",
+      "body_file": "notification_unmute_many_notification_series.json"
+    },
+    {
       "name": "notification_unmute_notification_series",
       "operation_id": "unmuteNotificationSeries",
       "scenario": "The acting profile unmutes a series; it notifies again from the next new episode. Unmuting a series that is not muted changes nothing.",
@@ -12943,12 +13027,12 @@
     },
     {
       "name": "password_reset_completed",
-      "operation_id": "completePasswordReset",
+      "operation_id": "completePasswordResetLink",
       "scenario": "Password reset link lifecycle with synthetic identities and credentials.",
       "request": {
         "method": "POST",
-        "path": "/api/v2/password-resets/live/complete",
-        "body": "{\"password\":\"synthetic-password\"}"
+        "path": "/api/v2/password-resets/complete",
+        "body": "{\"token\":\"live\",\"password\":\"synthetic-password\"}"
       },
       "expected_status": 200,
       "response_headers": {
@@ -12960,13 +13044,31 @@
       "body_file": "password_reset_completed.json"
     },
     {
-      "name": "password_reset_completed_sign_in_required",
-      "operation_id": "completePasswordReset",
+      "name": "password_reset_completed_not_found",
+      "operation_id": "completePasswordResetLink",
       "scenario": "Password reset link lifecycle with synthetic identities and credentials.",
       "request": {
         "method": "POST",
-        "path": "/api/v2/password-resets/sign-in-required/complete",
-        "body": "{\"password\":\"synthetic-password\"}"
+        "path": "/api/v2/password-resets/complete",
+        "body": "{\"token\":\"spent\",\"password\":\"synthetic-password\"}"
+      },
+      "expected_status": 404,
+      "response_headers": {
+        "Cache-Control": "no-store",
+        "Content-Type": "application/problem+json"
+      },
+      "response_media_type": "application/problem+json",
+      "schema": "#/components/schemas/Problem",
+      "body_file": "password_reset_completed_not_found.json"
+    },
+    {
+      "name": "password_reset_completed_sign_in_required",
+      "operation_id": "completePasswordResetLink",
+      "scenario": "Password reset link lifecycle with synthetic identities and credentials.",
+      "request": {
+        "method": "POST",
+        "path": "/api/v2/password-resets/complete",
+        "body": "{\"token\":\"sign-in-required\",\"password\":\"synthetic-password\"}"
       },
       "expected_status": 200,
       "response_headers": {
@@ -12979,11 +13081,12 @@
     },
     {
       "name": "password_reset_lookup",
-      "operation_id": "lookupPasswordReset",
+      "operation_id": "lookupPasswordResetLink",
       "scenario": "Password reset link lifecycle with synthetic identities and credentials.",
       "request": {
-        "method": "GET",
-        "path": "/api/v2/password-resets/live"
+        "method": "POST",
+        "path": "/api/v2/password-resets/lookup",
+        "body": "{\"token\":\"live\"}"
       },
       "expected_status": 200,
       "response_headers": {
@@ -12993,6 +13096,24 @@
       "response_media_type": "application/json",
       "schema": "#/components/schemas/PasswordResetLookup",
       "body_file": "password_reset_lookup.json"
+    },
+    {
+      "name": "password_reset_lookup_not_found",
+      "operation_id": "lookupPasswordResetLink",
+      "scenario": "Password reset link lifecycle with synthetic identities and credentials.",
+      "request": {
+        "method": "POST",
+        "path": "/api/v2/password-resets/lookup",
+        "body": "{\"token\":\"spent\"}"
+      },
+      "expected_status": 404,
+      "response_headers": {
+        "Cache-Control": "no-store",
+        "Content-Type": "application/problem+json"
+      },
+      "response_media_type": "application/problem+json",
+      "schema": "#/components/schemas/Problem",
+      "body_file": "password_reset_lookup_not_found.json"
     },
     {
       "name": "pause_admin_download_preparations",

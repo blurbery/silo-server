@@ -7,7 +7,6 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/Silo-Server/silo-server/internal/models"
 )
@@ -50,7 +49,7 @@ type scopeRun struct {
 	groupOverrides map[string]models.MediaGroupOverride
 	subtitleCache  *externalSubtitleDirCache
 
-	newCount, updatedCount, unchangedCount, errorCount, processedCount atomic.Int64
+	newCount, updatedCount, unchangedCount, noVideoCount, retiredCount, errorCount, processedCount atomic.Int64
 }
 
 // newScopeRun loads the scope's overrides and starts its inference.
@@ -129,7 +128,15 @@ func (s *Scanner) processPrimaryPaths(ctx context.Context, run *scopeRun, primar
 		if ctx.Err() != nil {
 			break
 		}
-		batch, err := s.loadScanBatch(ctx, run, paths)
+		// Files already known to hold no video take no part in inference.
+		paths, knownNoVideo, retiredNoVideo, err := s.dropNoVideoPaths(ctx, run.folder, paths)
+		var batch *scanBatch
+		if err == nil {
+			run.noVideoCount.Add(int64(knownNoVideo))
+			run.retiredCount.Add(int64(retiredNoVideo))
+			run.processedCount.Add(int64(knownNoVideo))
+			batch, err = s.loadScanBatch(ctx, run, paths)
+		}
 		if err != nil {
 			// A read the cancellation cut short is that cancellation, which
 			// the caller reports; it is not a failed scan.
@@ -192,6 +199,11 @@ func (s *Scanner) processScanJob(ctx context.Context, run *scopeRun, job scanJob
 		slog.DebugContext(ctx, "scanner: file updated", "component", "scanner", "path", path, "reasons", updateReasons)
 	case actionUnchanged:
 		run.unchangedCount.Add(1)
+	case actionNoVideoRetired:
+		run.retiredCount.Add(1)
+		run.noVideoCount.Add(1)
+	case actionNoVideo:
+		run.noVideoCount.Add(1)
 	}
 	run.processedCount.Add(1)
 }
@@ -199,38 +211,21 @@ func (s *Scanner) processScanJob(ctx context.Context, run *scopeRun, job scanJob
 // logProgress reports the scope's processing progress on an interval until the
 // returned function is called.
 func (run *scopeRun) logProgress(ctx context.Context) (stop func()) {
-	stopProgress := make(chan struct{})
-	progressDone := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(scanProgressLogInterval)
-		defer ticker.Stop()
-		defer close(progressDone)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-stopProgress:
-				return
-			case <-ticker.C:
-				update := run.progress("processing", "Processing discovered files")
-				slog.InfoContext(ctx, "scanner: processing progress", "component", "scanner",
-					"folder_id", run.folder.ID,
-					"scope", run.scope,
-					"processed", update.FilesProcessed,
-					"total", update.TotalFiles,
-					"new", update.New,
-					"updated", update.Updated,
-					"unchanged", update.Unchanged,
-					"errors", update.Errors,
-				)
-				reportProgress(ctx, update)
-			}
-		}
-	}()
-	return func() {
-		close(stopProgress)
-		<-progressDone
-	}
+	return reportProgressEvery(ctx, scanProgressLogInterval, func() ProgressUpdate {
+		update := run.progress("processing", "Processing discovered files")
+		slog.InfoContext(ctx, "scanner: processing progress", "component", "scanner",
+			"folder_id", run.folder.ID,
+			"scope", run.scope,
+			"processed", update.FilesProcessed,
+			"total", update.TotalFiles,
+			"new", update.New,
+			"updated", update.Updated,
+			"unchanged", update.Unchanged,
+			"no_video", run.noVideoCount.Load(),
+			"errors", update.Errors,
+		)
+		return update
+	})
 }
 
 // processScopeExtras ingests a scope's extras and adds the outcome to result.

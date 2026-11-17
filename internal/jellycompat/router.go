@@ -98,6 +98,8 @@ func NewRouter(deps Dependencies) chi.Router {
 		subtitleRepo = subtitles.NewPgRepository(deps.DB, deps.SecretCipher)
 	}
 	itemsHandler := NewItemsHandler(deps.ContentService, deps.UserDataService, deps.IDCodec, deps.Config, deps.ImageCache, nextUpRepo, deps.BrowseRepo, deps.PersonRepo, deps.DetailSvc, deps.ItemRepo, deps.EpisodeRepo, deps.SeasonRepo, deps.AccessFilterFn, subtitleRepo)
+	shownRatings := newShownRatings(deps.RatingSources)
+	itemsHandler.mapper.ratings = shownRatings
 	itemsHandler.storeProvider = deps.UserStoreProvider
 	itemsHandler.adminDefaults = deps.AdminDefaults
 	itemsHandler.MarkerPopulation = deps.MarkerPopulation
@@ -144,6 +146,7 @@ func NewRouter(deps Dependencies) chi.Router {
 		autoscanVirtualFoldersRegistered = true
 	}
 	userDataHandler := NewUserDataHandler(deps.ContentService, deps.UserDataService, deps.IDCodec, deps.Config)
+	userDataHandler.mapper.ratings = shownRatings
 	if store, ok := deps.PlaybackStore.(*DurableCompatPlaybackStore); ok && store.pool != nil {
 		if manager, ok := deps.SessionMgr.(interface {
 			SetCompatActivityReader(playback.SessionActivityReader)
@@ -172,6 +175,10 @@ func NewRouter(deps Dependencies) chi.Router {
 	}
 	playbackHandler.NodePlanner = deps.NodePlanner
 	playbackHandler.JWTSecret = deps.JWTSecret
+	playbackHandler.NodeKeys = deps.NodeKeys
+	if deps.SourceGrants != nil {
+		playbackHandler.SourceGrants = deps.SourceGrants
+	}
 	// Compat transcode reconstruct is driven by the recipe carried in the durable
 	// compat playback store (jellycompat_playback_sessions); no separate native
 	// recipe table is needed.
@@ -188,7 +195,9 @@ func NewRouter(deps Dependencies) chi.Router {
 		playbackHandler.signalsNotifier = deps.RecWorker
 	}
 	playbackHandler.SettingsRepo = deps.SettingsRepo
+	playbackHandler.ratings = shownRatings
 	playbackHandler.RecipeNodeStore = deps.RecipeNodeStore
+	playbackHandler.StreamDeny = deps.StreamDeny
 	itemsHandler.themeRouter = compatThemeRouter(deps, playbackHandler)
 	itemsHandler.themeFFmpegPath = func() string { return playback.ResolveFFmpegPath(playbackHandler.FFmpegPath) }
 	playbackHandler.SessionSyncer = deps.SessionSyncer
@@ -199,6 +208,8 @@ func NewRouter(deps Dependencies) chi.Router {
 	if deps.KeptSubtitles != nil {
 		playbackHandler.SubtitleCache.SetEmbeddedSource(deps.KeptSubtitles)
 	}
+	playbackHandler.AudioPreferences = deps.AudioPreferences
+	playbackHandler.SubtitlePreferences = deps.SubtitlePreferences
 	if subtitleRepo != nil {
 		playbackHandler.SubtitleRepo = subtitleRepo
 		playbackHandler.SubtitleBlobs = deps.SubtitleBlobs
@@ -224,6 +235,7 @@ func NewRouter(deps Dependencies) chi.Router {
 	authHandler.avatars = userAvatars
 	displayPrefsHandler := NewDisplayPreferencesHandler(deps.UserStoreProvider)
 	recsHandler := NewRecommendationsHandler(deps.RecommendationReader, deps.ItemRepo, deps.DetailSvc, deps.UserDataService, deps.IDCodec, deps.Config, deps.AccessFilterFn)
+	recsHandler.mapper.ratings = shownRatings
 
 	r.Get("/System/Info/Public", systemHandler.HandlePublicInfo)
 	r.Get("/System/Info", systemHandler.HandleInfo)

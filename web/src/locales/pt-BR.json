@@ -98,7 +98,7 @@
   "catalog.sort.imdbRating": [
     {
       "type": 0,
-      "value": "Avaliação IMDb"
+      "value": "Avaliação no IMDb"
     }
   ],
   "catalog.sort.narrator": [
@@ -699,6 +699,18 @@
     {
       "type": 0,
       "value": "Coleção"
+    }
+  ],
+  "home.recipe.collectionPostersPick.description": [
+    {
+      "type": 0,
+      "value": "Mostra várias coleções como pôsteres. Cada uma abre a sua coleção."
+    }
+  ],
+  "home.recipe.collectionPostersPick.name": [
+    {
+      "type": 0,
+      "value": "Uma fileira de coleções"
     }
   ],
   "home.recipe.continueListeningDefault.description": [
@@ -1923,6 +1935,16 @@
     {
       "type": 0,
       "value": "Voltar"
+    }
+  ],
+  "player.scrubber.endsAt": [
+    {
+      "type": 0,
+      "value": "Termina às "
+    },
+    {
+      "type": 1,
+      "value": "time"
     }
   ],
   "player.seekInterval.choice": [
@@ -3444,6 +3466,16 @@
       "value": "Nada aqui pode ser reproduzido."
     }
   ],
+  "signIn.withProvider": [
+    {
+      "type": 0,
+      "value": "Entrar com "
+    },
+    {
+      "type": 1,
+      "value": "provider"
+    }
+  ],
   "subtitleSearch.hearingImpaired": [
     {
       "type": 0,
@@ -3614,6 +3646,78 @@
     {
       "type": 0,
       "value": "Falha na ação do grupo."
+    }
+  ],
+  "web.admin.access.groups.addUsers.addSelected": [
+    {
+      "type": 0,
+      "value": "Adicionar selecionados"
+    }
+  ],
+  "web.admin.access.groups.addUsers.addSelectedCount": [
+    {
+      "type": 0,
+      "value": "Adicionar selecionados ("
+    },
+    {
+      "type": 1,
+      "value": "count"
+    },
+    {
+      "type": 0,
+      "value": ")"
+    }
+  ],
+  "web.admin.access.groups.addUsers.description": [
+    {
+      "type": 0,
+      "value": "Contas comuns fora deste grupo. Contas de administrador não podem entrar em grupos."
+    }
+  ],
+  "web.admin.access.groups.addUsers.noGroup": [
+    {
+      "type": 0,
+      "value": "Sem grupo"
+    }
+  ],
+  "web.admin.access.groups.addUsers.noMatches": [
+    {
+      "type": 0,
+      "value": "Nenhum usuário corresponde à sua pesquisa."
+    }
+  ],
+  "web.admin.access.groups.addUsers.none": [
+    {
+      "type": 0,
+      "value": "Todas as contas comuns já estão aqui."
+    }
+  ],
+  "web.admin.access.groups.addUsers.search": [
+    {
+      "type": 0,
+      "value": "Pesquisar usuários"
+    }
+  ],
+  "web.admin.access.groups.addUsers.searchPlaceholder": [
+    {
+      "type": 0,
+      "value": "Pesquisar por nome de usuário ou e-mail"
+    }
+  ],
+  "web.admin.access.groups.addUsers.title": [
+    {
+      "type": 0,
+      "value": "Adicionar usuários a "
+    },
+    {
+      "type": 1,
+      "value": "group"
+    }
+  ],
+  "web.admin.access.groups.addUsers.unknownGroup": [
+    {
+      "type": 0,
+      "value": "Grupo desconhecido"
     }
   ],
   "web.admin.access.groups.allGroups": [
@@ -3802,6 +3906,142 @@
       },
       "offset": 0,
       "pluralType": "cardinal"
+    }
+  ],
+  "web.admin.access.groups.changes.allPermissions": [
+    {
+      "type": 0,
+      "value": "Todas"
+    }
+  ],
+  "web.admin.access.groups.changes.allowed": [
+    {
+      "type": 0,
+      "value": "Permitido"
+    }
+  ],
+  "web.admin.access.groups.changes.audioTranscoding": [
+    {
+      "type": 0,
+      "value": "Transcodificação de áudio"
+    }
+  ],
+  "web.admin.access.groups.changes.concurrentStreams": [
+    {
+      "type": 0,
+      "value": "Transmissões simultâneas"
+    }
+  ],
+  "web.admin.access.groups.changes.concurrentTranscodes": [
+    {
+      "type": 0,
+      "value": "Transcodificações simultâneas"
+    }
+  ],
+  "web.admin.access.groups.changes.convertedDownloads": [
+    {
+      "type": 0,
+      "value": "Downloads convertidos"
+    }
+  ],
+  "web.admin.access.groups.changes.downloads": [
+    {
+      "type": 0,
+      "value": "Downloads"
+    }
+  ],
+  "web.admin.access.groups.changes.householdProfiles": [
+    {
+      "type": 0,
+      "value": "Perfis da casa"
+    }
+  ],
+  "web.admin.access.groups.changes.libraries": [
+    {
+      "type": 0,
+      "value": "Bibliotecas"
+    }
+  ],
+  "web.admin.access.groups.changes.libraryId": [
+    {
+      "type": 0,
+      "value": "#"
+    },
+    {
+      "type": 1,
+      "value": "id"
+    }
+  ],
+  "web.admin.access.groups.changes.localBitrate": [
+    {
+      "type": 0,
+      "value": "Taxa de bits de transmissão local"
+    }
+  ],
+  "web.admin.access.groups.changes.noLibraries": [
+    {
+      "type": 0,
+      "value": "Nenhuma biblioteca"
+    }
+  ],
+  "web.admin.access.groups.changes.noPermissions": [
+    {
+      "type": 0,
+      "value": "Nenhuma"
+    }
+  ],
+  "web.admin.access.groups.changes.notAllowed": [
+    {
+      "type": 0,
+      "value": "Não permitido"
+    }
+  ],
+  "web.admin.access.groups.changes.permissions": [
+    {
+      "type": 0,
+      "value": "Permissões"
+    }
+  ],
+  "web.admin.access.groups.changes.playbackQuality": [
+    {
+      "type": 0,
+      "value": "Qualidade de reprodução"
+    }
+  ],
+  "web.admin.access.groups.changes.remoteBitrate": [
+    {
+      "type": 0,
+      "value": "Taxa de bits de transmissão remota"
+    }
+  ],
+  "web.admin.access.groups.changes.requestApproval": [
+    {
+      "type": 0,
+      "value": "Aprovação de solicitações"
+    }
+  ],
+  "web.admin.access.groups.changes.requestLimit": [
+    {
+      "type": 0,
+      "value": "Limite de solicitações"
+    }
+  ],
+  "web.admin.access.groups.changes.requests": [
+    {
+      "type": 0,
+      "value": "Solicitações"
+    }
+  ],
+  "web.admin.access.groups.changes.unlimited": [
+    {
+      "type": 0,
+      "value": "Ilimitado"
+    }
+  ],
+  "web.admin.access.groups.changes.videoTranscoding": [
+    {
+      "type": 0,
+      "value": "Transcodificação de vídeo"
     }
   ],
   "web.admin.access.groups.conflict.message": [
@@ -4124,10 +4364,125 @@
       "value": "Carregando grupos de acesso…"
     }
   ],
+  "web.admin.access.groups.members.addFailed": [
+    {
+      "type": 0,
+      "value": "Não foi possível adicionar alguns usuários:"
+    }
+  ],
+  "web.admin.access.groups.members.addUsers": [
+    {
+      "type": 0,
+      "value": "Adicionar usuários"
+    }
+  ],
+  "web.admin.access.groups.members.added": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " usuário adicionado a "
+            },
+            {
+              "type": 1,
+              "value": "group"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " de usuários adicionados a "
+            },
+            {
+              "type": 1,
+              "value": "group"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " usuários adicionados a "
+            },
+            {
+              "type": 1,
+              "value": "group"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
+  "web.admin.access.groups.members.couldNotAdd": [
+    {
+      "type": 0,
+      "value": "não foi possível adicionar"
+    }
+  ],
+  "web.admin.access.groups.members.couldNotMove": [
+    {
+      "type": 0,
+      "value": "não foi possível mover"
+    }
+  ],
   "web.admin.access.groups.members.empty": [
     {
       "type": 0,
       "value": "Nenhum membro ainda."
+    }
+  ],
+  "web.admin.access.groups.members.failure": [
+    {
+      "type": 1,
+      "value": "username"
+    },
+    {
+      "type": 0,
+      "value": ": "
+    },
+    {
+      "type": 1,
+      "value": "reason"
+    }
+  ],
+  "web.admin.access.groups.members.groupChanged": [
+    {
+      "type": 0,
+      "value": "Esta conta mudou depois da sua confirmação. Verifique a alteração e tente novamente."
+    }
+  ],
+  "web.admin.access.groups.members.groupsLoadFailed": [
+    {
+      "type": 0,
+      "value": "Não foi possível carregar os grupos de acesso, então ainda não é possível mover membros. "
+    },
+    {
+      "type": 8,
+      "value": "retry",
+      "children": [
+        {
+          "type": 0,
+          "value": "Tentar novamente"
+        }
+      ]
     }
   ],
   "web.admin.access.groups.members.heading": [
@@ -4162,6 +4517,351 @@
     {
       "type": 0,
       "value": "Carregando membros…"
+    }
+  ],
+  "web.admin.access.groups.members.manageHelp": [
+    {
+      "type": 0,
+      "value": "Mova membros para outro grupo ou adicione usuários a este."
+    }
+  ],
+  "web.admin.access.groups.members.moveFailed": [
+    {
+      "type": 0,
+      "value": "Não foi possível mover alguns usuários:"
+    }
+  ],
+  "web.admin.access.groups.members.moveSelected": [
+    {
+      "type": 0,
+      "value": "Mover selecionados"
+    }
+  ],
+  "web.admin.access.groups.members.moveSelectedCount": [
+    {
+      "type": 0,
+      "value": "Mover selecionados ("
+    },
+    {
+      "type": 1,
+      "value": "count"
+    },
+    {
+      "type": 0,
+      "value": ")"
+    }
+  ],
+  "web.admin.access.groups.members.moveTarget": [
+    {
+      "type": 0,
+      "value": "Mover membros selecionados para"
+    }
+  ],
+  "web.admin.access.groups.members.moveTargetPlaceholder": [
+    {
+      "type": 0,
+      "value": "Mover para o grupo…"
+    }
+  ],
+  "web.admin.access.groups.members.moved": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " usuário movido para "
+            },
+            {
+              "type": 1,
+              "value": "group"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " de usuários movidos para "
+            },
+            {
+              "type": 1,
+              "value": "group"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " usuários movidos para "
+            },
+            {
+              "type": 1,
+              "value": "group"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
+  "web.admin.access.groups.members.noMatches": [
+    {
+      "type": 0,
+      "value": "Nenhum membro corresponde à sua pesquisa."
+    }
+  ],
+  "web.admin.access.groups.members.search": [
+    {
+      "type": 0,
+      "value": "Pesquisar membros"
+    }
+  ],
+  "web.admin.access.groups.members.selectMember": [
+    {
+      "type": 0,
+      "value": "Selecionar "
+    },
+    {
+      "type": 1,
+      "value": "username"
+    }
+  ],
+  "web.admin.access.groups.members.selectedHidden": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " membro selecionado não está visível, e a movimentação o inclui."
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " de membros selecionados não estão visíveis, e a movimentação os inclui."
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " membros selecionados não estão visíveis, e a movimentação os inclui."
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
+  "web.admin.access.groups.moveConfirm.change": [
+    {
+      "type": 1,
+      "value": "label"
+    },
+    {
+      "type": 0,
+      "value": ": "
+    },
+    {
+      "type": 1,
+      "value": "from"
+    },
+    {
+      "type": 0,
+      "value": " → "
+    },
+    {
+      "type": 1,
+      "value": "to"
+    }
+  ],
+  "web.admin.access.groups.moveConfirm.description": [
+    {
+      "type": 0,
+      "value": "As configurações que um usuário substituiu na própria conta continuam como estão. O novo acesso vale na hora, sem encerrar a sessão."
+    }
+  ],
+  "web.admin.access.groups.moveConfirm.fromGroup": [
+    {
+      "type": 1,
+      "value": "count"
+    },
+    {
+      "type": 0,
+      "value": " de "
+    },
+    {
+      "type": 1,
+      "value": "group"
+    }
+  ],
+  "web.admin.access.groups.moveConfirm.fromNoGroup": [
+    {
+      "type": 1,
+      "value": "count"
+    },
+    {
+      "type": 0,
+      "value": " sem grupo"
+    }
+  ],
+  "web.admin.access.groups.moveConfirm.fromUnknownGroup": [
+    {
+      "type": 1,
+      "value": "count"
+    },
+    {
+      "type": 0,
+      "value": " do grupo #"
+    },
+    {
+      "type": 1,
+      "value": "id"
+    }
+  ],
+  "web.admin.access.groups.moveConfirm.loadingTerms": [
+    {
+      "type": 0,
+      "value": "Carregando configurações de solicitação…"
+    }
+  ],
+  "web.admin.access.groups.moveConfirm.move": [
+    {
+      "type": 0,
+      "value": "Mover"
+    }
+  ],
+  "web.admin.access.groups.moveConfirm.moving": [
+    {
+      "type": 0,
+      "value": "Movendo…"
+    }
+  ],
+  "web.admin.access.groups.moveConfirm.noChanges": [
+    {
+      "type": 0,
+      "value": "Nenhuma configuração herdada muda."
+    }
+  ],
+  "web.admin.access.groups.moveConfirm.sourceUnknown": [
+    {
+      "type": 0,
+      "value": "Não foi possível carregar o grupo atual, então não se sabe quais configurações mudam."
+    }
+  ],
+  "web.admin.access.groups.moveConfirm.termsFailed": [
+    {
+      "type": 0,
+      "value": "Não foi possível carregar as configurações de solicitação dos grupos, então não se sabe quais configurações mudam."
+    }
+  ],
+  "web.admin.access.groups.moveConfirm.title": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Mover "
+            },
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " usuário para "
+            },
+            {
+              "type": 1,
+              "value": "group"
+            },
+            {
+              "type": 0,
+              "value": "?"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Mover "
+            },
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " de usuários para "
+            },
+            {
+              "type": 1,
+              "value": "group"
+            },
+            {
+              "type": 0,
+              "value": "?"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Mover "
+            },
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " usuários para "
+            },
+            {
+              "type": 1,
+              "value": "group"
+            },
+            {
+              "type": 0,
+              "value": "?"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
     }
   ],
   "web.admin.access.groups.newGroup": [
@@ -5012,6 +5712,12 @@
     {
       "type": 0,
       "value": "O que mudou? (opcional, mostrado no histórico)"
+    }
+  ],
+  "web.admin.access.policy.editor.compileIssueFallback": [
+    {
+      "type": 0,
+      "value": "Erro de compilação da política"
     }
   ],
   "web.admin.access.policy.editor.compileIssues": [
@@ -5944,6 +6650,44 @@
       "value": "version"
     }
   ],
+  "web.admin.activity.bitrate.limit": [
+    {
+      "type": 0,
+      "value": "limite "
+    },
+    {
+      "type": 1,
+      "value": "rate"
+    }
+  ],
+  "web.admin.activity.bitrate.limitAndSource": [
+    {
+      "type": 0,
+      "value": "limite "
+    },
+    {
+      "type": 1,
+      "value": "limit"
+    },
+    {
+      "type": 0,
+      "value": " · origem "
+    },
+    {
+      "type": 1,
+      "value": "source"
+    }
+  ],
+  "web.admin.activity.bitrate.source": [
+    {
+      "type": 0,
+      "value": "origem "
+    },
+    {
+      "type": 1,
+      "value": "rate"
+    }
+  ],
   "web.admin.activity.client.agent": [
     {
       "type": 0,
@@ -5954,6 +6698,12 @@
     {
       "type": 0,
       "value": "App"
+    }
+  ],
+  "web.admin.activity.client.device": [
+    {
+      "type": 0,
+      "value": "Dispositivo"
     }
   ],
   "web.admin.activity.client.heading": [
@@ -5972,6 +6722,12 @@
     {
       "type": 0,
       "value": "Ações"
+    }
+  ],
+  "web.admin.activity.column.bitrate": [
+    {
+      "type": 0,
+      "value": "Taxa de bits"
     }
   ],
   "web.admin.activity.column.playback": [
@@ -6512,16 +7268,16 @@
       "value": "Atividade"
     }
   ],
+  "web.admin.activity.panel.decision": [
+    {
+      "type": 0,
+      "value": "Decisão"
+    }
+  ],
   "web.admin.activity.panel.event": [
     {
       "type": 0,
       "value": "evento"
-    }
-  ],
-  "web.admin.activity.panel.heading": [
-    {
-      "type": 0,
-      "value": "Reprodução"
     }
   ],
   "web.admin.activity.panel.loadingFfmpeg": [
@@ -6540,6 +7296,12 @@
     {
       "type": 0,
       "value": "Abrir logs completos do FFmpeg"
+    }
+  ],
+  "web.admin.activity.panel.reasons": [
+    {
+      "type": 0,
+      "value": "Motivos"
     }
   ],
   "web.admin.activity.panel.refreshing": [
@@ -6598,6 +7360,210 @@
     {
       "type": 0,
       "value": "Ao vivo"
+    }
+  ],
+  "web.admin.activity.reason.audioChannelsUnsupported.description": [
+    {
+      "type": 0,
+      "value": "O áudio tem mais canais do que a saída do dispositivo suporta."
+    }
+  ],
+  "web.admin.activity.reason.audioChannelsUnsupported.label": [
+    {
+      "type": 0,
+      "value": "Canais de áudio demais"
+    }
+  ],
+  "web.admin.activity.reason.audioCodecUnsupported.description": [
+    {
+      "type": 0,
+      "value": "O dispositivo, ou o formato de transmissão de que ele precisa, não reproduz este codec de áudio."
+    }
+  ],
+  "web.admin.activity.reason.audioCodecUnsupported.label": [
+    {
+      "type": 0,
+      "value": "Codec de áudio não suportado"
+    }
+  ],
+  "web.admin.activity.reason.audioTrackSelection.description": [
+    {
+      "type": 0,
+      "value": "A faixa de áudio selecionada não pode ser reproduzida diretamente do arquivo original."
+    }
+  ],
+  "web.admin.activity.reason.audioTrackSelection.label": [
+    {
+      "type": 0,
+      "value": "Seleção de faixa de áudio"
+    }
+  ],
+  "web.admin.activity.reason.bandwidthCap.description": [
+    {
+      "type": 0,
+      "value": "A opção Taxa de bits máxima do perfil ou do dispositivo está abaixo da taxa de bits original."
+    }
+  ],
+  "web.admin.activity.reason.bandwidthCap.label": [
+    {
+      "type": 0,
+      "value": "Opção Taxa de bits máxima"
+    }
+  ],
+  "web.admin.activity.reason.bandwidthLimit.description": [
+    {
+      "type": 0,
+      "value": "O app mediu esta conexão como lenta demais para a taxa de bits original."
+    }
+  ],
+  "web.admin.activity.reason.bandwidthLimit.label": [
+    {
+      "type": 0,
+      "value": "Conexão lenta demais"
+    }
+  ],
+  "web.admin.activity.reason.buffering.description": [
+    {
+      "type": 0,
+      "value": "A reprodução ficou carregando antes neste dispositivo e nesta conexão, nesta sessão ou em uma recente, então o servidor reduziu a qualidade."
+    }
+  ],
+  "web.admin.activity.reason.buffering.label": [
+    {
+      "type": 0,
+      "value": "Carregamento anterior"
+    }
+  ],
+  "web.admin.activity.reason.containerUnsupported.description": [
+    {
+      "type": 0,
+      "value": "O dispositivo não consegue abrir o contêiner deste arquivo."
+    }
+  ],
+  "web.admin.activity.reason.containerUnsupported.label": [
+    {
+      "type": 0,
+      "value": "Contêiner não suportado"
+    }
+  ],
+  "web.admin.activity.reason.deviceWorkaround.description": [
+    {
+      "type": 0,
+      "value": "O áudio é convertido para evitar um bug de reprodução conhecido neste dispositivo."
+    }
+  ],
+  "web.admin.activity.reason.deviceWorkaround.label": [
+    {
+      "type": 0,
+      "value": "Ajuste de áudio do dispositivo"
+    }
+  ],
+  "web.admin.activity.reason.directPlayFailed.description": [
+    {
+      "type": 0,
+      "value": "A transmissão original não foi reproduzida no dispositivo, então o servidor a converte."
+    }
+  ],
+  "web.admin.activity.reason.directPlayFailed.label": [
+    {
+      "type": 0,
+      "value": "Falha na reprodução direta"
+    }
+  ],
+  "web.admin.activity.reason.dynamicRangeUnsupported.description": [
+    {
+      "type": 0,
+      "value": "A tela não consegue mostrar este vídeo HDR ou Dolby Vision como ele é."
+    }
+  ],
+  "web.admin.activity.reason.dynamicRangeUnsupported.label": [
+    {
+      "type": 0,
+      "value": "HDR não suportado"
+    }
+  ],
+  "web.admin.activity.reason.qualitySelected.description": [
+    {
+      "type": 0,
+      "value": "O espectador escolheu uma qualidade inferior à original."
+    }
+  ],
+  "web.admin.activity.reason.qualitySelected.label": [
+    {
+      "type": 0,
+      "value": "Qualidade escolhida pelo espectador"
+    }
+  ],
+  "web.admin.activity.reason.resolutionLimit.description": [
+    {
+      "type": 0,
+      "value": "A resolução do vídeo é maior do que o dispositivo suporta."
+    }
+  ],
+  "web.admin.activity.reason.resolutionLimit.label": [
+    {
+      "type": 0,
+      "value": "Acima da resolução do dispositivo"
+    }
+  ],
+  "web.admin.activity.reason.serverBitrateLimit.description": [
+    {
+      "type": 0,
+      "value": "O grupo de acesso do usuário permite uma taxa de bits menor que a original para esta transmissão local ou remota."
+    }
+  ],
+  "web.admin.activity.reason.serverBitrateLimit.label": [
+    {
+      "type": 0,
+      "value": "Limite do grupo de acesso"
+    }
+  ],
+  "web.admin.activity.reason.subtitleBurnIn.description": [
+    {
+      "type": 0,
+      "value": "As legendas selecionadas são desenhadas no vídeo porque o dispositivo não consegue mostrá-las."
+    }
+  ],
+  "web.admin.activity.reason.subtitleBurnIn.label": [
+    {
+      "type": 0,
+      "value": "Legendas gravadas no vídeo"
+    }
+  ],
+  "web.admin.activity.reason.subtitleUnsupported.description": [
+    {
+      "type": 0,
+      "value": "As legendas selecionadas não podem ser entregues com o arquivo original."
+    }
+  ],
+  "web.admin.activity.reason.subtitleUnsupported.label": [
+    {
+      "type": 0,
+      "value": "Legendas não suportadas"
+    }
+  ],
+  "web.admin.activity.reason.videoCapabilityUnconfirmed.description": [
+    {
+      "type": 0,
+      "value": "O app não conseguiu confirmar que o dispositivo decodifica este vídeo, então o servidor o converte por segurança."
+    }
+  ],
+  "web.admin.activity.reason.videoCapabilityUnconfirmed.label": [
+    {
+      "type": 0,
+      "value": "Suporte a vídeo não confirmado"
+    }
+  ],
+  "web.admin.activity.reason.videoCodecUnsupported.description": [
+    {
+      "type": 0,
+      "value": "O dispositivo não consegue decodificar o codec, o perfil ou a profundidade de bits deste vídeo."
+    }
+  ],
+  "web.admin.activity.reason.videoCodecUnsupported.label": [
+    {
+      "type": 0,
+      "value": "Codec de vídeo não suportado"
     }
   ],
   "web.admin.activity.route.localServer": [
@@ -6698,6 +7664,74 @@
       "value": "method"
     }
   ],
+  "web.admin.activity.row.moreReasons": [
+    {
+      "type": 0,
+      "value": "+"
+    },
+    {
+      "type": 1,
+      "value": "count_text"
+    }
+  ],
+  "web.admin.activity.row.moreReasonsLabel": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Mostrar mais "
+            },
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " motivo"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Mostrar mais "
+            },
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " de motivos"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Mostrar mais "
+            },
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " motivos"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
   "web.admin.activity.row.paused": [
     {
       "type": 0,
@@ -6732,6 +7766,72 @@
       "value": "Ver logs"
     }
   ],
+  "web.admin.activity.session.heading": [
+    {
+      "type": 0,
+      "value": "Sessão"
+    }
+  ],
+  "web.admin.activity.session.id": [
+    {
+      "type": 0,
+      "value": "ID da sessão"
+    }
+  ],
+  "web.admin.activity.session.lastReport": [
+    {
+      "type": 0,
+      "value": "Último relatório"
+    }
+  ],
+  "web.admin.activity.session.lastReportAgo": [
+    {
+      "type": 0,
+      "value": "há "
+    },
+    {
+      "type": 1,
+      "value": "elapsed"
+    }
+  ],
+  "web.admin.activity.session.remoteControl": [
+    {
+      "type": 0,
+      "value": "Controle remoto"
+    }
+  ],
+  "web.admin.activity.session.remoteControlAvailable": [
+    {
+      "type": 0,
+      "value": "Disponível"
+    }
+  ],
+  "web.admin.activity.session.remoteControlUnavailable": [
+    {
+      "type": 0,
+      "value": "Indisponível"
+    }
+  ],
+  "web.admin.activity.session.started": [
+    {
+      "type": 0,
+      "value": "Início"
+    }
+  ],
+  "web.admin.activity.session.startedAgo": [
+    {
+      "type": 1,
+      "value": "time"
+    },
+    {
+      "type": 0,
+      "value": " · há "
+    },
+    {
+      "type": 1,
+      "value": "elapsed"
+    }
+  ],
   "web.admin.activity.sort.group": [
     {
       "type": 0,
@@ -6742,6 +7842,16 @@
     {
       "type": 0,
       "value": "Ordenar"
+    }
+  ],
+  "web.admin.activity.summary.bandwidth": [
+    {
+      "type": 1,
+      "value": "rate"
+    },
+    {
+      "type": 0,
+      "value": " de saída"
     }
   ],
   "web.admin.activity.summary.byNode": [
@@ -6800,6 +7910,26 @@
       "value": "count"
     }
   ],
+  "web.admin.activity.summary.paused": [
+    {
+      "type": 1,
+      "value": "count_text"
+    },
+    {
+      "type": 0,
+      "value": " em pausa"
+    }
+  ],
+  "web.admin.activity.summary.remote": [
+    {
+      "type": 1,
+      "value": "count_text"
+    },
+    {
+      "type": 0,
+      "value": " em acesso remoto"
+    }
+  ],
   "web.admin.activity.summary.unknownOutputContainer": [
     {
       "type": 0,
@@ -6810,6 +7940,52 @@
     {
       "type": 0,
       "value": "Origem desconhecida"
+    }
+  ],
+  "web.admin.activity.summary.videoTranscodes": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " transcodificação de vídeo"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " de transcodificações de vídeo"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " transcodificações de vídeo"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
     }
   ],
   "web.admin.activity.toneMap.hardware": [
@@ -8422,6 +9598,12 @@
     {
       "type": 0,
       "value": "Este caminho corresponde a mais de uma biblioteca."
+    }
+  ],
+  "web.admin.autoscan.activity.reason.pathIgnored": [
+    {
+      "type": 0,
+      "value": "Os arquivos de exclusão da biblioteca excluem este arquivo, então ele não foi verificado."
     }
   ],
   "web.admin.autoscan.activity.reason.pathNotFileOrDir": [
@@ -24944,6 +26126,46 @@
       "value": "Contagem não carregada"
     }
   ],
+  "web.admin.common.downloadAccess.conversionOff": [
+    {
+      "type": 0,
+      "value": "O servidor não está preparando cópias compatíveis com dispositivos, então todo download é o arquivo original. Ative em "
+    },
+    {
+      "type": 8,
+      "value": "link",
+      "children": [
+        {
+          "type": 0,
+          "value": "Configurações → Downloads"
+        }
+      ]
+    },
+    {
+      "type": 0,
+      "value": "."
+    }
+  ],
+  "web.admin.common.downloadAccess.serverOff": [
+    {
+      "type": 0,
+      "value": "Os downloads estão desativados para todo o servidor, então ninguém pode baixar. Ative-os em "
+    },
+    {
+      "type": 8,
+      "value": "link",
+      "children": [
+        {
+          "type": 0,
+          "value": "Configurações → Downloads"
+        }
+      ]
+    },
+    {
+      "type": 0,
+      "value": "."
+    }
+  ],
   "web.admin.common.editorConflict.message": [
     {
       "type": 0,
@@ -30844,6 +32066,54 @@
       "value": "Com falha"
     }
   ],
+  "web.admin.common.units.gigabytes": [
+    {
+      "type": 0,
+      "value": "GB"
+    }
+  ],
+  "web.admin.common.units.hourRange": [
+    {
+      "type": 0,
+      "value": "0-23"
+    }
+  ],
+  "web.admin.common.units.kilobytes": [
+    {
+      "type": 0,
+      "value": "KB"
+    }
+  ],
+  "web.admin.common.units.megabitsPerSecond": [
+    {
+      "type": 0,
+      "value": "Mbps"
+    }
+  ],
+  "web.admin.common.units.megabytes": [
+    {
+      "type": 0,
+      "value": "MB"
+    }
+  ],
+  "web.admin.common.units.milliseconds": [
+    {
+      "type": 0,
+      "value": "ms"
+    }
+  ],
+  "web.admin.common.units.percent": [
+    {
+      "type": 0,
+      "value": "%"
+    }
+  ],
+  "web.admin.common.units.pixels": [
+    {
+      "type": 0,
+      "value": "px"
+    }
+  ],
   "web.admin.common.userProfiles.createFailed": [
     {
       "type": 0,
@@ -31140,6 +32410,100 @@
       "value": "Restaurar o layout padrão"
     }
   ],
+  "web.admin.dashboard.format.duration.days": [
+    {
+      "type": 1,
+      "value": "days"
+    },
+    {
+      "type": 0,
+      "value": " d"
+    }
+  ],
+  "web.admin.dashboard.format.duration.daysHours": [
+    {
+      "type": 1,
+      "value": "days"
+    },
+    {
+      "type": 0,
+      "value": " d "
+    },
+    {
+      "type": 1,
+      "value": "hours"
+    },
+    {
+      "type": 0,
+      "value": " h"
+    }
+  ],
+  "web.admin.dashboard.format.duration.hours": [
+    {
+      "type": 1,
+      "value": "hours"
+    },
+    {
+      "type": 0,
+      "value": " h"
+    }
+  ],
+  "web.admin.dashboard.format.duration.hoursMinutes": [
+    {
+      "type": 1,
+      "value": "hours"
+    },
+    {
+      "type": 0,
+      "value": " h "
+    },
+    {
+      "type": 1,
+      "value": "minutes"
+    },
+    {
+      "type": 0,
+      "value": " min"
+    }
+  ],
+  "web.admin.dashboard.format.duration.minutes": [
+    {
+      "type": 1,
+      "value": "minutes"
+    },
+    {
+      "type": 0,
+      "value": " min"
+    }
+  ],
+  "web.admin.dashboard.format.duration.minutesSeconds": [
+    {
+      "type": 1,
+      "value": "minutes"
+    },
+    {
+      "type": 0,
+      "value": " min "
+    },
+    {
+      "type": 1,
+      "value": "seconds"
+    },
+    {
+      "type": 0,
+      "value": " s"
+    }
+  ],
+  "web.admin.dashboard.format.duration.seconds": [
+    {
+      "type": 1,
+      "value": "seconds"
+    },
+    {
+      "type": 0,
+      "value": " s"
+    }
+  ],
   "web.admin.dashboard.format.fileCount": [
     {
       "type": 6,
@@ -31184,6 +32548,16 @@
       },
       "offset": 0,
       "pluralType": "cardinal"
+    }
+  ],
+  "web.admin.dashboard.format.latencyMs": [
+    {
+      "type": 1,
+      "value": "value"
+    },
+    {
+      "type": 0,
+      "value": " ms"
     }
   ],
   "web.admin.dashboard.format.scanQueued": [
@@ -31350,6 +32724,16 @@
     {
       "type": 0,
       "value": "Aguardando capacidade"
+    }
+  ],
+  "web.admin.dashboard.format.watchTimeHours": [
+    {
+      "type": 1,
+      "value": "hours"
+    },
+    {
+      "type": 0,
+      "value": " h"
     }
   ],
   "web.admin.dashboard.grid.added": [
@@ -32798,6 +34182,12 @@
       "value": "Não foi possível carregar o histórico de transmissões."
     }
   ],
+  "web.admin.dashboard.widgets.concurrentStreams.otherMethod": [
+    {
+      "type": 0,
+      "value": "Outro"
+    }
+  ],
   "web.admin.dashboard.widgets.concurrentStreams.peak": [
     {
       "type": 0,
@@ -32818,6 +34208,42 @@
     {
       "type": 0,
       "value": "Transmissões simultâneas"
+    }
+  ],
+  "web.admin.dashboard.widgets.concurrentStreams.viewLines": [
+    {
+      "type": 0,
+      "value": "Linhas"
+    }
+  ],
+  "web.admin.dashboard.widgets.concurrentStreams.viewLinesLabel": [
+    {
+      "type": 0,
+      "value": "Mostrar cada método de reprodução como uma linha"
+    }
+  ],
+  "web.admin.dashboard.widgets.concurrentStreams.viewStacked": [
+    {
+      "type": 0,
+      "value": "Empilhado"
+    }
+  ],
+  "web.admin.dashboard.widgets.concurrentStreams.viewStackedLabel": [
+    {
+      "type": 0,
+      "value": "Mostrar os métodos de reprodução empilhados"
+    }
+  ],
+  "web.admin.dashboard.widgets.concurrentStreams.viewTotal": [
+    {
+      "type": 0,
+      "value": "Total"
+    }
+  ],
+  "web.admin.dashboard.widgets.concurrentStreams.viewTotalLabel": [
+    {
+      "type": 0,
+      "value": "Mostrar só o total de transmissões"
     }
   ],
   "web.admin.dashboard.widgets.downloads.empty": [
@@ -49558,6 +50984,34 @@
       "pluralType": "cardinal"
     }
   ],
+  "web.admin.libraries.list.hidePaths": [
+    {
+      "type": 0,
+      "value": "Ocultar caminhos"
+    }
+  ],
+  "web.admin.libraries.list.moreActions": [
+    {
+      "type": 0,
+      "value": "Mais ações para "
+    },
+    {
+      "type": 1,
+      "value": "name"
+    }
+  ],
+  "web.admin.libraries.list.moveDown": [
+    {
+      "type": 0,
+      "value": "Mover para baixo"
+    }
+  ],
+  "web.admin.libraries.list.moveUp": [
+    {
+      "type": 0,
+      "value": "Mover para cima"
+    }
+  ],
   "web.admin.libraries.list.neverScanned": [
     {
       "type": 0,
@@ -49586,6 +51040,12 @@
     {
       "type": 0,
       "value": "Fazer varredura da biblioteca"
+    }
+  ],
+  "web.admin.libraries.list.showPaths": [
+    {
+      "type": 0,
+      "value": "Mostrar caminhos"
     }
   ],
   "web.admin.libraries.list.stopRefresh": [
@@ -52787,6 +54247,30 @@
       "value": "Salvando…"
     }
   ],
+  "web.admin.nodes.form.sourceAccess": [
+    {
+      "type": 0,
+      "value": "Acesso à origem"
+    }
+  ],
+  "web.admin.nodes.form.sourceAccessCore": [
+    {
+      "type": 0,
+      "value": "Pelos servidores de API"
+    }
+  ],
+  "web.admin.nodes.form.sourceAccessHelp": [
+    {
+      "type": 0,
+      "value": "Pelos servidores de API, o nó não precisa de um ponto de montagem da biblioteca, mas cada byte que ele lê passa pelos servidores de API, então eles precisam ter largura de banda para isso."
+    }
+  ],
+  "web.admin.nodes.form.sourceAccessLocal": [
+    {
+      "type": 0,
+      "value": "Ponto de montagem da biblioteca no nó"
+    }
+  ],
   "web.admin.nodes.form.type": [
     {
       "type": 0,
@@ -53419,6 +54903,200 @@
     {
       "type": 0,
       "value": "Software"
+    }
+  ],
+  "web.admin.nodes.key.close": [
+    {
+      "type": 0,
+      "value": "Fechar"
+    }
+  ],
+  "web.admin.nodes.key.copied": [
+    {
+      "type": 0,
+      "value": "Copiado"
+    }
+  ],
+  "web.admin.nodes.key.copyFailed": [
+    {
+      "type": 0,
+      "value": "Não foi possível copiar. Selecione o texto e copie manualmente."
+    }
+  ],
+  "web.admin.nodes.key.copyKey": [
+    {
+      "type": 0,
+      "value": "Copiar chave"
+    }
+  ],
+  "web.admin.nodes.key.copySettings": [
+    {
+      "type": 0,
+      "value": "Copiar configurações"
+    }
+  ],
+  "web.admin.nodes.key.coreUrlHelp": [
+    {
+      "type": 0,
+      "value": "O endereço que o nó usa para acessar este servidor. Com vários servidores de API, use o endereço com balanceamento de carga."
+    }
+  ],
+  "web.admin.nodes.key.coreUrlLabel": [
+    {
+      "type": 0,
+      "value": "Endereço do servidor para o nó"
+    }
+  ],
+  "web.admin.nodes.key.coreUrlMissing": [
+    {
+      "type": 0,
+      "value": "Informe o endereço do servidor para completar as configurações."
+    }
+  ],
+  "web.admin.nodes.key.dialogTitle": [
+    {
+      "type": 0,
+      "value": "Chave de "
+    },
+    {
+      "type": 1,
+      "value": "name"
+    }
+  ],
+  "web.admin.nodes.key.issue": [
+    {
+      "type": 0,
+      "value": "Emitir chave"
+    }
+  ],
+  "web.admin.nodes.key.issueFor": [
+    {
+      "type": 0,
+      "value": "Emitir uma chave para "
+    },
+    {
+      "type": 1,
+      "value": "name"
+    }
+  ],
+  "web.admin.nodes.key.issued": [
+    {
+      "type": 0,
+      "value": "Chave emitida"
+    }
+  ],
+  "web.admin.nodes.key.issuing": [
+    {
+      "type": 0,
+      "value": "Emitindo uma chave…"
+    }
+  ],
+  "web.admin.nodes.key.keyLabel": [
+    {
+      "type": 0,
+      "value": "Chave do nó"
+    }
+  ],
+  "web.admin.nodes.key.later": [
+    {
+      "type": 0,
+      "value": "Agora não"
+    }
+  ],
+  "web.admin.nodes.key.missing": [
+    {
+      "type": 0,
+      "value": "Sem chave: este nó não recebe trabalho até que uma chave seja emitida"
+    }
+  ],
+  "web.admin.nodes.key.notShownAgain": [
+    {
+      "type": 0,
+      "value": "Copie a chave agora. Ela não será mostrada novamente; se você a perder, gere uma nova chave e reinicie o nó com ela."
+    }
+  ],
+  "web.admin.nodes.key.offer": [
+    {
+      "type": 1,
+      "value": "name"
+    },
+    {
+      "type": 0,
+      "value": " não recebe trabalho até ter uma chave. Emita uma agora para obter as configurações com que o nó é iniciado."
+    }
+  ],
+  "web.admin.nodes.key.rotate": [
+    {
+      "type": 0,
+      "value": "Trocar chave"
+    }
+  ],
+  "web.admin.nodes.key.rotateDescription": [
+    {
+      "type": 0,
+      "value": "A chave atual para de funcionar imediatamente. O nó perde a conexão com este servidor: as transmissões em andamento falham, e ele não recebe trabalho até que você o reinicie com a nova chave."
+    }
+  ],
+  "web.admin.nodes.key.rotateDrainHint": [
+    {
+      "type": 0,
+      "value": "Para não interromper transmissões, esvazie o nó primeiro e troque a chave quando ele mostrar Esvaziado."
+    }
+  ],
+  "web.admin.nodes.key.rotateFor": [
+    {
+      "type": 0,
+      "value": "Trocar a chave de "
+    },
+    {
+      "type": 1,
+      "value": "name"
+    }
+  ],
+  "web.admin.nodes.key.rotateTitle": [
+    {
+      "type": 0,
+      "value": "Trocar a chave de "
+    },
+    {
+      "type": 1,
+      "value": "name"
+    },
+    {
+      "type": 0,
+      "value": "?"
+    }
+  ],
+  "web.admin.nodes.key.saved": [
+    {
+      "type": 0,
+      "value": "Salvei a chave"
+    }
+  ],
+  "web.admin.nodes.key.settingsHelp": [
+    {
+      "type": 0,
+      "value": "Inicie o nó com estas duas configurações. Um nó que já está em execução mantém a chave antiga até que você o reinicie."
+    }
+  ],
+  "web.admin.nodes.key.settingsLabel": [
+    {
+      "type": 0,
+      "value": "Configurações do nó"
+    }
+  ],
+  "web.admin.nodes.key.unconfirmed": [
+    {
+      "type": 0,
+      "value": "Não foi possível confirmar uma nova chave para "
+    },
+    {
+      "type": 1,
+      "value": "name"
+    },
+    {
+      "type": 0,
+      "value": ". Atualize a página antes de tentar novamente: se uma chave foi emitida, a anterior já parou de funcionar."
     }
   ],
   "web.admin.nodes.memory.noReading": [
@@ -56447,6 +58125,102 @@
     {
       "type": 0,
       "value": "Configurações"
+    }
+  ],
+  "web.admin.plugins.signature.invalid": [
+    {
+      "type": 0,
+      "value": "Falhou na verificação"
+    }
+  ],
+  "web.admin.plugins.signature.invalidBanner": [
+    {
+      "type": 8,
+      "value": "b",
+      "children": [
+        {
+          "type": 0,
+          "value": "A verificação da assinatura de versão de "
+        },
+        {
+          "type": 1,
+          "value": "name"
+        },
+        {
+          "type": 0,
+          "value": " falhou."
+        }
+      ]
+    },
+    {
+      "type": 0,
+      "value": " A assinatura que veio com esta versão não comprova qual repositório a compilou. O log do servidor tem os detalhes."
+    }
+  ],
+  "web.admin.plugins.signature.label": [
+    {
+      "type": 0,
+      "value": "Assinatura da versão"
+    }
+  ],
+  "web.admin.plugins.signature.tileInvalid": [
+    {
+      "type": 0,
+      "value": "Falha na assinatura"
+    }
+  ],
+  "web.admin.plugins.signature.tileVerified": [
+    {
+      "type": 0,
+      "value": "Versão assinada compilada a partir de "
+    },
+    {
+      "type": 1,
+      "value": "repository"
+    }
+  ],
+  "web.admin.plugins.signature.unknown": [
+    {
+      "type": 0,
+      "value": "Não verificada"
+    }
+  ],
+  "web.admin.plugins.signature.unsigned": [
+    {
+      "type": 0,
+      "value": "Não assinada"
+    }
+  ],
+  "web.admin.plugins.signature.verified": [
+    {
+      "type": 0,
+      "value": "Compilada a partir de "
+    },
+    {
+      "type": 8,
+      "value": "link",
+      "children": [
+        {
+          "type": 1,
+          "value": "repository"
+        }
+      ]
+    }
+  ],
+  "web.admin.plugins.signature.verifiedAt": [
+    {
+      "type": 0,
+      "value": "Verificada em "
+    },
+    {
+      "type": 1,
+      "value": "date"
+    }
+  ],
+  "web.admin.plugins.signature.verifiedNoRepository": [
+    {
+      "type": 0,
+      "value": "Verificada"
     }
   ],
   "web.admin.plugins.source.approvedCommunity": [
@@ -63857,6 +65631,12 @@
       "value": "Limite do disco (%)"
     }
   ],
+  "web.admin.settings.downloads.enabled.description": [
+    {
+      "type": 0,
+      "value": "A chave para todo o servidor. Ativado: os grupos de acesso e as contas decidem quem pode baixar. Desativado: ninguém pode."
+    }
+  ],
   "web.admin.settings.downloads.enabled.label": [
     {
       "type": 0,
@@ -69768,7 +71548,7 @@
   "web.admin.settings.playback.transcoding.copyKeyframePlaylistDescription": [
     {
       "type": 0,
-      "value": "Experimental. Quando o Silo copia o vídeo de um arquivo, lista todos os segmentos desde o início, usando os quadros-chave do arquivo, em vez de uma playlist que cresce conforme o Silo copia. Evita que o Safari trave no meio da reprodução. Um avanço além do que o Silo já copiou aguarda até que ele chegue lá."
+      "value": "Experimental. Quando o Silo copia o vídeo de um arquivo, lista todos os segmentos desde o início, usando os quadros-chave do arquivo, em vez de uma playlist que cresce conforme o Silo copia. Evita que o Safari trave no meio da reprodução. Uma busca muito além do que o Silo já copiou reinicia a cópia a partir desse ponto."
     }
   ],
   "web.admin.settings.playback.transcoding.dir": [
@@ -77724,6 +79504,12 @@
       "value": "Permitir login com senha"
     }
   ],
+  "web.admin.settings.signIn.page.apiKeysGroup": [
+    {
+      "type": 0,
+      "value": "Chaves de API"
+    }
+  ],
   "web.admin.settings.signIn.page.breakGlassAdmins": [
     {
       "type": 6,
@@ -77920,6 +79706,18 @@
     {
       "type": 0,
       "value": "Login"
+    }
+  ],
+  "web.admin.settings.signIn.page.userApiKeysDescription": [
+    {
+      "type": 0,
+      "value": "Qualquer conta pode criar chaves para os próprios perfis em Configurações → Chaves de API. Essas chaves podem ler e alterar o histórico de exibição, as listas e as solicitações, mas não podem reproduzir nem baixar mídia. Desativar esta opção impede novas chaves; as existentes continuam funcionando até serem revogadas."
+    }
+  ],
+  "web.admin.settings.signIn.page.userApiKeysLabel": [
+    {
+      "type": 0,
+      "value": "Permitir que usuários criem chaves de API"
     }
   ],
   "web.admin.settings.signIn.provider.accounts.title": [
@@ -86741,6 +88539,12 @@
       "value": "Downloads não permitidos"
     }
   ],
+  "web.admin.users.detail.overview.access.downloadsServerOff": [
+    {
+      "type": 0,
+      "value": "Os downloads estão desativados para todo o servidor"
+    }
+  ],
   "web.admin.users.detail.overview.access.groupSource": [
     {
       "type": 0,
@@ -89643,6 +91447,16 @@
       "value": "Não foi possível carregar os usuários."
     }
   ],
+  "web.admin.users.list.moreActions": [
+    {
+      "type": 0,
+      "value": "Mais ações para "
+    },
+    {
+      "type": 1,
+      "value": "username"
+    }
+  ],
   "web.admin.users.list.nextPage": [
     {
       "type": 0,
@@ -89653,6 +91467,12 @@
     {
       "type": 0,
       "value": "Sem grupo"
+    }
+  ],
+  "web.admin.users.list.noMatches": [
+    {
+      "type": 0,
+      "value": "Nenhum usuário corresponde à sua pesquisa ou ao filtro."
     }
   ],
   "web.admin.users.list.pageRange": [
@@ -90396,20 +92216,6 @@
       "value": "number"
     }
   ],
-  "web.audiobooks.chapters.count": [
-    {
-      "type": 0,
-      "value": "("
-    },
-    {
-      "type": 1,
-      "value": "count"
-    },
-    {
-      "type": 0,
-      "value": ")"
-    }
-  ],
   "web.audiobooks.chapters.duration": [
     {
       "type": 1,
@@ -90434,34 +92240,72 @@
       "value": "Capítulos"
     }
   ],
-  "web.audiobooks.chapters.listening": [
+  "web.audiobooks.chapters.leftInChapter": [
     {
       "type": 0,
-      "value": "ouvindo"
+      "value": "Faltam "
+    },
+    {
+      "type": 1,
+      "value": "time"
+    },
+    {
+      "type": 0,
+      "value": " neste capítulo"
     }
   ],
-  "web.audiobooks.chapters.sort": [
+  "web.audiobooks.chapters.showAll": [
     {
       "type": 0,
-      "value": "Ordenar"
+      "value": "Mostrar todos os "
+    },
+    {
+      "type": 1,
+      "value": "count"
     }
   ],
-  "web.audiobooks.chapters.sortAria": [
+  "web.audiobooks.chapters.showFewer": [
     {
       "type": 0,
-      "value": "Ordenar capítulos"
+      "value": "Mostrar menos"
     }
   ],
-  "web.audiobooks.chapters.sortLongest": [
+  "web.audiobooks.detail.finished": [
     {
       "type": 0,
-      "value": "Mais longos primeiro"
+      "value": "Concluído"
     }
   ],
-  "web.audiobooks.chapters.sortPosition": [
+  "web.audiobooks.detail.length": [
     {
       "type": 0,
-      "value": "Por posição"
+      "value": "Duração"
+    }
+  ],
+  "web.audiobooks.detail.publisher": [
+    {
+      "type": 0,
+      "value": "Editora"
+    }
+  ],
+  "web.audiobooks.detail.released": [
+    {
+      "type": 0,
+      "value": "Lançamento"
+    }
+  ],
+  "web.audiobooks.detail.seriesBook": [
+    {
+      "type": 1,
+      "value": "series"
+    },
+    {
+      "type": 0,
+      "value": ", livro "
+    },
+    {
+      "type": 1,
+      "value": "number"
     }
   ],
   "web.audiobooks.duration.hours": [
@@ -91354,6 +93198,12 @@
       "pluralType": "cardinal"
     }
   ],
+  "web.audiobooks.hero.alsoListening": [
+    {
+      "type": 0,
+      "value": "Ouvindo também"
+    }
+  ],
   "web.audiobooks.hero.ariaLabel": [
     {
       "type": 0,
@@ -91392,38 +93242,6 @@
       "value": "total"
     }
   ],
-  "web.audiobooks.hero.chapterPositionTitled": [
-    {
-      "type": 0,
-      "value": "Capítulo "
-    },
-    {
-      "type": 1,
-      "value": "index"
-    },
-    {
-      "type": 0,
-      "value": " de "
-    },
-    {
-      "type": 1,
-      "value": "total"
-    },
-    {
-      "type": 0,
-      "value": " · "
-    },
-    {
-      "type": 1,
-      "value": "chapter"
-    }
-  ],
-  "web.audiobooks.hero.eyebrow": [
-    {
-      "type": 0,
-      "value": "Ouvindo agora"
-    }
-  ],
   "web.audiobooks.hero.listen": [
     {
       "type": 0,
@@ -91456,12 +93274,6 @@
     {
       "type": 0,
       "value": "Retomar"
-    }
-  ],
-  "web.audiobooks.narrator.heading": [
-    {
-      "type": 0,
-      "value": "Narrador"
     }
   ],
   "web.audiobooks.narrator.narrationCount": [
@@ -91519,20 +93331,16 @@
       "value": "Voltar ao player"
     }
   ],
-  "web.audiobooks.player.chapterNumber": [
-    {
-      "type": 0,
-      "value": "Capítulo "
-    },
-    {
-      "type": 1,
-      "value": "number"
-    }
-  ],
   "web.audiobooks.player.close": [
     {
       "type": 0,
       "value": "Fechar player"
+    }
+  ],
+  "web.audiobooks.player.comingUp": [
+    {
+      "type": 0,
+      "value": "A seguir"
     }
   ],
   "web.audiobooks.player.faster": [
@@ -98993,6 +100801,64 @@
       "value": "?"
     }
   ],
+  "web.collections.copy.deleteWithRowChangesLabel": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Excluir e alterar "
+            },
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " fileira"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Excluir e alterar "
+            },
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " de fileiras"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Excluir e alterar "
+            },
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " fileiras"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
   "web.collections.copy.deleteWithRowsLabel": [
     {
       "type": 6,
@@ -100705,6 +102571,20 @@
     {
       "type": 0,
       "value": " para todos."
+    }
+  ],
+  "web.collections.copy.removedFromRow": [
+    {
+      "type": 0,
+      "value": "Remove a coleção da fileira “"
+    },
+    {
+      "type": 1,
+      "value": "title"
+    },
+    {
+      "type": 0,
+      "value": "”. A fileira mantém as outras coleções."
     }
   ],
   "web.collections.copy.removedTitle": [
@@ -107145,6 +109025,20 @@
       "value": "Desconhecido"
     }
   ],
+  "web.common.activity.subtitle.episode": [
+    {
+      "type": 1,
+      "value": "code"
+    },
+    {
+      "type": 0,
+      "value": " · "
+    },
+    {
+      "type": 1,
+      "value": "series"
+    }
+  ],
   "web.common.activity.subtitle.movie": [
     {
       "type": 0,
@@ -107291,6 +109185,12 @@
     {
       "type": 0,
       "value": "Estas regras usam opções que a visualização Guiada não consegue mostrar."
+    }
+  ],
+  "web.common.collections.posterUpdateFailed": [
+    {
+      "type": 0,
+      "value": "Falha ao atualizar o pôster"
     }
   ],
   "web.common.date.daysAgo": [
@@ -107509,6 +109409,270 @@
       "value": "Plataforma desconhecida"
     }
   ],
+  "web.common.errors.accessGroupIdUnsupported": [
+    {
+      "type": 0,
+      "value": "Este grupo contém um ID incompatível."
+    }
+  ],
+  "web.common.errors.accessGroupPaginationInvalid": [
+    {
+      "type": 0,
+      "value": "Paginação de grupos inválida. Recarregue a lista."
+    }
+  ],
+  "web.common.errors.accessGroupReloadBeforeSaving": [
+    {
+      "type": 0,
+      "value": "Recarregue este grupo antes de salvar: é necessária uma ETag forte."
+    }
+  ],
+  "web.common.errors.collectionVersionUnavailable": [
+    {
+      "type": 0,
+      "value": "Recarregue esta coleção antes de editar; a versão dela não está disponível."
+    }
+  ],
+  "web.common.errors.downloadUnavailable": [
+    {
+      "type": 0,
+      "value": "Download indisponível ("
+    },
+    {
+      "type": 1,
+      "value": "status"
+    },
+    {
+      "type": 0,
+      "value": ")."
+    }
+  ],
+  "web.common.errors.fileIdInvalid": [
+    {
+      "type": 0,
+      "value": "ID de arquivo inválido."
+    }
+  ],
+  "web.common.errors.invitationAcceptanceUnavailable": [
+    {
+      "type": 0,
+      "value": "Não é possível aceitar convites."
+    }
+  ],
+  "web.common.errors.invitationPaginationInvalid": [
+    {
+      "type": 0,
+      "value": "Paginação de convites inválida. Recarregue a lista."
+    }
+  ],
+  "web.common.errors.invitationResponseIncomplete": [
+    {
+      "type": 0,
+      "value": "O convite pode ter sido criado, mas a resposta veio incompleta. Recarregue o histórico antes de continuar."
+    }
+  ],
+  "web.common.errors.joinedRoomIdentityInvalid": [
+    {
+      "type": 0,
+      "value": "Identidade inválida da sala em que você entrou."
+    }
+  ],
+  "web.common.errors.memberIdentityInvalid": [
+    {
+      "type": 0,
+      "value": "Identidade de membro inválida."
+    }
+  ],
+  "web.common.errors.memberStateLimit": [
+    {
+      "type": 0,
+      "value": "As leituras de estado de membros são limitadas a "
+    },
+    {
+      "type": 1,
+      "value": "max"
+    },
+    {
+      "type": 0,
+      "value": " itens."
+    }
+  ],
+  "web.common.errors.notificationDestinationContinuationInvalid": [
+    {
+      "type": 0,
+      "value": "Continuação de destinos de notificação inválida."
+    }
+  ],
+  "web.common.errors.notificationDestinationPageInvalid": [
+    {
+      "type": 0,
+      "value": "Página de destinos de notificação inválida."
+    }
+  ],
+  "web.common.errors.notificationDestinationsTooMany": [
+    {
+      "type": 0,
+      "value": "Há destinos de notificação demais para mostrar. Recarregue a lista."
+    }
+  ],
+  "web.common.errors.notificationLibraryIdUnsupported": [
+    {
+      "type": 0,
+      "value": "ID de biblioteca incompatível na notificação."
+    }
+  ],
+  "web.common.errors.notificationPageInvalid": [
+    {
+      "type": 0,
+      "value": "Página de notificações inválida. Recarregue as notificações."
+    }
+  ],
+  "web.common.errors.notificationSeriesPageInvalid": [
+    {
+      "type": 0,
+      "value": "Página de séries inválida. Recarregue as notificações."
+    }
+  ],
+  "web.common.errors.notificationsReloadBeforeMarkingRead": [
+    {
+      "type": 0,
+      "value": "Recarregue as notificações antes de marcá-las como lidas."
+    }
+  ],
+  "web.common.errors.onboardingProgressNoRevision": [
+    {
+      "type": 0,
+      "value": "O progresso da introdução não tem revisão. Recarregue para continuar."
+    }
+  ],
+  "web.common.errors.onboardingReloadTour": [
+    {
+      "type": 0,
+      "value": "Recarregue o tour antes de continuar."
+    }
+  ],
+  "web.common.errors.onboardingStateNoRevision": [
+    {
+      "type": 0,
+      "value": "O estado da introdução não tem revisão. Recarregue para continuar."
+    }
+  ],
+  "web.common.errors.onboardingStillSaving": [
+    {
+      "type": 0,
+      "value": "O progresso da introdução ainda está sendo salvo."
+    }
+  ],
+  "web.common.errors.playbackControlCredentialInvalid": [
+    {
+      "type": 0,
+      "value": "Credencial de controle de reprodução inválida."
+    }
+  ],
+  "web.common.errors.realtimeCredentialInvalid": [
+    {
+      "type": 0,
+      "value": "Credencial de handshake em tempo real inválida."
+    }
+  ],
+  "web.common.errors.roomIdentityInvalid": [
+    {
+      "type": 0,
+      "value": "Identidade da sala inválida."
+    }
+  ],
+  "web.common.errors.roomSelectionIdentityInvalid": [
+    {
+      "type": 0,
+      "value": "Identidade da seleção da sala inválida."
+    }
+  ],
+  "web.common.errors.roomSnapshotInvalid": [
+    {
+      "type": 0,
+      "value": "Estado da sala inválido."
+    }
+  ],
+  "web.common.errors.roomSocketCredentialInvalid": [
+    {
+      "type": 0,
+      "value": "Credencial de conexão da sala inválida."
+    }
+  ],
+  "web.common.errors.roomSuggestionInvalid": [
+    {
+      "type": 0,
+      "value": "Sugestão da sala inválida."
+    }
+  ],
+  "web.common.errors.roomSuggestionsTooMany": [
+    {
+      "type": 0,
+      "value": "Há sugestões demais na sala. Recarregue a sala."
+    }
+  ],
+  "web.common.errors.sessionRefreshUnavailable": [
+    {
+      "type": 0,
+      "value": "Não foi possível renovar a sessão porque o servidor não respondeu."
+    }
+  ],
+  "web.common.errors.sourceFallbackIdentityInvalid": [
+    {
+      "type": 0,
+      "value": "Identidade da origem alternativa inválida."
+    }
+  ],
+  "web.common.errors.suggestionContinuationInvalid": [
+    {
+      "type": 0,
+      "value": "Continuação de sugestões inválida."
+    }
+  ],
+  "web.common.errors.suggestionContinuationMissing": [
+    {
+      "type": 0,
+      "value": "Continuação de sugestões ausente."
+    }
+  ],
+  "web.common.errors.suggestionReceiptInvalid": [
+    {
+      "type": 0,
+      "value": "Recibo de sugestão inválido."
+    }
+  ],
+  "web.common.errors.verificationReceiptMismatch": [
+    {
+      "type": 0,
+      "value": "O recibo de verificação não corresponde à solicitação enviada."
+    }
+  ],
+  "web.common.errors.watchlistPageRepeated": [
+    {
+      "type": 0,
+      "value": "A lista de títulos da lista para assistir repetiu um cursor de página."
+    }
+  ],
+  "web.common.format.bitrate.bps": [
+    {
+      "type": 1,
+      "value": "rate"
+    },
+    {
+      "type": 0,
+      "value": " bps"
+    }
+  ],
+  "web.common.format.bitrate.gbps": [
+    {
+      "type": 1,
+      "value": "rate"
+    },
+    {
+      "type": 0,
+      "value": " Gbps"
+    }
+  ],
   "web.common.format.bitrate.kbps": [
     {
       "type": 1,
@@ -107619,6 +109783,16 @@
     {
       "type": 1,
       "value": "chapter"
+    }
+  ],
+  "web.common.format.percent": [
+    {
+      "type": 1,
+      "value": "percent"
+    },
+    {
+      "type": 0,
+      "value": "%"
     }
   ],
   "web.common.format.runtime.hoursMinutes": [
@@ -107763,6 +109937,36 @@
     {
       "type": 0,
       "value": " MiB"
+    }
+  ],
+  "web.common.format.size.pb": [
+    {
+      "type": 1,
+      "value": "size"
+    },
+    {
+      "type": 0,
+      "value": " PB"
+    }
+  ],
+  "web.common.format.size.tb": [
+    {
+      "type": 1,
+      "value": "size"
+    },
+    {
+      "type": 0,
+      "value": " TB"
+    }
+  ],
+  "web.common.format.size.tib": [
+    {
+      "type": 1,
+      "value": "size"
+    },
+    {
+      "type": 0,
+      "value": " TiB"
     }
   ],
   "web.common.genres.action": [
@@ -107935,6 +110139,12 @@
     {
       "type": 0,
       "value": "Faroeste"
+    }
+  ],
+  "web.common.job.cancellationRequested": [
+    {
+      "type": 0,
+      "value": "Cancelamento solicitado"
     }
   ],
   "web.common.job.cancelled": [
@@ -108815,6 +111025,12 @@
       "value": "Configurações da conta"
     }
   ],
+  "web.common.title.settings.apiKeys": [
+    {
+      "type": 0,
+      "value": "Configurações de Chaves de API"
+    }
+  ],
   "web.common.title.settings.connectApps": [
     {
       "type": 0,
@@ -108923,6 +111139,12 @@
       "value": "Seus dados"
     }
   ],
+  "web.common.toast.collections.created": [
+    {
+      "type": 0,
+      "value": "Coleção criada"
+    }
+  ],
   "web.common.toast.collections.deleteFailed": [
     {
       "type": 0,
@@ -108933,6 +111155,12 @@
     {
       "type": 0,
       "value": "Coleção excluída"
+    }
+  ],
+  "web.common.toast.collections.saved": [
+    {
+      "type": 0,
+      "value": "Coleção salva"
     }
   ],
   "web.common.toast.collections.syncFailed": [
@@ -109325,6 +111553,18 @@
     {
       "type": 0,
       "value": "Legenda enviada"
+    }
+  ],
+  "web.common.toast.watchProviders.authDeclined": [
+    {
+      "type": 0,
+      "value": "A conexão foi recusada no site do provedor. Selecione Conectar para tentar novamente."
+    }
+  ],
+  "web.common.toast.watchProviders.authNotApproved": [
+    {
+      "type": 0,
+      "value": "Primeiro aprove o código no site do provedor e depois tente novamente."
     }
   ],
   "web.common.toast.watchProviders.connectFailed": [
@@ -113677,6 +115917,308 @@
       "value": "."
     }
   ],
+  "web.home.addRow.collections.add": [
+    {
+      "type": 0,
+      "value": "Adicionar"
+    }
+  ],
+  "web.home.addRow.collections.addLabel": [
+    {
+      "type": 0,
+      "value": "Adicionar coleções"
+    }
+  ],
+  "web.home.addRow.collections.added": [
+    {
+      "type": 0,
+      "value": "Adicionada"
+    }
+  ],
+  "web.home.addRow.collections.chosenLabel": [
+    {
+      "type": 0,
+      "value": "Coleções nesta fileira"
+    }
+  ],
+  "web.home.addRow.collections.count": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " coleção, mostrada nesta ordem"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " de coleções, mostradas nesta ordem"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " coleções, mostradas nesta ordem"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
+  "web.home.addRow.collections.drag.canceled": [
+    {
+      "type": 0,
+      "value": "A movimentação de "
+    },
+    {
+      "type": 1,
+      "value": "collection"
+    },
+    {
+      "type": 0,
+      "value": " foi cancelada."
+    }
+  ],
+  "web.home.addRow.collections.drag.dropped": [
+    {
+      "type": 1,
+      "value": "collection"
+    },
+    {
+      "type": 0,
+      "value": " solta."
+    }
+  ],
+  "web.home.addRow.collections.drag.droppedAt": [
+    {
+      "type": 1,
+      "value": "collection"
+    },
+    {
+      "type": 0,
+      "value": " solta na posição "
+    },
+    {
+      "type": 1,
+      "value": "position"
+    },
+    {
+      "type": 0,
+      "value": " de "
+    },
+    {
+      "type": 1,
+      "value": "total"
+    },
+    {
+      "type": 0,
+      "value": "."
+    }
+  ],
+  "web.home.addRow.collections.drag.instructions": [
+    {
+      "type": 0,
+      "value": "Para mover uma coleção, foque a alça dela e pressione Space ou Enter. Use as setas para cima e para baixo para movê-la, Space ou Enter para soltá-la ou Escape para cancelar."
+    }
+  ],
+  "web.home.addRow.collections.drag.over": [
+    {
+      "type": 1,
+      "value": "collection"
+    },
+    {
+      "type": 0,
+      "value": " agora está na posição "
+    },
+    {
+      "type": 1,
+      "value": "position"
+    },
+    {
+      "type": 0,
+      "value": " de "
+    },
+    {
+      "type": 1,
+      "value": "total"
+    },
+    {
+      "type": 0,
+      "value": "."
+    }
+  ],
+  "web.home.addRow.collections.drag.pickedUp": [
+    {
+      "type": 1,
+      "value": "collection"
+    },
+    {
+      "type": 0,
+      "value": " selecionada para mover, posição "
+    },
+    {
+      "type": 1,
+      "value": "position"
+    },
+    {
+      "type": 0,
+      "value": " de "
+    },
+    {
+      "type": 1,
+      "value": "total"
+    },
+    {
+      "type": 0,
+      "value": "."
+    }
+  ],
+  "web.home.addRow.collections.dragHandle": [
+    {
+      "type": 0,
+      "value": "Reordenar "
+    },
+    {
+      "type": 1,
+      "value": "collection"
+    }
+  ],
+  "web.home.addRow.collections.empty": [
+    {
+      "type": 0,
+      "value": "Adicione pelo menos uma coleção abaixo."
+    }
+  ],
+  "web.home.addRow.collections.limit": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Uma fileira comporta até "
+            },
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " coleção."
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Uma fileira comporta até "
+            },
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " de coleções."
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Uma fileira comporta até "
+            },
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " coleções."
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
+  "web.home.addRow.collections.moveDown": [
+    {
+      "type": 0,
+      "value": "Mover "
+    },
+    {
+      "type": 1,
+      "value": "collection"
+    },
+    {
+      "type": 0,
+      "value": " para baixo"
+    }
+  ],
+  "web.home.addRow.collections.moveUp": [
+    {
+      "type": 0,
+      "value": "Mover "
+    },
+    {
+      "type": 1,
+      "value": "collection"
+    },
+    {
+      "type": 0,
+      "value": " para cima"
+    }
+  ],
+  "web.home.addRow.collections.remove": [
+    {
+      "type": 0,
+      "value": "Remover "
+    },
+    {
+      "type": 1,
+      "value": "collection"
+    }
+  ],
+  "web.home.addRow.collections.unavailable": [
+    {
+      "type": 0,
+      "value": "Não está mais disponível"
+    }
+  ],
+  "web.home.addRow.collections.yours": [
+    {
+      "type": 0,
+      "value": "Sua"
+    }
+  ],
   "web.home.addRow.conflict": [
     {
       "type": 0,
@@ -116280,6 +118822,20 @@
       "value": "Isto não é uma exportação de layout do Início do Silo."
     }
   ],
+  "web.home.layout.transfer.pageTooLarge": [
+    {
+      "type": 0,
+      "value": "esta página teria mais de "
+    },
+    {
+      "type": 1,
+      "value": "max"
+    },
+    {
+      "type": 0,
+      "value": " alterações de seção salvas"
+    }
+  ],
   "web.home.layout.transfer.preferencesFailed": [
     {
       "type": 0,
@@ -116960,16 +119516,212 @@
       }
     }
   ],
+  "web.home.rows.describe.collectionCount": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " coleção"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " de coleções"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " coleções"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
   "web.home.rows.describe.collectionGone": [
     {
       "type": 0,
       "value": "A coleção não está mais disponível"
     }
   ],
+  "web.home.rows.describe.collectionList": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " coleção: "
+            },
+            {
+              "type": 1,
+              "value": "names"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " de coleções: "
+            },
+            {
+              "type": 1,
+              "value": "names"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " coleções: "
+            },
+            {
+              "type": 1,
+              "value": "names"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
+  "web.home.rows.describe.collectionListMore": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 0,
+              "value": "mais "
+            },
+            {
+              "type": 1,
+              "value": "count_text"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 0,
+              "value": "mais "
+            },
+            {
+              "type": 1,
+              "value": "count_text"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 0,
+              "value": "mais "
+            },
+            {
+              "type": 1,
+              "value": "count_text"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
   "web.home.rows.describe.collectionUnknown": [
     {
       "type": 0,
       "value": "Uma coleção"
+    }
+  ],
+  "web.home.rows.describe.collectionsGone": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " coleção não está mais disponível"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " de coleções não estão mais disponíveis"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " coleções não estão mais disponíveis"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
     }
   ],
   "web.home.rows.describe.curated": [
@@ -117438,6 +120190,16 @@
     {
       "type": 0,
       "value": "O que você salvou para assistir"
+    }
+  ],
+  "web.home.rows.describe.pageNameLibrary": [
+    {
+      "type": 0,
+      "value": "página "
+    },
+    {
+      "type": 1,
+      "value": "label"
     }
   ],
   "web.home.rows.describe.randomMix": [
@@ -118566,6 +121328,12 @@
       "value": "O que cada pessoa salvou para assistir"
     }
   ],
+  "web.home.rows.draft.addCollection": [
+    {
+      "type": 0,
+      "value": "Adicione uma coleção para ver a fileira."
+    }
+  ],
   "web.home.rows.draft.addTitles": [
     {
       "type": 0,
@@ -118826,6 +121594,12 @@
       "value": "Mostra uma das suas coleções."
     }
   ],
+  "web.home.rows.kindSentences.collectionPosters": [
+    {
+      "type": 0,
+      "value": "Mostra várias coleções como pôsteres. Cada uma abre a sua coleção."
+    }
+  ],
   "web.home.rows.kindSentences.continueWatching": [
     {
       "type": 0,
@@ -119028,6 +121802,12 @@
     {
       "type": 0,
       "value": "Uma coleção"
+    }
+  ],
+  "web.home.rows.kinds.collectionPosters": [
+    {
+      "type": 0,
+      "value": "Uma fileira de coleções"
     }
   ],
   "web.home.rows.kinds.continueWatching": [
@@ -121740,6 +124520,36 @@
       "value": " Cap"
     }
   ],
+  "web.item.card.mangaStatus.cancelled": [
+    {
+      "type": 0,
+      "value": "Cancelada"
+    }
+  ],
+  "web.item.card.mangaStatus.completed": [
+    {
+      "type": 0,
+      "value": "Concluída"
+    }
+  ],
+  "web.item.card.mangaStatus.hiatus": [
+    {
+      "type": 0,
+      "value": "Em hiato"
+    }
+  ],
+  "web.item.card.mangaStatus.ongoing": [
+    {
+      "type": 0,
+      "value": "Em andamento"
+    }
+  ],
+  "web.item.card.mangaStatus.upcoming": [
+    {
+      "type": 0,
+      "value": "Em breve"
+    }
+  ],
   "web.item.card.mangaVolumes": [
     {
       "type": 1,
@@ -123928,6 +126738,190 @@
       "value": "Limpar filtros"
     }
   ],
+  "web.library.browse.countBooks": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 1,
+              "value": "shown"
+            },
+            {
+              "type": 0,
+              "value": " livro"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 1,
+              "value": "shown"
+            },
+            {
+              "type": 0,
+              "value": " de livros"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 1,
+              "value": "shown"
+            },
+            {
+              "type": 0,
+              "value": " livros"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
+  "web.library.browse.countEpisodes": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 1,
+              "value": "shown"
+            },
+            {
+              "type": 0,
+              "value": " episódio"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 1,
+              "value": "shown"
+            },
+            {
+              "type": 0,
+              "value": " de episódios"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 1,
+              "value": "shown"
+            },
+            {
+              "type": 0,
+              "value": " episódios"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
+  "web.library.browse.countMovies": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 1,
+              "value": "shown"
+            },
+            {
+              "type": 0,
+              "value": " filme"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 1,
+              "value": "shown"
+            },
+            {
+              "type": 0,
+              "value": " de filmes"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 1,
+              "value": "shown"
+            },
+            {
+              "type": 0,
+              "value": " filmes"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
+  "web.library.browse.countSeries": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 1,
+              "value": "shown"
+            },
+            {
+              "type": 0,
+              "value": " série"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 1,
+              "value": "shown"
+            },
+            {
+              "type": 0,
+              "value": " de séries"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 1,
+              "value": "shown"
+            },
+            {
+              "type": 0,
+              "value": " séries"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
   "web.library.browse.lettersRefreshFailed": [
     {
       "type": 0,
@@ -124746,6 +127740,30 @@
       "value": "Não foi possível salvar os marcadores"
     }
   ],
+  "web.notifications.inbox.dayOlder": [
+    {
+      "type": 0,
+      "value": "Mais antigas"
+    }
+  ],
+  "web.notifications.inbox.dayToday": [
+    {
+      "type": 0,
+      "value": "Hoje"
+    }
+  ],
+  "web.notifications.inbox.dayWeek": [
+    {
+      "type": 0,
+      "value": "Últimos 7 dias"
+    }
+  ],
+  "web.notifications.inbox.dayYesterday": [
+    {
+      "type": 0,
+      "value": "Ontem"
+    }
+  ],
   "web.notifications.inbox.daysAgo": [
     {
       "type": 0,
@@ -124772,10 +127790,62 @@
       "value": "As notificações aparecerão aqui quando chegarem novos episódios de séries que você favoritou, adicionou à lista para assistir ou está assistindo."
     }
   ],
+  "web.notifications.inbox.emptyHintNextUp": [
+    {
+      "type": 0,
+      "value": "As notificações aparecerão aqui quando chegar um novo episódio de uma série com a qual você está em dia, ou quando chegar um título que você adicionou à lista para assistir ou solicitou."
+    }
+  ],
   "web.notifications.inbox.emptyUnread": [
     {
       "type": 0,
       "value": "Nenhuma notificação não lida"
+    }
+  ],
+  "web.notifications.inbox.episodeCount": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " episódio novo"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " de episódios novos"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " episódios novos"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
     }
   ],
   "web.notifications.inbox.episodeLine": [
@@ -124790,6 +127860,46 @@
     {
       "type": 1,
       "value": "title"
+    }
+  ],
+  "web.notifications.inbox.episodeRange": [
+    {
+      "type": 1,
+      "value": "first"
+    },
+    {
+      "type": 0,
+      "value": " – "
+    },
+    {
+      "type": 1,
+      "value": "last"
+    }
+  ],
+  "web.notifications.inbox.episodeRangeLatest": [
+    {
+      "type": 1,
+      "value": "first"
+    },
+    {
+      "type": 0,
+      "value": " – "
+    },
+    {
+      "type": 1,
+      "value": "last"
+    },
+    {
+      "type": 0,
+      "value": " · mais recente: “"
+    },
+    {
+      "type": 1,
+      "value": "title"
+    },
+    {
+      "type": 0,
+      "value": "”"
     }
   ],
   "web.notifications.inbox.filterAll": [
@@ -124942,6 +128052,52 @@
       "value": " min"
     }
   ],
+  "web.notifications.inbox.newCount": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " novo"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " novos"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " novos"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
   "web.notifications.inbox.newEpisode": [
     {
       "type": 0,
@@ -124982,6 +128138,12 @@
       "value": "reason"
     }
   ],
+  "web.notifications.inbox.requestTag": [
+    {
+      "type": 0,
+      "value": "Solicitação"
+    }
+  ],
   "web.notifications.inbox.requestedMovieAvailable": [
     {
       "type": 0,
@@ -125010,6 +128172,88 @@
     {
       "type": 0,
       "value": "Não lida"
+    }
+  ],
+  "web.notifications.inbox.unreadBadge": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " não lida"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " não lidas"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " não lidas"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
+  "web.notifications.inbox.viewInbox": [
+    {
+      "type": 0,
+      "value": "Caixa de entrada"
+    }
+  ],
+  "web.notifications.inbox.views": [
+    {
+      "type": 0,
+      "value": "Visualizações de notificações"
+    }
+  ],
+  "web.notifications.inbox.watchlistAvailable": [
+    {
+      "type": 0,
+      "value": "Título da lista para assistir disponível"
+    }
+  ],
+  "web.notifications.inbox.watchlistMovieAvailable": [
+    {
+      "type": 0,
+      "value": "Um filme da sua lista para assistir já está disponível"
+    }
+  ],
+  "web.notifications.inbox.watchlistSeriesAvailable": [
+    {
+      "type": 0,
+      "value": "Uma série da sua lista para assistir já está disponível"
+    }
+  ],
+  "web.notifications.inbox.watchlistTitleAvailable": [
+    {
+      "type": 0,
+      "value": "Um título da sua lista para assistir já está disponível"
     }
   ],
   "web.notifications.preferences.continueWatching": [
@@ -125188,6 +128432,12 @@
       "value": "Não foi possível silenciar a série"
     }
   ],
+  "web.notifications.queries.muteManyFailed": [
+    {
+      "type": 0,
+      "value": "Não foi possível silenciar as séries selecionadas"
+    }
+  ],
   "web.notifications.queries.muted": [
     {
       "type": 0,
@@ -125196,6 +128446,52 @@
     {
       "type": 1,
       "value": "title"
+    }
+  ],
+  "web.notifications.queries.mutedMany": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " série silenciada"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " de séries silenciadas"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " séries silenciadas"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
     }
   ],
   "web.notifications.queries.removeAddressFailed": [
@@ -125232,6 +128528,58 @@
     {
       "type": 0,
       "value": "Não foi possível reativar a série"
+    }
+  ],
+  "web.notifications.queries.unmuteManyFailed": [
+    {
+      "type": 0,
+      "value": "Não foi possível reativar as séries selecionadas"
+    }
+  ],
+  "web.notifications.queries.unmutedMany": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " série reativada"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " de séries reativadas"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " séries reativadas"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
     }
   ],
   "web.notifications.queries.verificationFailed": [
@@ -125276,6 +128624,158 @@
       "value": "Lista para assistir"
     }
   ],
+  "web.notifications.selection.clear": [
+    {
+      "type": 0,
+      "value": "Limpar seleção"
+    }
+  ],
+  "web.notifications.selection.count": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " item selecionado"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " de itens selecionados"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " itens selecionados"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
+  "web.notifications.selection.inboxLabel": [
+    {
+      "type": 0,
+      "value": "Notificações selecionadas"
+    }
+  ],
+  "web.notifications.selection.markRead": [
+    {
+      "type": 0,
+      "value": "Marcar como lidas"
+    }
+  ],
+  "web.notifications.selection.muteSeries": [
+    {
+      "type": 0,
+      "value": "Silenciar séries"
+    }
+  ],
+  "web.notifications.selection.notificationCount": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 0,
+              "value": "· "
+            },
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " notificação"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 0,
+              "value": "· "
+            },
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " de notificações"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 0,
+              "value": "· "
+            },
+            {
+              "type": 1,
+              "value": "count_text"
+            },
+            {
+              "type": 0,
+              "value": " notificações"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
+  "web.notifications.selection.select": [
+    {
+      "type": 0,
+      "value": "Selecionar"
+    }
+  ],
+  "web.notifications.selection.selectAllMatching": [
+    {
+      "type": 0,
+      "value": "Selecionar todas as correspondentes"
+    }
+  ],
+  "web.notifications.selection.seriesLabel": [
+    {
+      "type": 0,
+      "value": "Séries selecionadas"
+    }
+  ],
+  "web.notifications.series.afterCatchUp": [
+    {
+      "type": 0,
+      "value": "Quando você ficar em dia"
+    }
+  ],
   "web.notifications.series.allReasons": [
     {
       "type": 0,
@@ -125298,6 +128798,30 @@
       "value": "Qualquer episódio novo"
     }
   ],
+  "web.notifications.series.columnNotifiesFor": [
+    {
+      "type": 0,
+      "value": "Notifica para"
+    }
+  ],
+  "web.notifications.series.columnNotify": [
+    {
+      "type": 0,
+      "value": "Notificar"
+    }
+  ],
+  "web.notifications.series.columnReasons": [
+    {
+      "type": 0,
+      "value": "Motivo"
+    }
+  ],
+  "web.notifications.series.columnSeries": [
+    {
+      "type": 0,
+      "value": "Série"
+    }
+  ],
   "web.notifications.series.empty": [
     {
       "type": 0,
@@ -125310,10 +128834,22 @@
       "value": "As séries que você favoritar, adicionar à sua lista para assistir ou começar a assistir aparecem aqui."
     }
   ],
+  "web.notifications.series.emptyHintNextUp": [
+    {
+      "type": 0,
+      "value": "As séries aparecem aqui depois que você termina um episódio. Quando estiver em dia com uma série, você recebe uma notificação assim que o próximo episódio dela chegar."
+    }
+  ],
   "web.notifications.series.filterByReason": [
     {
       "type": 0,
       "value": "Filtrar por motivo"
+    }
+  ],
+  "web.notifications.series.filterLabel": [
+    {
+      "type": 0,
+      "value": "Filtrar séries"
     }
   ],
   "web.notifications.series.intro": [
@@ -125420,16 +128956,48 @@
       "value": "last"
     }
   ],
+  "web.notifications.series.nextEpisodeAfter": [
+    {
+      "type": 0,
+      "value": "O próximo episódio depois de "
+    },
+    {
+      "type": 1,
+      "value": "code"
+    }
+  ],
+  "web.notifications.series.nextNewEpisode": [
+    {
+      "type": 0,
+      "value": "O próximo episódio novo"
+    }
+  ],
   "web.notifications.series.noMatch": [
     {
       "type": 0,
       "value": "Nenhuma série corresponde. Tente outra pesquisa ou outro motivo."
     }
   ],
+  "web.notifications.series.noMatchFilter": [
+    {
+      "type": 0,
+      "value": "Nenhuma série corresponde. Tente outra pesquisa ou outro filtro."
+    }
+  ],
   "web.notifications.series.notificationsOff": [
     {
       "type": 0,
       "value": "As notificações estão desativadas"
+    }
+  ],
+  "web.notifications.series.notifySwitch": [
+    {
+      "type": 0,
+      "value": "Me notificar sobre novos episódios de "
+    },
+    {
+      "type": 1,
+      "value": "title"
     }
   ],
   "web.notifications.series.reasonOff": [
@@ -125456,6 +129024,22 @@
     {
       "type": 0,
       "value": "Pesquisar séries"
+    }
+  ],
+  "web.notifications.series.selectSeries": [
+    {
+      "type": 0,
+      "value": "Selecionar "
+    },
+    {
+      "type": 1,
+      "value": "title"
+    }
+  ],
+  "web.notifications.series.selectShown": [
+    {
+      "type": 0,
+      "value": "Selecionar todas as séries exibidas"
     }
   ],
   "web.notifications.series.sort": [
@@ -125578,6 +129162,12 @@
     {
       "type": 0,
       "value": " já está disponível"
+    }
+  ],
+  "web.notifications.toast.watchlistArrived": [
+    {
+      "type": 0,
+      "value": "Um título da sua lista para assistir chegou à biblioteca."
     }
   ],
   "web.onboarding.gate.progressFailed": [
@@ -125871,6 +129461,12 @@
       "value": "Áudio"
     }
   ],
+  "web.player.audioMenu.onlyOneTrack": [
+    {
+      "type": 0,
+      "value": "Apenas uma faixa de áudio"
+    }
+  ],
   "web.player.audioMenu.trackFallback": [
     {
       "type": 0,
@@ -125885,6 +129481,16 @@
     {
       "type": 0,
       "value": "Faixas de áudio"
+    }
+  ],
+  "web.player.audioMenu.triggerWithTrack": [
+    {
+      "type": 0,
+      "value": "Faixas de áudio, "
+    },
+    {
+      "type": 1,
+      "value": "track"
     }
   ],
   "web.player.bar.backgroundPlayback": [
@@ -126198,6 +129804,16 @@
       "value": " Mbps"
     }
   ],
+  "web.player.buffering.loadingFrom": [
+    {
+      "type": 0,
+      "value": "Carregando a partir de "
+    },
+    {
+      "type": 1,
+      "value": "time"
+    }
+  ],
   "web.player.buffering.undoCaption": [
     {
       "type": 0,
@@ -126214,6 +129830,26 @@
     {
       "type": 0,
       "value": "Capítulos"
+    }
+  ],
+  "web.player.chaptersMenu.nowPlaying": [
+    {
+      "type": 1,
+      "value": "time"
+    },
+    {
+      "type": 0,
+      "value": " · "
+    },
+    {
+      "type": 8,
+      "value": "now",
+      "children": [
+        {
+          "type": 0,
+          "value": "Reproduzindo agora"
+        }
+      ]
     }
   ],
   "web.player.chaptersMenu.trigger": [
@@ -126276,6 +129912,12 @@
       "value": "Sair da tela cheia"
     }
   ],
+  "web.player.controls.exitFullscreenShortcut": [
+    {
+      "type": 0,
+      "value": "Sair da tela cheia (F)"
+    }
+  ],
   "web.player.controls.fillScreen": [
     {
       "type": 0,
@@ -126286,6 +129928,18 @@
     {
       "type": 0,
       "value": "Tela cheia"
+    }
+  ],
+  "web.player.controls.fullscreenShortcut": [
+    {
+      "type": 0,
+      "value": "Tela cheia (F)"
+    }
+  ],
+  "web.player.controls.more": [
+    {
+      "type": 0,
+      "value": "Mais"
     }
   ],
   "web.player.controls.moreOptions": [
@@ -126307,6 +129961,12 @@
     }
   ],
   "web.player.controls.pictureInPicture": [
+    {
+      "type": 0,
+      "value": "Picture in Picture"
+    }
+  ],
+  "web.player.controls.pictureInPictureItem": [
     {
       "type": 0,
       "value": "Picture in Picture"
@@ -126334,6 +129994,26 @@
     {
       "type": 0,
       "value": "Episódio anterior"
+    }
+  ],
+  "web.player.controls.remainingTime": [
+    {
+      "type": 0,
+      "value": "−"
+    },
+    {
+      "type": 1,
+      "value": "time"
+    }
+  ],
+  "web.player.controls.remainingTimeLabel": [
+    {
+      "type": 0,
+      "value": "Tempo restante: "
+    },
+    {
+      "type": 1,
+      "value": "time"
     }
   ],
   "web.player.controls.skipBack": [
@@ -126854,6 +130534,26 @@
       "value": "A transcodificação está desativada"
     }
   ],
+  "web.player.error.unknownMediaError": [
+    {
+      "type": 0,
+      "value": "Erro desconhecido do elemento de mídia"
+    }
+  ],
+  "web.player.error.updateFailed": [
+    {
+      "type": 0,
+      "value": "Falha ao atualizar a reprodução ("
+    },
+    {
+      "type": 1,
+      "value": "status"
+    },
+    {
+      "type": 0,
+      "value": ")"
+    }
+  ],
   "web.player.error.upgradeRequired.message": [
     {
       "type": 0,
@@ -127052,6 +130752,12 @@
     {
       "type": 0,
       "value": "Quadros perdidos"
+    }
+  ],
+  "web.player.info.heading": [
+    {
+      "type": 0,
+      "value": "Informações de reprodução"
     }
   ],
   "web.player.info.playMethod": [
@@ -127273,6 +130979,115 @@
       "value": "title"
     }
   ],
+  "web.player.nextEpisode.playNow": [
+    {
+      "type": 0,
+      "value": "Reproduzir agora"
+    }
+  ],
+  "web.player.nextEpisode.regionLabel": [
+    {
+      "type": 0,
+      "value": "A seguir"
+    }
+  ],
+  "web.player.nextEpisode.seasonEpisode": [
+    {
+      "type": 0,
+      "value": "Temporada "
+    },
+    {
+      "type": 1,
+      "value": "season"
+    },
+    {
+      "type": 0,
+      "value": " · Episódio "
+    },
+    {
+      "type": 1,
+      "value": "episode"
+    }
+  ],
+  "web.player.nextEpisode.upNextIn": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 0,
+              "value": "A seguir em "
+            },
+            {
+              "type": 8,
+              "value": "num",
+              "children": [
+                {
+                  "type": 7
+                },
+                {
+                  "type": 0,
+                  "value": " s"
+                }
+              ]
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 0,
+              "value": "A seguir em "
+            },
+            {
+              "type": 8,
+              "value": "num",
+              "children": [
+                {
+                  "type": 7
+                },
+                {
+                  "type": 0,
+                  "value": " s"
+                }
+              ]
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 0,
+              "value": "A seguir em "
+            },
+            {
+              "type": 8,
+              "value": "num",
+              "children": [
+                {
+                  "type": 7
+                },
+                {
+                  "type": 0,
+                  "value": " s"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
+    }
+  ],
+  "web.player.postRoll.stillPlaying": [
+    {
+      "type": 0,
+      "value": "Ainda reproduzindo · Clique para voltar"
+    }
+  ],
   "web.player.quality.auto": [
     {
       "type": 0,
@@ -127311,6 +131126,18 @@
       "value": "Selecionada"
     }
   ],
+  "web.player.quality.sourceFile": [
+    {
+      "type": 0,
+      "value": "Arquivo de origem"
+    }
+  ],
+  "web.player.quality.streamingQuality": [
+    {
+      "type": 0,
+      "value": "Qualidade do streaming"
+    }
+  ],
   "web.player.quality.title": [
     {
       "type": 0,
@@ -127321,6 +131148,42 @@
     {
       "type": 1,
       "value": "menu"
+    },
+    {
+      "type": 0,
+      "value": ", "
+    },
+    {
+      "type": 1,
+      "value": "speed"
+    }
+  ],
+  "web.player.quality.triggerWithValue": [
+    {
+      "type": 1,
+      "value": "menu"
+    },
+    {
+      "type": 0,
+      "value": ", "
+    },
+    {
+      "type": 1,
+      "value": "value"
+    }
+  ],
+  "web.player.quality.triggerWithValueAndSpeed": [
+    {
+      "type": 1,
+      "value": "menu"
+    },
+    {
+      "type": 0,
+      "value": ", "
+    },
+    {
+      "type": 1,
+      "value": "value"
     },
     {
       "type": 0,
@@ -128156,6 +132019,12 @@
       "value": "O Silo não conseguiu ler este arquivo. Ele parece estar vazio ou danificado."
     }
   ],
+  "web.player.upNext.autoplay": [
+    {
+      "type": 0,
+      "value": "Reprodução automática"
+    }
+  ],
   "web.player.upNext.autoplayOff": [
     {
       "type": 0,
@@ -128225,6 +132094,18 @@
     {
       "type": 1,
       "value": "series"
+    }
+  ],
+  "web.player.upNext.heading": [
+    {
+      "type": 0,
+      "value": "A seguir"
+    }
+  ],
+  "web.player.upNext.headingShuffle": [
+    {
+      "type": 0,
+      "value": "A seguir, em ordem aleatória"
     }
   ],
   "web.player.upNext.minutesLeft": [
@@ -128303,10 +132184,83 @@
       "value": "Sem prévia"
     }
   ],
+  "web.player.upNext.onDeckScrollBack": [
+    {
+      "type": 0,
+      "value": "Rolar Em andamento para trás"
+    }
+  ],
+  "web.player.upNext.onDeckScrollForward": [
+    {
+      "type": 0,
+      "value": "Rolar Em andamento para a frente"
+    }
+  ],
   "web.player.upNext.playingNext": [
     {
       "type": 0,
       "value": "A seguir"
+    }
+  ],
+  "web.player.upNext.startsAfterCredits": [
+    {
+      "type": 0,
+      "value": "Começa automaticamente quando os créditos terminarem"
+    }
+  ],
+  "web.player.upNext.startsIn": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Começa em "
+            },
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " s"
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Começa em "
+            },
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " s"
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Começa em "
+            },
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " s"
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
     }
   ],
   "web.player.volume.label": [
@@ -129374,6 +133328,18 @@
       "value": "Remover PIN"
     }
   ],
+  "web.profiles.editor.requestsAllowed": [
+    {
+      "type": 0,
+      "value": "Permitir solicitações"
+    }
+  ],
+  "web.profiles.editor.requestsAllowedHint": [
+    {
+      "type": 0,
+      "value": "Permite que este perfil explore títulos que não estão na biblioteca e os solicite. A classificação indicativa limita esses títulos apenas pela classificação dos EUA, e o limite de idade recomendada não se aplica a eles."
+    }
+  ],
   "web.profiles.editor.restrictLibraries": [
     {
       "type": 0,
@@ -129506,6 +133472,12 @@
       },
       "offset": 0,
       "pluralType": "cardinal"
+    }
+  ],
+  "web.profiles.helpers.access.noRequests": [
+    {
+      "type": 0,
+      "value": "Sem solicitações"
     }
   ],
   "web.profiles.helpers.access.quality": [
@@ -130480,6 +134452,12 @@
       "value": "0 = ilimitado"
     }
   ],
+  "web.reader.document.fallbackTitle": [
+    {
+      "type": 0,
+      "value": "Documento"
+    }
+  ],
   "web.reader.endOfBook.nextChapter": [
     {
       "type": 0,
@@ -130488,6 +134466,12 @@
     {
       "type": 1,
       "value": "chapter"
+    }
+  ],
+  "web.reader.error.fileEmpty": [
+    {
+      "type": 0,
+      "value": "O arquivo está vazio"
     }
   ],
   "web.reader.error.fileIdentifier": [
@@ -130506,6 +134490,18 @@
     {
       "type": 0,
       "value": "Este arquivo é grande demais para abrir no navegador. Baixe-o."
+    }
+  ],
+  "web.reader.error.unsupportedFormat": [
+    {
+      "type": 0,
+      "value": "Formato de livro incompatível"
+    }
+  ],
+  "web.reader.error.unsupportedOrCorrupted": [
+    {
+      "type": 0,
+      "value": "Arquivo de livro incompatível ou corrompido"
     }
   ],
   "web.reader.fileOption.unnamed": [
@@ -130704,6 +134700,61 @@
     {
       "type": 0,
       "value": "Pesquisar"
+    }
+  ],
+  "web.reader.search.truncated": [
+    {
+      "type": 6,
+      "value": "count",
+      "options": {
+        "one": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Mostrando a primeira "
+            },
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " correspondência."
+            }
+          ]
+        },
+        "many": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Mostrando as primeiras "
+            },
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " de correspondências."
+            }
+          ]
+        },
+        "other": {
+          "value": [
+            {
+              "type": 0,
+              "value": "Mostrando as primeiras "
+            },
+            {
+              "type": 7
+            },
+            {
+              "type": 0,
+              "value": " correspondências."
+            }
+          ]
+        }
+      },
+      "offset": 0,
+      "pluralType": "cardinal"
     }
   ],
   "web.reader.settings.brightness": [
@@ -131578,6 +135629,12 @@
       "value": "Aguardando importação"
     }
   ],
+  "web.requests.hub.blockedIntro": [
+    {
+      "type": 0,
+      "value": "As solicitações estão desativadas para este perfil. Você ainda pode ver e cancelar as solicitações feitas por ele."
+    }
+  ],
   "web.requests.hub.browseDiscover": [
     {
       "type": 0,
@@ -131796,6 +135853,12 @@
     {
       "type": 0,
       "value": "Solicitações da sua conta, agrupadas pelo que acontece a seguir."
+    }
+  ],
+  "web.requests.hub.yoursIntroProfile": [
+    {
+      "type": 0,
+      "value": "Solicitações feitas por este perfil, agrupadas pelo que acontece a seguir."
     }
   ],
   "web.requests.pageTitle": [
@@ -133803,6 +137866,340 @@
     {
       "type": 0,
       "value": "Avançado"
+    }
+  ],
+  "web.settings.apiKeys.create.access": [
+    {
+      "type": 0,
+      "value": "Acesso"
+    }
+  ],
+  "web.settings.apiKeys.create.accessHint": [
+    {
+      "type": 0,
+      "value": "Escolha pelo menos uma opção. Nenhuma chave pode reproduzir, transmitir ou baixar mídia."
+    }
+  ],
+  "web.settings.apiKeys.create.actsAs": [
+    {
+      "type": 0,
+      "value": "Atua como"
+    }
+  ],
+  "web.settings.apiKeys.create.actsAsHint": [
+    {
+      "type": 0,
+      "value": "Uma chave para um perfil sempre atua como esse perfil e mantém os limites dele. Uma chave da conta inteira pode atuar como qualquer perfil da sua conta."
+    }
+  ],
+  "web.settings.apiKeys.create.copied": [
+    {
+      "type": 0,
+      "value": "Copiado para a área de transferência"
+    }
+  ],
+  "web.settings.apiKeys.create.copyAndClose": [
+    {
+      "type": 0,
+      "value": "Copiar e fechar"
+    }
+  ],
+  "web.settings.apiKeys.create.copyFailed": [
+    {
+      "type": 0,
+      "value": "Não foi possível copiar. Selecione a chave e copie-a manualmente."
+    }
+  ],
+  "web.settings.apiKeys.create.creating": [
+    {
+      "type": 0,
+      "value": "Criando…"
+    }
+  ],
+  "web.settings.apiKeys.create.description": [
+    {
+      "type": 0,
+      "value": "A chave completa é mostrada apenas uma vez."
+    }
+  ],
+  "web.settings.apiKeys.create.label": [
+    {
+      "type": 0,
+      "value": "Rótulo"
+    }
+  ],
+  "web.settings.apiKeys.create.secretNotice": [
+    {
+      "type": 0,
+      "value": "Copie sua chave de API agora. Você não poderá vê-la novamente."
+    }
+  ],
+  "web.settings.apiKeys.create.submit": [
+    {
+      "type": 0,
+      "value": "Criar"
+    }
+  ],
+  "web.settings.apiKeys.create.title": [
+    {
+      "type": 0,
+      "value": "Criar chave de API"
+    }
+  ],
+  "web.settings.apiKeys.create.uncertain": [
+    {
+      "type": 0,
+      "value": "O resultado é incerto. Recarregue a página antes de criar outra chave."
+    }
+  ],
+  "web.settings.apiKeys.createKey": [
+    {
+      "type": 0,
+      "value": "Criar chave"
+    }
+  ],
+  "web.settings.apiKeys.disabled": [
+    {
+      "type": 0,
+      "value": "Este servidor não permite que usuários criem chaves de API. Peça ao administrador para ativar essa opção."
+    }
+  ],
+  "web.settings.apiKeys.empty": [
+    {
+      "type": 0,
+      "value": "Nenhuma chave de API ainda."
+    }
+  ],
+  "web.settings.apiKeys.limitReached": [
+    {
+      "type": 0,
+      "value": "Você atingiu o limite de "
+    },
+    {
+      "type": 1,
+      "value": "max"
+    },
+    {
+      "type": 0,
+      "value": " chaves. Revogue uma para criar outra."
+    }
+  ],
+  "web.settings.apiKeys.list.created": [
+    {
+      "type": 0,
+      "value": "Criada em "
+    },
+    {
+      "type": 1,
+      "value": "date"
+    }
+  ],
+  "web.settings.apiKeys.list.heading": [
+    {
+      "type": 0,
+      "value": "Suas chaves"
+    }
+  ],
+  "web.settings.apiKeys.list.lastUsed": [
+    {
+      "type": 0,
+      "value": "Último uso em "
+    },
+    {
+      "type": 1,
+      "value": "date"
+    }
+  ],
+  "web.settings.apiKeys.list.loadMore": [
+    {
+      "type": 0,
+      "value": "Carregar mais"
+    }
+  ],
+  "web.settings.apiKeys.list.neverUsed": [
+    {
+      "type": 0,
+      "value": "Nunca usada"
+    }
+  ],
+  "web.settings.apiKeys.list.profile": [
+    {
+      "type": 0,
+      "value": "Perfil: "
+    },
+    {
+      "type": 1,
+      "value": "profile"
+    }
+  ],
+  "web.settings.apiKeys.list.revoke": [
+    {
+      "type": 0,
+      "value": "Revogar"
+    }
+  ],
+  "web.settings.apiKeys.list.revokeNamed": [
+    {
+      "type": 0,
+      "value": "Revogar "
+    },
+    {
+      "type": 1,
+      "value": "label"
+    }
+  ],
+  "web.settings.apiKeys.list.wholeAccount": [
+    {
+      "type": 0,
+      "value": "Conta inteira"
+    }
+  ],
+  "web.settings.apiKeys.loadFailed": [
+    {
+      "type": 0,
+      "value": "Não foi possível carregar suas chaves de API."
+    }
+  ],
+  "web.settings.apiKeys.loading": [
+    {
+      "type": 0,
+      "value": "Carregando chaves de API…"
+    }
+  ],
+  "web.settings.apiKeys.revoke.description": [
+    {
+      "type": 1,
+      "value": "label"
+    },
+    {
+      "type": 0,
+      "value": " para de funcionar imediatamente. Isso não pode ser desfeito."
+    }
+  ],
+  "web.settings.apiKeys.revoke.done": [
+    {
+      "type": 0,
+      "value": "Chave de API revogada"
+    }
+  ],
+  "web.settings.apiKeys.revoke.failed": [
+    {
+      "type": 0,
+      "value": "Não foi possível revogar a chave. Recarregue a página e tente novamente."
+    }
+  ],
+  "web.settings.apiKeys.revoke.title": [
+    {
+      "type": 0,
+      "value": "Revogar chave de API"
+    }
+  ],
+  "web.settings.apiKeys.revoke.working": [
+    {
+      "type": 0,
+      "value": "Revogando…"
+    }
+  ],
+  "web.settings.apiKeys.scope.catalogRead": [
+    {
+      "type": 0,
+      "value": "Navegar pelo que o perfil pode ver: bibliotecas, fileiras do Início e das bibliotecas, títulos, pessoas e busca."
+    }
+  ],
+  "web.settings.apiKeys.scope.librariesRead": [
+    {
+      "type": 0,
+      "value": "Ver quais bibliotecas o perfil tem."
+    }
+  ],
+  "web.settings.apiKeys.scope.notifications": [
+    {
+      "type": 0,
+      "value": "Ler as notificações do perfil conforme chegam e marcá-las como lidas."
+    }
+  ],
+  "web.settings.apiKeys.scope.requests": [
+    {
+      "type": 0,
+      "value": "Navegar por títulos que podem ser solicitados e criar, acompanhar e cancelar solicitações de mídia."
+    }
+  ],
+  "web.settings.apiKeys.scope.watchRead": [
+    {
+      "type": 0,
+      "value": "Ler o histórico de exibição, o progresso, as avaliações, os favoritos, a lista para assistir e os títulos ocultos do perfil, e exportar os dados dele."
+    }
+  ],
+  "web.settings.apiKeys.scope.watchWrite": [
+    {
+      "type": 0,
+      "value": "Marcar títulos como assistidos ou não assistidos, sincronizar o progresso, remover o histórico e editar avaliações, favoritos, a lista para assistir e títulos ocultos."
+    }
+  ],
+  "web.settings.apiKeys.subtitle": [
+    {
+      "type": 0,
+      "value": "As chaves permitem que scripts e apps leiam e atualizem seus dados do Silo sem a sua senha."
+    }
+  ],
+  "web.settings.apiKeys.title": [
+    {
+      "type": 0,
+      "value": "Chaves de API"
+    }
+  ],
+  "web.settings.apiKeys.usage.accountKey": [
+    {
+      "type": 0,
+      "value": "Esta chave pode atuar como qualquer perfil da sua conta. Escolha um por solicitação com este cabeçalho. O exemplo usa "
+    },
+    {
+      "type": 1,
+      "value": "profile"
+    },
+    {
+      "type": 0,
+      "value": "; "
+    },
+    {
+      "type": 1,
+      "value": "endpoint"
+    },
+    {
+      "type": 0,
+      "value": " lista o ID de cada perfil."
+    }
+  ],
+  "web.settings.apiKeys.usage.docs": [
+    {
+      "type": 0,
+      "value": "Referência da API"
+    }
+  ],
+  "web.settings.apiKeys.usage.header": [
+    {
+      "type": 0,
+      "value": "Envie-a em todas as solicitações neste cabeçalho:"
+    }
+  ],
+  "web.settings.apiKeys.usage.profileKey": [
+    {
+      "type": 0,
+      "value": "Esta chave sempre atua como "
+    },
+    {
+      "type": 1,
+      "value": "profile"
+    },
+    {
+      "type": 0,
+      "value": ". Ela não precisa de cabeçalho de perfil."
+    }
+  ],
+  "web.settings.apiKeys.usage.title": [
+    {
+      "type": 0,
+      "value": "Como usar esta chave"
     }
   ],
   "web.settings.cardOverlay.adjust": [
@@ -137471,6 +141868,12 @@
       "value": "A senha e os provedores de login que todos os perfis da casa compartilham."
     }
   ],
+  "web.settings.nav.apiKeys.description": [
+    {
+      "type": 0,
+      "value": "Chaves para scripts e apps que trabalham com seu histórico de exibição e suas listas."
+    }
+  ],
   "web.settings.nav.connectApps.description": [
     {
       "type": 0,
@@ -138047,6 +142450,12 @@
       "value": "Chave geral deste perfil"
     }
   ],
+  "web.settings.notifications.episodes.nextUpDescription": [
+    {
+      "type": 0,
+      "value": "Receba notificações quando chegar um novo episódio de uma série com a qual você está em dia, ou quando chegar um título que você adicionou à lista para assistir ou solicitou."
+    }
+  ],
   "web.settings.notifications.episodes.seriesLink": [
     {
       "type": 0,
@@ -138336,7 +142745,7 @@
   "web.settings.notifications.reason.requests": [
     {
       "type": 0,
-      "value": "Solicitações"
+      "value": "Solicitações e lista para assistir"
     }
   ],
   "web.settings.notifications.reason.watchlist": [
@@ -138887,6 +143296,38 @@
       "value": "Canais de áudio"
     }
   ],
+  "web.settings.overlays.badge.availability.description": [
+    {
+      "type": 0,
+      "value": "Temporadas completas de uma série ou episódios de uma temporada que estão na biblioteca"
+    }
+  ],
+  "web.settings.overlays.badge.availability.label": [
+    {
+      "type": 0,
+      "value": "Disponibilidade"
+    }
+  ],
+  "web.settings.overlays.badge.availability.value.complete": [
+    {
+      "type": 0,
+      "value": "Completa"
+    }
+  ],
+  "web.settings.overlays.badge.availability.value.fraction": [
+    {
+      "type": 1,
+      "value": "have"
+    },
+    {
+      "type": 0,
+      "value": "/"
+    },
+    {
+      "type": 1,
+      "value": "total"
+    }
+  ],
   "web.settings.overlays.badge.container.description": [
     {
       "type": 0,
@@ -138963,6 +143404,12 @@
     {
       "type": 0,
       "value": "Legendas disponíveis"
+    }
+  ],
+  "web.settings.overlays.badge.multiSub.value": [
+    {
+      "type": 0,
+      "value": "CC"
     }
   ],
   "web.settings.overlays.badge.network.description": [
@@ -140831,6 +145278,12 @@
     {
       "type": 0,
       "value": "Wi-Fi"
+    }
+  ],
+  "web.settings.plexAuth.homeUserFallbackName": [
+    {
+      "type": 0,
+      "value": "Usuário do Plex"
     }
   ],
   "web.settings.plexAuth.homeUserNoServerAccess": [
@@ -147034,6 +151487,12 @@
       "value": "Ativar legendas"
     }
   ],
+  "web.subtitles.menu.heading": [
+    {
+      "type": 0,
+      "value": "Legendas"
+    }
+  ],
   "web.subtitles.menu.noMatch": [
     {
       "type": 0,
@@ -147082,6 +151541,18 @@
       "value": "Externa"
     }
   ],
+  "web.subtitles.menu.subtitlesOffShortcut": [
+    {
+      "type": 0,
+      "value": "Legendas desativadas (C)"
+    }
+  ],
+  "web.subtitles.menu.subtitlesShortcut": [
+    {
+      "type": 0,
+      "value": "Legendas (C)"
+    }
+  ],
   "web.subtitles.menu.syncHint": [
     {
       "type": 0,
@@ -147128,10 +151599,32 @@
       "value": "Este servidor não permite alterar a sincronia das legendas."
     }
   ],
+  "web.subtitles.menu.toolsLabel": [
+    {
+      "type": 0,
+      "value": "Ferramentas de legendas"
+    }
+  ],
+  "web.subtitles.menu.tracksLabel": [
+    {
+      "type": 0,
+      "value": "Faixas de legendas"
+    }
+  ],
   "web.subtitles.menu.translateWithAi": [
     {
       "type": 0,
       "value": "Traduzir com IA…"
+    }
+  ],
+  "web.subtitles.menu.triggerWithValue": [
+    {
+      "type": 0,
+      "value": "Legendas, "
+    },
+    {
+      "type": 1,
+      "value": "value"
     }
   ],
   "web.subtitles.quotaWindow.day": [

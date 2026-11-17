@@ -10,8 +10,6 @@ import MediaItemMenu from "@/components/MediaItemMenu";
 import ViewTransitionLink from "@/components/ViewTransitionLink";
 import { episodeLinkLibraryId, type EpisodeNavigationState } from "../itemDetailLayout";
 import { useCarouselEmbla } from "@/hooks/useCarouselEmbla";
-import { usePrefetchCatalogItemDetail } from "@/hooks/queries/catalogRead";
-import { useDwellPrefetch } from "@/hooks/useDwellPrefetch";
 import { useEpisodeSpoilerPrefs } from "@/hooks/useEpisodeSpoilerPrefs";
 import { useOverlayPrefs } from "@/hooks/useOverlayPrefs";
 import type { CardQuickActionMode } from "@/lib/cardQuickActions";
@@ -19,6 +17,7 @@ import type { ScrollPreservingState } from "@/hooks/useScrollRestoration";
 import { buildItemHref } from "@/lib/mediaNavigation";
 import { useT } from "@/i18n";
 import EpisodeCardCaption from "./EpisodeCardCaption";
+import WatchProgressBar from "@/components/WatchProgressBar";
 
 interface EpisodeCarouselProps {
   episodes: EpisodeListItem[];
@@ -38,8 +37,6 @@ export default function EpisodeCarousel({
   const currentEpisodeIndex = episodes.findIndex(
     (episode) => episode.episode_number === currentEpisodeNumber,
   );
-  const prefetchScopedEpisode = usePrefetchCatalogItemDetail(libraryId);
-  const prefetchEpisode = usePrefetchCatalogItemDetail();
   const { quickActionMode } = useOverlayPrefs();
   const { hideImages, hideOverviews } = useEpisodeSpoilerPrefs();
   // Moving between siblings keeps the viewer where they scrolled to: the page
@@ -87,11 +84,6 @@ export default function EpisodeCarousel({
                 quickActionMode={quickActionMode}
                 hideImageIfUnwatched={hideImages}
                 hideOverviewIfUnwatched={hideOverviews}
-                onPrefetch={() =>
-                  (episodeLinkLibraryId(ep, libraryId) === undefined
-                    ? prefetchEpisode
-                    : prefetchScopedEpisode)(ep.content_id)
-                }
               />
             ))}
           </ul>
@@ -120,7 +112,6 @@ function EpisodeCarouselCard({
   quickActionMode,
   hideImageIfUnwatched,
   hideOverviewIfUnwatched,
-  onPrefetch,
 }: {
   ep: EpisodeListItem;
   isCurrent: boolean;
@@ -129,11 +120,9 @@ function EpisodeCarouselCard({
   quickActionMode: CardQuickActionMode;
   hideImageIfUnwatched: boolean;
   hideOverviewIfUnwatched: boolean;
-  onPrefetch: () => void;
 }) {
   const t = useT();
   const cardRef = useRef<HTMLDivElement>(null);
-  const prefetchHandlers = useDwellPrefetch(onPrefetch);
   const thumbhashUrl = ep.still_thumbhash ? decodeThumbhash(ep.still_thumbhash) : "";
   const episodeTitle =
     ep.title || t("web.detail.episodes.numbered", { episode: ep.episode_number });
@@ -160,15 +149,12 @@ function EpisodeCarouselCard({
 
   return (
     <li data-episode={ep.episode_number} className="embla__slide shrink-0">
-      <div
-        ref={cardRef}
-        className="media-card-longpress group/card w-[240px]"
-        {...prefetchHandlers}
-      >
+      <div ref={cardRef} className="media-card-longpress group/card w-[240px]">
         <div className="relative">
           <ViewTransitionLink
             to={episodeHref}
             state={episodeLinkState}
+            prefetchOn="intent"
             aria-current={isCurrent ? "page" : undefined}
             className="block"
           >
@@ -207,14 +193,7 @@ function EpisodeCarouselCard({
                   {t("web.detail.episodes.nowViewing")}
                 </div>
               )}
-              {progress != null && (
-                <div className="absolute inset-x-2 bottom-1.5 h-[3px] overflow-hidden rounded-full bg-black/40">
-                  <div
-                    className="h-full rounded-full"
-                    style={{ width: `${progress}%`, background: "var(--primary)" }}
-                  />
-                </div>
-              )}
+              {progress != null && <WatchProgressBar percent={progress} />}
             </div>
           </ViewTransitionLink>
           <MediaItemMenu

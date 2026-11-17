@@ -15,6 +15,7 @@ import { decodeThumbhash } from "@/lib/thumbhash";
 import { HERO_BANNER_SIZE } from "@/lib/design-system";
 import { useAmbientColor } from "@/hooks/useAmbientColor";
 import { usePageActivity } from "@/hooks/usePageActivity";
+import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { HeroOverviewText } from "./HeroOverviewText";
 import { cn } from "@/lib/utils";
 import type { SectionItem } from "@/api/types";
@@ -202,24 +203,34 @@ export default function HeroBanner({
       return false;
     });
   }, []);
+  // Under reduced motion the slideshow starts stopped and runs only after the
+  // user presses Play. `autoplaying` is what actually happens, so the button
+  // label, icon, and progress rail never claim a slideshow that isn't running.
+  const reduceMotion = usePrefersReducedMotion();
+  const [playRequested, setPlayRequested] = useState(false);
+  const autoplaying = !paused && (!reduceMotion || playRequested);
   const togglePause = useCallback(() => {
-    setPaused((prev) => {
-      if (prev) setPlayCycle((c) => c + 1);
-      return !prev;
-    });
-  }, []);
+    if (autoplaying) {
+      // Dropping the Play request keeps a hover or focus `resume` from
+      // restarting a reduced-motion slideshow the user just paused.
+      setPlayRequested(false);
+      setPaused(true);
+      return;
+    }
+    setPlayRequested(true);
+    setPaused(false);
+    setPlayCycle((c) => c + 1);
+  }, [autoplaying]);
 
   // `activeIndex` is in the dep list so that manual navigation (prev/next
   // chevrons) also resets the 8s countdown — otherwise after clicking next at
   // t=5s the auto-advance would still fire at t=8 instead of t=13, desyncing
   // with the progress rail that restarts on slide change.
   useEffect(() => {
-    if (slides.length <= 1 || paused || !shown) return;
-    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (prefersReducedMotion) return;
+    if (slides.length <= 1 || !autoplaying || !shown) return;
     const timer = setInterval(next, 8000);
     return () => clearInterval(timer);
-  }, [next, slides.length, paused, shown, activeIndex]);
+  }, [next, slides.length, autoplaying, shown, activeIndex]);
 
   useEffect(() => {
     const section = sectionRef.current;
@@ -280,7 +291,7 @@ export default function HeroBanner({
     <section
       ref={sectionRef}
       className={cn(
-        "home-hero group relative w-full overflow-hidden",
+        "home-hero group relative flex w-full flex-col overflow-hidden",
         heightClassName,
         bleed ? "-mt-[96px] mb-0 sm:-mt-[104px]" : "border-border/60 mb-10 border-b",
       )}
@@ -324,8 +335,11 @@ export default function HeroBanner({
       {/* Content */}
       <div
         className={cn(
-          "relative z-10 flex h-full min-h-0 items-end px-4 pb-10 sm:px-6 sm:pb-12 lg:px-10 lg:pb-16 xl:px-12",
-          reserveHeaderSpace && "pt-24 sm:pt-28 lg:pt-32",
+          "relative z-10 flex flex-1 items-end px-4 pb-10 sm:px-6 sm:pb-12 lg:px-10 lg:pb-16 xl:px-12",
+          // A tall title block grows the hero rather than overflowing it;
+          // the top padding keeps the title off the top edge (and, below
+          // sm, clear of the slide counter) when that happens.
+          reserveHeaderSpace ? "pt-24 sm:pt-28 lg:pt-32" : "pt-16",
         )}
       >
         <div className="w-full max-w-[1380px]">
@@ -442,11 +456,11 @@ export default function HeroBanner({
               type="button"
               onClick={togglePause}
               aria-label={
-                paused ? t("web.home.hero.playSlideshow") : t("web.home.hero.pauseSlideshow")
+                autoplaying ? t("web.home.hero.pauseSlideshow") : t("web.home.hero.playSlideshow")
               }
               className="glass-subtle flex h-7 w-7 items-center justify-center rounded-full text-white/80 transition-colors hover:text-white"
             >
-              {paused ? <Play className="size-3" /> : <Pause className="size-3" />}
+              {autoplaying ? <Pause className="size-3" /> : <Play className="size-3" />}
             </button>
           </div>
           <div className="absolute end-6 bottom-6 z-20 hidden items-center gap-3 sm:flex lg:end-10 lg:bottom-8 xl:end-12">
@@ -457,7 +471,7 @@ export default function HeroBanner({
             </div>
             <div
               className="hero-progress-rail"
-              data-paused={paused ? "true" : "false"}
+              data-paused={autoplaying ? "false" : "true"}
               aria-hidden="true"
             >
               {/* The key restarts the animation in lockstep with the
@@ -470,11 +484,11 @@ export default function HeroBanner({
               type="button"
               onClick={togglePause}
               aria-label={
-                paused ? t("web.home.hero.playSlideshow") : t("web.home.hero.pauseSlideshow")
+                autoplaying ? t("web.home.hero.pauseSlideshow") : t("web.home.hero.playSlideshow")
               }
               className="flex h-7 w-7 items-center justify-center rounded-full text-white/70 transition-colors hover:text-white"
             >
-              {paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
+              {autoplaying ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
             </button>
           </div>
         </>

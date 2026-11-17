@@ -94,6 +94,18 @@ type carrySpec struct {
 	// limit, when set, turns a switch off on a carried row instead of
 	// dropping it.
 	limit *carryLimit
+	// binding, when set, is a nullable column that narrows what a row's
+	// credential may do. A live row holding a value there is carried only
+	// when the restored schema has the column and what the value names is in
+	// the restored data: carried without it, the credential would be wider
+	// than it is live.
+	binding *carryBinding
+}
+
+// carryBinding names a carrySpec.binding column and the SQL condition, over
+// the live row r, that what it names is in the restored data.
+type carryBinding struct {
+	column, exists string
 }
 
 // carryLimit carries a row with column false where keep, over the live row
@@ -139,9 +151,16 @@ func grantCarried(table string) string {
 // plugin installation is in the restored data.
 const pluginInstalled = `EXISTS (SELECT 1 FROM plugin_installations i WHERE i.id = r.plugin_installation_id)`
 
+// profileOf is the SQL condition that the account in the account column has
+// the profile in the profile column in the restored data. A profile id is
+// unique only within an account.
+func profileOf(account, profile string) string {
+	return `EXISTS (SELECT 1 FROM user_profiles p WHERE p.user_id = ` + account + ` AND p.id = ` + profile + `)`
+}
+
 // profileExists is the SQL condition, over the live row r, that its
-// profile is in the restored data.
-const profileExists = `EXISTS (SELECT 1 FROM user_profiles p WHERE p.id = r.profile_id)`
+// account has its profile in the restored data.
+var profileExists = profileOf("r.user_id", "r.profile_id")
 
 // Reasons shared by several secretTables entries.
 const (
@@ -187,6 +206,10 @@ var secretTables = []secretTable{
 		key: "id", same: []string{"id", columnUserID, "key_hash", "key_prefix"}, credential: everyRow,
 		owned: ownerCarried(columnUserID), owners: []string{columnUserID},
 		describe: `format('API key %s %L (account %s)', r.id, r.label, r.user_id)`,
+		// A key bound to a profile acts only as that profile. Carried into
+		// a backup taken before keys could be bound, it would become an
+		// account key that names any profile.
+		binding: &carryBinding{column: columnProfileID, exists: profileOf("r."+columnUserID, "r."+columnProfileID)},
 	}},
 	{name: "invitations", handling: secretCarried, why: "pending invitations", carry: &carrySpec{
 		key: "id", same: []string{"id", "token_hash"}, credential: `t.accepted_at IS NULL AND t.revoked_at IS NULL`,
@@ -211,20 +234,20 @@ var secretTables = []secretTable{
 		owners: []string{columnUserID},
 		owned: ownerCarried(columnUserID) + `
 			AND EXISTS (SELECT 1 FROM media_items m WHERE m.content_id = r.library_item_id)
-			AND (r.profile_id IS NULL OR EXISTS (SELECT 1 FROM user_profiles p WHERE p.id = r.profile_id::text))`,
+			AND (r.profile_id IS NULL OR ` + profileOf("r.user_id", "r.profile_id::text") + `)`,
 		describe: `format('RSS feed %s (account %s)', r.id, r.user_id)`,
 	}},
 	{name: "webhook_sync_connections", handling: secretCarried, why: "Plex and Jellyfin webhook sync secrets", carry: &carrySpec{
 		key: "id", same: []string{"id", columnUserID, "webhook_secret"}, credential: everyRow,
 		owners: []string{columnUserID},
 		owned: ownerCarried(columnUserID) + `
-			AND (r.default_profile_id = '' OR EXISTS (SELECT 1 FROM user_profiles p WHERE p.id = r.default_profile_id))`,
+			AND (r.default_profile_id = '' OR ` + profileOf("r.user_id", "r.default_profile_id") + `)`,
 		describe: `format('webhook sync connection %s %L (account %s)', r.id, r.server_name, r.user_id)`,
 	}},
 	{name: "webhook_sync_profile_mappings", handling: secretCarried, why: "the profile mappings of those connections", carry: &carrySpec{
 		key: "id", same: []string{"id", "connection_id", "external_user_id"}, credential: everyRow,
-		owned: `EXISTS (SELECT 1 FROM webhook_sync_connections c WHERE c.id = r.connection_id)
-			AND (r.silo_profile_id IS NULL OR EXISTS (SELECT 1 FROM user_profiles p WHERE p.id = r.silo_profile_id))`,
+		owned: `EXISTS (SELECT 1 FROM webhook_sync_connections c WHERE c.id = r.connection_id
+				AND (r.silo_profile_id IS NULL OR ` + profileOf("c.user_id", "r.silo_profile_id") + `))`,
 		describe: `format('webhook sync mapping %s of connection %s', r.id, r.connection_id)`,
 	}},
 
@@ -723,6 +746,16 @@ func (t secretTable) carryInto(ctx context.Context, tx pgx.Tx, live string, resu
 	}
 	keyColumns := strings.Split(c.key, ", ")
 	owned := c.owned
+	if b := c.binding; b != nil {
+		if slices.Contains(columns, b.column) {
+			owned = fmt.Sprintf(`(%s) AND (r.%s IS NULL OR %s)`, owned, b.column, b.exists)
+		} else {
+			// r has only the restored schema's columns, so the binding is
+			// read from the live rows themselves.
+			owned = fmt.Sprintf(`(%s) AND NOT EXISTS (SELECT 1 FROM json_array_elements($1::json) j
+				WHERE j->>'%s' = r.%s::text AND j->>'%s' IS NOT NULL)`, owned, c.key, c.key, b.column)
+		}
+	}
 	restoredKey, err := primaryKeyColumns(ctx, tx, t.name)
 	if err != nil {
 		return err
@@ -774,19 +807,24 @@ func (t secretTable) carryInto(ctx context.Context, tx pgx.Tx, live string, resu
 		return err
 	}
 	result.Kept[t.name] += int(tag.RowsAffected())
-	// An identity sequence restored from the backup can be behind the live
-	// ids just written; the next credential must not collide with them. A
-	// table keyed by several columns has none.
-	if len(keyColumns) > 1 {
-		return nil
+	// A sequence restored from the backup can be behind the live values just
+	// written. The next credential must not collide with a carried id, and a
+	// carried sign-in link's answer_seq must stay behind every value taken
+	// from now on, or its sign-ins would be refused as stale.
+	for _, col := range columns {
+		var seq *string
+		if err := tx.QueryRow(ctx, `SELECT pg_get_serial_sequence($1, $2)`, t.name, col).Scan(&seq); err != nil {
+			return err
+		}
+		if seq == nil {
+			continue
+		}
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`SELECT setval($1::regclass, GREATEST(
+			coalesce(pg_sequence_last_value($1::regclass), 0), (SELECT coalesce(max(%s), 0) FROM %s), 1))`, col, t.name), *seq); err != nil {
+			return err
+		}
 	}
-	var seq *string
-	if err := tx.QueryRow(ctx, `SELECT pg_get_serial_sequence($1, $2)`, t.name, key).Scan(&seq); err != nil || seq == nil {
-		return err
-	}
-	_, err = tx.Exec(ctx, fmt.Sprintf(`SELECT setval($1::regclass, GREATEST(
-		coalesce(pg_sequence_last_value($1::regclass), 0), (SELECT coalesce(max(%s), 0) FROM %s), 1))`, key, t.name), *seq)
-	return err
+	return nil
 }
 
 // primaryKeyColumns lists the columns of table's primary key, in key order;

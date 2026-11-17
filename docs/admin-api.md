@@ -261,6 +261,45 @@ container), `direct_stream` (copied video with converted audio), or `transcode`
 Per-stream Copy means no re-encoding; it does not promise byte-identical packets
 after a permitted bitstream transformation.
 
+`adaptation_reasons: true` on the capability response advertises an optional
+`adaptation_reasons` list on v2 session rows: why the route converts or
+repackages the file instead of playing it as it is. The playback planner derives
+the list from the facts it chose the route by and stores it with the live
+session. The plan's own `decision_reason` can't stand in for it: that field names
+only the last step that shaped the recipe, so a video the device can't decode
+reports its quality step. The list follows the order of
+`adaptation_reason_values`, video causes first:
+
+| Value | Meaning |
+| --- | --- |
+| `video_codec_unsupported` | The device can't decode the video codec, profile, level or bit depth. |
+| `video_capability_unconfirmed` | The client's capability evidence can't confirm it decodes the video. |
+| `dynamic_range_unsupported` | The output can't show the source's HDR or Dolby Vision as it is (tone mapping or a Dolby Vision conversion). |
+| `resolution_limit` | The source is taller than the device's maximum resolution. |
+| `bandwidth_limit` | The client's bandwidth estimate can't carry the source. |
+| `buffering` | Earlier buffering lowered the estimate: the player reported rebuffering during this play, or the server applied a limit learned from recent rebuffering on this device and connection. |
+| `bandwidth_cap` | The viewer's Maximum bitrate setting (`playback.max_bitrate_kbps`, profile or device), sent as the request's cap, is below the source. |
+| `server_bitrate_limit` | The user's access group Max local or remote stream bitrate binds, being lower than any request cap. |
+| `quality_selected` | The viewer chose a quality below the source. |
+| `subtitle_burn_in` | The selected subtitle is rendered into the video. |
+| `direct_play_failed` | The client already tried the original file, or every copy route, and it failed; nothing else forced the change. |
+| `audio_codec_unsupported` | The device, or the delivery it needs, can't carry the audio codec. |
+| `audio_channels_unsupported` | The audio has more channels than the output allows. |
+| `device_workaround` | A known device quirk needs the audio converted. |
+| `audio_track_selection` | The selected audio track is not the one the original file plays. |
+| `container_unsupported` | The device can't open the container, or offers no original-file delivery. |
+| `subtitle_unsupported` | The selected subtitle can't be delivered with the original file. |
+
+A video transcode lists audio reasons only when the audio alone couldn't have
+been copied, because every encode also converts the audio. The field is absent
+for Direct Play, for a session planned before the server recorded reasons, and
+for Jellyfin-protocol sessions, whose route decision doesn't come from this
+planner. Reasons survive a seek reanchor (they ride on the executable recipe)
+and a rebuild after a restart (from the recovery card, or from the live row for
+a session rebuilt from a stream token). Values are additive; clients ignore
+values they don't know, and the server drops stored values it doesn't know. The
+frozen v1 row never carries the field.
+
 `output_format: true` on the same capability response advertises optional
 `output_container` and `output_protocol` fields on v2 session rows. The serving
 transport reports the container (`fmp4`, `mpegts`, or the source container for
@@ -310,6 +349,8 @@ configuration, last health result, and last stored hardware inventory. See
 | `healthy` | bool | Result of the last health check. |
 | `drain_requested` | bool | An administrator asked this transcode node to drain: it stays listed and health-checked, but new work goes to other nodes while its sessions finish. See [node drain (v2)](#node-drain-v2). Always `false` on a proxy. |
 | `drain_state` | string | What the node reported on its last health check: `none`, `draining` (after a drain request or SIGTERM, while it finishes its work) or `drained` (nothing left; safe to stop). `none` for a proxy, a node that predates draining, and a node that did not answer. |
+| `key_issued` | bool | A node key has been issued to this transcode node. The key itself is shown only in the response that issues it. Always `false` on a proxy. See [node keys (v2)](#node-keys-v2). |
+| `source_access` | string | How this transcode node reads source media: `local` through its own library mount at the API servers' paths, `core` over HTTP from the API servers. Omitted on a proxy. See [node source access (v2)](#node-source-access-v2). |
 | `active_jobs`, `egress_kbps` | int | Last health-reported load. `egress_kbps` is a rolling average and is currently non-zero for proxy nodes only. |
 | `group` | string \| null | Co-location group. A group is only eligible while every enabled member is healthy. |
 | `max_jobs`, `max_bandwidth_kbps` | int \| null | Capacity caps. `null` means unlimited. `max_jobs` limits streams and file downloads on a proxy and transcodes on a transcode node. `max_bandwidth_kbps` limits a proxy's egress, and a proxy with it set takes no file downloads, because a download's rate is unknown and cannot be reserved; it is stored for a transcode node but not enforced, because a transcode node's output leaves through a proxy or the API server. |
@@ -377,10 +418,15 @@ provider origin, or the file is served from the API server when the planned
 proxy has none. The Jellyfin-compatible playback redirects use the same
 accessor.
 
-A node finds its own row by URL first: `NODE_URL` on the node is matched
+A transcode node needs no matching: its key (`SILO_NODE_KEY`) names its row,
+and the API serves it that row's overrides already applied in its
+configuration document (`GET /api/internal/nodes/self/config`), at its
+30-second poll and at once after an admin change to the row.
+
+A proxy finds its own row by URL first: `NODE_URL` on the proxy is matched
 against `stream_nodes.url`, ignoring a trailing slash on either side. A proxy
-or transcode node refuses to start without `NODE_URL`: a URL guessed from its
-listen port could match a different machine's row and adopt its policy.
+refuses to start without `NODE_URL`: a URL guessed from its listen port could
+match a different machine's row and adopt its policy.
 
 If the URL does not match, the node falls back to `NODE_NAME` against the
 registered name. This covers split-horizon topologies where `stream_nodes.url`
@@ -398,8 +444,8 @@ goes on dispatching that row's backend and a row that has gone is not evidence
 an operator cleared the override. Fix the mismatch: the node adopts whatever it
 finds on its next poll.
 
-The node overlays its row onto the cluster-wide playback settings on every
-config reload, so the override is what that node probes with, advertises in
+A proxy overlays its row onto the cluster-wide playback settings on every
+config reload, and a transcode node receives them overlaid, so the override is what that node probes with, advertises in
 `capabilities.resolved`, and falls back to when a start request names no
 backend. The API dispatches remote transcodes with the node's
 `hw_accel_override` in preference to its own cluster setting, so the request
@@ -676,14 +722,18 @@ selection, which is round-robin and does no GPU work.
 ## `POST /api/v2/admin/nodes`
 
 Registers a node. Body: `name`, `type` (`proxy` or `transcode`), `url`, and the
-optional `public_url`, `group`, `max_jobs`, `max_bandwidth_kbps`. A
-non-positive cap and an empty group mean "unlimited" and "ungrouped"; an empty
-`public_url` means clients use `url`.
+optional `public_url`, `group`, `max_jobs`, `max_bandwidth_kbps` and
+`source_access`. A non-positive cap and an empty group mean "unlimited" and
+"ungrouped"; an empty `public_url` means clients use `url`; an omitted
+`source_access` means `local`, and a proxy accepts only `local`
+(`422 validation_failed` otherwise).
 
 `201 Created` with the created node in the same shape as one list entry (with
 no capability fields yet: nothing has been fetched). `422 validation_failed` when a
 required field is missing or `type` is not one of the two allowed values, and
-`409` when a node with that URL already exists with a different configuration; see
+`409` when a node with that URL already exists with a different configuration, or
+when another transcode node already has the same address spelled differently
+(`http://gpu`, `HTTP://GPU:80/`); see
 [node configuration lifecycle (v2)](#node-configuration-lifecycle-v2). The
 node pools are reloaded afterwards.
 
@@ -693,7 +743,8 @@ Updates a node's mutable fields. Every field is optional; an omitted field is
 left unchanged. An empty-string `group` clears the group, and a non-positive
 `max_jobs` or `max_bandwidth_kbps` clears that cap. The request needs the node's
 `config_etag` in `If-Match`: `428` without one, `412` when it is stale. A new
-`url` that belongs to another node gets `409`. See
+`url` that belongs to another node gets `409`, and so does a transcode node's
+new `url` that another transcode node already has under another spelling. See
 [node configuration lifecycle (v2)](#node-configuration-lifecycle-v2).
 
 `public_url` follows the same convention as the overrides below: `null` or an
@@ -722,14 +773,41 @@ when the node restarts; files in the old directory are not moved, so in-use file
 prepared again and cached ones are dropped. See
 [prepared download storage](architecture/download-storage.md).
 
+`source_access` (`local` or `core`) is writable here for a transcode node; a
+proxy accepts only `local`, and anything else is `422 validation_failed`. See
+[node source access (v2)](#node-source-access-v2).
+
 Capability fields are not writable here. They are owned by the health sweep,
 because only the node can say what hardware it has.
+
+### Node source access (v2)
+
+A transcode node reads the source media of its jobs in one of two ways, its
+`source_access`:
+
+- `local` (the default): from its own library mount, which must show every
+  file at the API servers' paths with the same size.
+- `core`: over HTTP from the API servers. The node needs no library mount, and
+  every byte it reads passes through the API servers, so they need the
+  bandwidth for it. `silo_node_source_bytes_sent_total{node}` on each API
+  server shows what each node reads.
+
+The setting is stored configuration: a change advances the node's `config_etag`
+and the pool generation, and the API server pushes `/admin/reload-config` to the
+node. The node applies it to the jobs it starts afterwards; running jobs keep
+their mode. `GET /api/v2/admin/nodes/capabilities` advertises
+`source_access: true` when the server takes the field.
+[Transcode nodes: core source access](architecture/transcode-nodes.md#core-source-access)
+describes the design.
 
 ## `DELETE /api/v2/admin/nodes/{id}`
 
 Removes a node. `204 No Content`, or `404 Not Found` for an unknown id. The
-node pools are reloaded afterwards. Sessions already streaming from the node
-are not torn down by this call. Like PUT, it needs the node's `config_etag` in
+node pools are reloaded afterwards. The node's credential is gone from the
+answering server before the `204`, and from the other API servers and proxies
+once `node_pool_changed` reaches them: nothing signs requests to the node or
+accepts its calls, so its sessions stop serving viewers (relays answer them as
+"node unavailable" and do not move them). The call sends the node nothing. Like PUT, it needs the node's `config_etag` in
 `If-Match`: `428` without one, `412` when it is stale.
 
 ## `POST /api/v2/admin/nodes/{id}/check`
@@ -1105,6 +1183,7 @@ though layout save and reset are served; see
 | `downloads_stats` | `GET /admin/stats/downloads` serves the offline-download aggregate, and timeseries points carry the additive `download_egress_kbps` split. |
 | `egress_totals` | `GET /admin/stats/timeseries` carries the window's additive `egress_bytes` and `download_egress_bytes` totals. |
 | `egress_by_source` | `GET /admin/stats/timeseries` carries `egress_sources` and each point's `egress_by_source` split. |
+| `streams_by_method` | `GET /admin/stats/timeseries` points carry the `streams_by_method` split. |
 | `api_clients` | `GET /admin/stats/api-clients` and `GET /admin/stats/api-clients/{session_id}/endpoints` serve per-session API request counts. |
 
 ```json
@@ -1119,6 +1198,7 @@ though layout save and reset are served; see
   "downloads_stats": true,
   "egress_totals": true,
   "egress_by_source": true,
+  "streams_by_method": true,
   "api_clients": true
 }
 ```
@@ -1316,6 +1396,14 @@ also covers sources that never served at a bucket's peak minute. Each carries
 sampled minute like the window's own `egress_bytes`. Rank sources by that, not
 by summing the per-point split, which only sees peak minutes.
 
+`direct`, `remux` and `transcode` each take their own per-bucket peak, like
+`streams`, so past the one-minute resolution they may come from different
+minutes and can add up to more than `streams`. `streams_by_method` is the
+stackable form: the same three counts read from the minute whose `streams`
+peaked in the bucket (the earliest such minute on a tie), so they add up to no
+more than that point's `streams`. The remainder is sessions with any other
+play method.
+
 A bucket with no sample in it is absent from `points` rather than zero — a gap
 (a restart, a stopped server) and an idle bucket are different facts. Stream
 telemetry being disabled means no `proc:` rows, not an error.
@@ -1343,7 +1431,8 @@ fresh install renders "collecting data" instead of an empty chart.
       "transcode": 2,
       "egress_kbps": 48211,
       "download_egress_kbps": 6100,
-      "egress_by_source": { "api": 9211, "node:4": 39000 }
+      "egress_by_source": { "api": 9211, "node:4": 39000 },
+      "streams_by_method": { "direct": 1, "remux": 0, "transcode": 2 }
     }
   ]
 }
@@ -2211,7 +2300,8 @@ file paths.
 take `{"ids": [...]}` (1–500 job ids) and return one `{id, outcome}` per
 distinct id in request order. `outcome` is `applied`, `unchanged` (already in
 the requested state), `not_found` (no such job is being prepared: it finished,
-was canceled, or never existed), or `not_applicable` (pausing or resuming a
+was canceled, was stopped because no download needs it any more, or never
+existed), or `not_applicable` (pausing or resuming a
 failed job). Pause keeps a job's queue position but no worker claims it until
 it is resumed; a running encode stops and restarts from the beginning on resume,
 and the stopped attempt does not count against the job. Its waiting downloads
@@ -2225,8 +2315,8 @@ preparing is never touched. The three operations are idempotent.
 the realtime channel (`download_preparations`), the failure window in seconds,
 and `controls` when pause, resume, and cancel are available. The admin-only channel publishes `download_preparation.changed`
 (`{id}`) when a job is queued, claimed, assigned a worker, finishes, fails, is
-requeued, paused, resumed, or canceled, and when a user adds or removes a
-download waiting on it, and `download_preparation.progress` (`{id, progress}`) at most every
+requeued, paused, resumed, canceled, or stopped because no download needs it,
+and when a user adds or removes a download waiting on it, and `download_preparation.progress` (`{id, progress}`) at most every
 five seconds per running job. The subscription snapshot is `null`; re-read the
 list after subscribing. See
 [preparation progress](downloads-api.md#preparation-progress-admin) for how the
@@ -2521,12 +2611,13 @@ invalidates the exact compatibility status scope only for the active authority.
 
 ### Dashboard capability discovery in v2
 
-`GET /api/v2/admin/dashboard/capabilities` returns the eleven dashboard support
+`GET /api/v2/admin/dashboard/capabilities` returns the twelve dashboard support
 flags to an acting administrator. These describe the v2 surface in the API build;
 they do not promise that a database or other runtime dependency is healthy.
 
 `timeseries`, `playback_activity`, `top_activity`, `health`, `watch_providers`,
-`downloads_stats`, `egress_totals`, `egress_by_source` and `api_clients` are true for
+`downloads_stats`, `egress_totals`, `egress_by_source`, `streams_by_method` and
+`api_clients` are true for
 the existing v2 dashboard operations. `server_layouts` remains false until the full
 layout lifecycle is accepted, although layout read, save and reset are served.
 `log_level_list` is true for the accepted multi-level application-log reader.
@@ -2930,11 +3021,11 @@ change logging have an empty list. Each change has `source_path` (as reported),
 `outcome`: `queued` (created a scan run), `joined` (coalesced into a run for the
 same scope that was already queued or running), `suppressed` (debounced),
 `unresolved` (did not map to a scannable library location), `ignored` (empty path,
-or a file change that resolved to a whole library) or `error` (resolve or enqueue
-failure). `reason` is a machine code for unresolved, ignored and error outcomes:
-resolver reasons such as `no_library_match`, `library_root_offline` or
-`unsupported_extension`, plus `resolves_to_library`, `resolve_failed` and
-`enqueue_failed`; clients treat unknown codes and unknown outcomes as opaque and
+a file change that resolved to a whole library, or a file the library's ignore files
+exclude) or `error` (resolve or enqueue failure). `reason` is a machine code for
+unresolved, ignored and error outcomes: resolver reasons such as `no_library_match`,
+`library_root_offline`, `unsupported_extension` or `path_ignored`, plus
+`resolves_to_library`, `resolve_failed` and `enqueue_failed`; clients treat unknown codes and unknown outcomes as opaque and
 may show `detail`. Resolved changes include `library_id`, `target_mode` and
 `target_path`; queued and joined changes include the covering `scan_run_id`, which
 is how a joined change names a run another event created. A change that joins a
@@ -3260,6 +3351,28 @@ served. The web nodes page shows `Draining · N transcodes left` and then
 `Drained · safe to stop` from these fields. See
 [node drain](architecture/node-drain.md) for the protocol.
 
+### Node keys (v2)
+
+`POST /api/v2/admin/nodes/{id}/key` (`issueAdminNodeKey`) issues a transcode
+node its own key and returns it once: `201 {"node_key": "snk1_<id>_<random>"}`
+with `Cache-Control: no-store`. The key is never returned again; the node row
+only reports `key_issued`. Every call rotates: the previous key is gone from
+this server's credential registry before the response, and from the other API
+servers and proxies once `node_pool_changed` reaches them (within a minute
+without it). The node's running streams fail until it restarts with the new
+key, so drain it first. A disabled node can take a key. The operation requires an acting
+administrator, rejects demo mode, takes no body and is non_retryable: after a
+lost response, issue again rather than replaying. A proxy node returns 409 (a
+proxy takes no key), a missing node 404, a server without the data cipher 503,
+invalid IDs 422, and repository failures a private 500 problem.
+
+The key is stored encrypted in `stream_nodes.node_key_ciphertext` (see
+[secret encryption](architecture/secret-encryption.md)). It is a credential, not
+configuration: issuing it advances neither `config_etag` nor the pool
+generation. `GET /api/v2/admin/nodes/capabilities` advertises `node_keys: true`
+when this server can issue keys. The node starts with this key and the API's
+URL; see [transcode nodes](architecture/transcode-nodes.md).
+
 ### Force reload nodes (v2)
 
 `POST /api/v2/admin/nodes/force-reload` (`forceReloadAdminNodes`) takes a snapshot
@@ -3371,6 +3484,16 @@ check records it on the installation row, so every node returns it. It disappear
 installed version changes or a later check handles the plugin without failing; a check that
 cannot reach the plugin's repository leaves it in place.
 
+Every installation carries `signature`, the release signature check Silo ran when it installed
+the package ([plugin trust](architecture/plugin-trust.md#release-signatures)). `state` is
+`verified`, `unsigned` (nothing to check: an upload, an archive install, or a catalog entry
+without `bundle_url`), `invalid` (a bundle was checked and did not prove the policy), or
+`unknown` (installed before Silo checked signatures, or the check could not run). A verified
+installation also has `source_repo`, the repository its signing certificate names, and
+`verified_at`. The check is recorded once on the installation row and is not re-run; replacing
+the package records the new package's result. Catalog entries carry no signature, because
+nothing is verified before download.
+
 Both reads require an acting administrator and answer 503 when the
 plugin service or stores are not wired. The web plugins page and admin sidebar read these
 routes under captured profile authority and drain pages with a bounded loop; a stale
@@ -3416,7 +3539,8 @@ names a different `plugin_id` or `version` than the catalog entry, or a catalog 
 longer lists the requested version. A catalog, checksum or download host that cannot be
 reached, answers 429 or 5xx, or cuts the response short is 503 `dependency_unavailable`
 with `Retry-After: 30`. Nothing is written in either case; an update leaves the installed
-version in place.
+version in place, and a running plugin keeps running, because the installed plugin is
+stopped only after the new package passed these checks.
 
 `POST /api/v2/admin/plugins/installations/{id}/restart` stops the installation's process
 and, for a resident plugin, starts it again with a fresh failure budget; a non-resident plugin
@@ -3492,7 +3616,18 @@ so the plugin's default applies; fields the manifest does not declare (plugin-ow
 are kept. Manifest-declared secret fields left blank keep their stored value, and a secret is
 removed only when named in `clear_secrets`. The
 connection test (`.../config/test` and the auth connection test) merges a staged entry the
-same way without storing it. The server validates the merged entry against the
+same way without storing it, with one difference: a blank secret reuses the stored secret
+only while the entry is otherwise unchanged. Unchanged means no secret is typed and every
+other field, after clears, matches the stored entry; a field the stored entry lacks
+matches its declared default. A secret object or list (such as a map of servers with keys
+inside) counts as typed whenever it is sent, because its contents are secret. A staged entry that changes a server URL, issuer, CA or any
+other setting, or types a secret, is tested with only the secrets the administrator typed
+and without undeclared stored top-level fields, so a destination changed in an entry never
+receives the saved secrets that entry declares. An undeclared key stored inside a declared
+object is kept, and an entry whose schema declares no secret is merged as a save would
+merge it, undeclared stored fields included. The rule is per entry: the other stored entries go to the
+plugin unchanged, so a plugin that keeps a credential in one entry and its destination in
+another is not covered. The server validates the merged entry against the
 plugin's schema and returns 422 with the plugin's own message on failure, then persists
 under a compare-and-swap on the stored revision and stops the running plugin so it rebinds.
 Success is 204. Repeating the same request converges on one stored entry, so the row is
@@ -3545,7 +3680,7 @@ identifies the acting administrator. Actor filters use
 | `user.impersonation_ended` | `endImpersonation` | `impersonation_session_id` (before) |
 | `user.ownership_transferred` | `transferAdminUserOwnership`; target is the new Owner | `owner_user_id` |
 | `user.password_reset_link_created` | `createAdminUserPasswordReset` | `delivery`, `expires_at` |
-| `user.password_reset_completed` | `completePasswordReset` | `password` (field name only) |
+| `user.password_reset_completed` | `completePasswordResetLink`, `completePasswordReset` (deprecated) | `password` (field name only) |
 | `user.password_changed` | `changePassword` | `password` (field name only) |
 | `user.login_session_revoked` | `deleteSession`, `deleteAdminUserLoginSession` | `login_session_id` (before) |
 | `user.login_sessions_revoked` | `deleteAdminUserLoginSessions` | `revoked_login_sessions` count; recorded when the call ended any login session or Audiobookshelf, Jellyfin-compatible or device sign-in |
@@ -3564,9 +3699,11 @@ profile. Login session IDs identify sessions and are not credentials.
 
 Audit rows never contain a password, password or PIN hash, PIN, access or
 refresh token, API key or its prefix, reset link, its token or digest, or an
-arbitrary request body or header. The path of `completePasswordReset` is stored
-with its link token replaced by `[redacted]`, and that row has no `user_id`
-because the request is unauthenticated.
+arbitrary request body or header. `completePasswordResetLink` takes the link
+token in its body, so its path has none; the path of the deprecated
+`completePasswordReset` is stored with its link token replaced by
+`[redacted]`. Neither row has a `user_id`, because the request is
+unauthenticated.
 
 Rollbacks and refused requests record no domain action, and neither does a
 write that changes no allowlisted value: a repeated identical policy write,

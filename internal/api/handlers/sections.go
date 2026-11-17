@@ -216,6 +216,17 @@ func validateSectionConfig(sectionType sections.SectionType, config json.RawMess
 			return "library_collection_id is required for collection sections", false
 		}
 	}
+	// An admin page row of collections shows server collections only, and
+	// its list is checked on every write: a bad entry would block deleting
+	// the collections it names.
+	if sectionType == sections.SectionCollectionPosters {
+		if msg, ok := validateRecipeConfig(sectionType, config); !ok {
+			return msg, false
+		}
+		if err := sections.ValidateAdminCollectionPosters(sectionType, config); err != nil {
+			return err.Error(), false
+		}
+	}
 
 	cfg := sections.ParseConfigFilters(config)
 	if cfg.FilterType != "" && cfg.FilterType != "movie" && cfg.FilterType != "series" && cfg.FilterType != "audiobook" {
@@ -349,10 +360,12 @@ type sectionItemResponse struct {
 	BackdropThumbhash      string                 `json:"backdrop_thumbhash,omitempty"`
 	LogoURL                string                 `json:"logo_url,omitempty"`
 	OverlaySummary         *models.OverlaySummary `json:"overlay_summary,omitempty"`
-	Badges                 []string               `json:"badges,omitempty"`
-	ItemSource             string                 `json:"item_source,omitempty"`
-	UserState              *itemUserStateResponse `json:"user_state,omitempty"`
-	UpcomingEvent          *upcomingEventResponse `json:"upcoming_event,omitempty"`
+	// Availability is the series poster fraction. json:"-" because /api/v1 is frozen.
+	Availability  *catalog.Availability  `json:"-"`
+	Badges        []string               `json:"badges,omitempty"`
+	ItemSource    string                 `json:"item_source,omitempty"`
+	UserState     *itemUserStateResponse `json:"user_state,omitempty"`
+	UpcomingEvent *upcomingEventResponse `json:"upcoming_event,omitempty"`
 	// PendingTranslationLanguage and MachineTranslatedFields reach the v2
 	// card only; v1 is frozen.
 	PendingTranslationLanguage string   `json:"-"`
@@ -389,6 +402,9 @@ type resolvedSectionResponse struct {
 	IsCustom    bool                  `json:"is_custom"`
 	Customized  bool                  `json:"customized"`
 	Items       []sectionItemResponse `json:"items"`
+	// Collections are a row of collections' cards. Only the v2 API carries
+	// them.
+	Collections []sections.CollectionCard `json:"-"`
 	// TitleKey and TitleArgs are the section's; see
 	// sections.ResolvedSection. Only the v2 API carries them.
 	TitleKey  string            `json:"-"`
@@ -470,6 +486,9 @@ func (h *SectionHandler) loadResolvedHomeSections(ctx context.Context) ([]sectio
 		accessFilter.AllowedLibraryIDs = scope.AllowedLibraryIDs
 		accessFilter.DisabledLibraryIDs = scope.DisabledLibraryIDs
 		accessFilter.MaturityLimits = scope.MaturityLimits
+		// Next Up and recently added TV leave out episodes with no version
+		// within the playback-quality ceiling.
+		accessFilter.MaxPlaybackQuality = scope.MaxPlaybackQuality
 	} else if h.UserRepo != nil {
 		// Fail closed: an unresolved policy must not serve unrestricted
 		// sections, so a lookup failure becomes an error for the caller
@@ -530,6 +549,9 @@ func (h *SectionHandler) loadResolvedLibrarySections(ctx context.Context, librar
 		accessFilter.AllowedLibraryIDs = scope.AllowedLibraryIDs
 		accessFilter.DisabledLibraryIDs = scope.DisabledLibraryIDs
 		accessFilter.MaturityLimits = scope.MaturityLimits
+		// Next Up and recently added TV leave out episodes with no version
+		// within the playback-quality ceiling.
+		accessFilter.MaxPlaybackQuality = scope.MaxPlaybackQuality
 	}
 
 	return resolved, accessFilter, profileID, nil
@@ -783,6 +805,10 @@ func (h *SectionHandler) saveProfileOverrides(ctx context.Context, q SectionOver
 		}
 		if err := rec.Validate(cfg); err != nil {
 			return apiError(http.StatusBadRequest, "invalid_config", err.Error())
+		}
+		// A row of collections has no title to show as the hero.
+		if !sections.CanBeHero(sections.SectionType(recipeType)) {
+			o.Featured = nil
 		}
 		if recipeType == string(sections.SectionTrendingDiscover) && !o.Hidden && !o.Removed {
 			refreshCandidates = append(refreshCandidates, trendingCandidate{id: o.ID, config: append(json.RawMessage(nil), cfg...)})
@@ -1046,7 +1072,7 @@ func dropEmptySeasonalSections(withItems []sections.SectionWithItems) []sections
 func dropEmptySections(withItems []sections.SectionWithItems) []sections.SectionWithItems {
 	out := withItems[:0]
 	for _, w := range withItems {
-		if len(w.Items) == 0 {
+		if !w.HasCards() {
 			continue
 		}
 		out = append(out, w)
@@ -1080,14 +1106,16 @@ type episodeParentImageURLs struct {
 
 // buildSections renders sections for a viewer described by its context,
 // access filter and artwork size; it is what v1 and v2 share.
-func (h *SectionHandler) buildSections(ctx context.Context, withItems []sections.SectionWithItems, libraryID *int, viewerAccess catalog.AccessFilter, art imagesize.Request) homeSectionsResponse {
-	return h.buildSectionsWithUserStates(ctx, withItems, libraryID, viewerAccess, art, nil)
+// includeAvailability is only true for native /api/v2 callers: Availability is
+// json:"-" on the frozen v1 card shape.
+func (h *SectionHandler) buildSections(ctx context.Context, withItems []sections.SectionWithItems, libraryID *int, viewerAccess catalog.AccessFilter, art imagesize.Request, includeAvailability bool) homeSectionsResponse {
+	return h.buildSectionsWithUserStates(ctx, withItems, libraryID, viewerAccess, art, nil, includeAvailability)
 }
 
 // buildSectionsWithUserStates is buildSections reusing user states the caller
 // already loaded for these items (the Home hide-watched filter does); nil
 // loads them as buildSections does.
-func (h *SectionHandler) buildSectionsWithUserStates(ctx context.Context, withItems []sections.SectionWithItems, libraryID *int, viewerAccess catalog.AccessFilter, art imagesize.Request, knownUserStates map[string]*itemUserStateResponse) homeSectionsResponse {
+func (h *SectionHandler) buildSectionsWithUserStates(ctx context.Context, withItems []sections.SectionWithItems, libraryID *int, viewerAccess catalog.AccessFilter, art imagesize.Request, knownUserStates map[string]*itemUserStateResponse, includeAvailability bool) homeSectionsResponse {
 	deduplicateSectionItems(ctx, withItems)
 
 	contentIDs := make([]string, 0)
@@ -1151,6 +1179,7 @@ func (h *SectionHandler) buildSectionsWithUserStates(ctx context.Context, withIt
 	goSectionLookup(ctx, &wg, "image_urls", func() { imageURLs = h.resolveSectionItemImageURLs(ctx, withItems, art) })
 	goSectionLookup(ctx, &wg, "episode_meta", func() { episodeMeta = h.listSectionEpisodeItemMeta(ctx, withItems, viewerAccess) })
 	goSectionLookup(ctx, &wg, "manga_chapter_meta", func() { mangaChapterMeta = h.listSectionMangaChapterItemMeta(ctx, allItems) })
+	availability := h.startSectionAvailability(ctx, &wg, includeAvailability, viewerAccess, allItems)
 
 	wg.Wait()
 	h.resolveFallbackParentArtwork(ctx, withItems, episodeMeta, art, imageURLs)
@@ -1183,10 +1212,12 @@ func (h *SectionHandler) buildSectionsWithUserStates(ctx context.Context, withIt
 			IsCustom:    s.IsCustom,
 			Customized:  s.Customized,
 			Items:       items,
+			Collections: s.Collections,
 			TitleKey:    s.TitleKey,
 			TitleArgs:   s.TitleArgs,
 		})
 	}
+	availability.attach(ctx, resp.Sections)
 	return resp
 }
 

@@ -48,6 +48,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/httpstream"
 	"github.com/Silo-Server/silo-server/internal/intromarkers"
 	"github.com/Silo-Server/silo-server/internal/invitations"
+	"github.com/Silo-Server/silo-server/internal/jellycompat"
 	"github.com/Silo-Server/silo-server/internal/keptsub"
 	"github.com/Silo-Server/silo-server/internal/libraryingest"
 	"github.com/Silo-Server/silo-server/internal/literaryworks"
@@ -59,9 +60,12 @@ import (
 	"github.com/Silo-Server/silo-server/internal/metadata/tmdb"
 	metadatatranslation "github.com/Silo-Server/silo-server/internal/metadata/translation"
 	"github.com/Silo-Server/silo-server/internal/netaccess"
+	"github.com/Silo-Server/silo-server/internal/nodeauth"
+	"github.com/Silo-Server/silo-server/internal/nodecontrol"
 	"github.com/Silo-Server/silo-server/internal/nodemetrics"
 	"github.com/Silo-Server/silo-server/internal/nodepool"
 	"github.com/Silo-Server/silo-server/internal/noderecipe"
+	"github.com/Silo-Server/silo-server/internal/nodesource"
 	"github.com/Silo-Server/silo-server/internal/notifications"
 	"github.com/Silo-Server/silo-server/internal/onboarding"
 	"github.com/Silo-Server/silo-server/internal/opslog"
@@ -88,6 +92,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/shuffle"
 	"github.com/Silo-Server/silo-server/internal/storagetransition"
 	"github.com/Silo-Server/silo-server/internal/streamtelemetry"
+	"github.com/Silo-Server/silo-server/internal/streamtoken"
 	"github.com/Silo-Server/silo-server/internal/subtitles"
 	subtitleai "github.com/Silo-Server/silo-server/internal/subtitles/ai"
 	"github.com/Silo-Server/silo-server/internal/subtitles/opensubtitles"
@@ -104,6 +109,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/userstore/pgstore"
 	"github.com/Silo-Server/silo-server/internal/watchlist"
 	"github.com/Silo-Server/silo-server/internal/watchstate"
+	"github.com/Silo-Server/silo-server/internal/watchsync"
 	"github.com/Silo-Server/silo-server/internal/watchtogether"
 	"github.com/Silo-Server/silo-server/internal/webhooksync"
 )
@@ -183,6 +189,16 @@ type Dependencies struct {
 	TranscodePool            *nodepool.TranscodePool         // transcode node pool (may be nil)
 	NodePlanner              *nodepool.Planner               // group/cap-aware node selection (may be nil)
 	NodeHealthChecker        *nodepool.HealthChecker         // periodic node health/capability sweep (may be nil)
+	NodeKeyRegistry          *nodepool.KeyRegistry           // every stream node's credential, enabled or not (may be nil)
+	// NodeKeys signs every call to a stream node: a transcode node's own key,
+	// and the shared secret for a URL registered as a proxy. Nil leaves calls
+	// to nodes unsigned-for, so they fail rather than fall back.
+	NodeKeys nodeauth.Keyring
+	// SourceGrants mints the source grant every piece of transcode-node work
+	// carries, and verifies and renews it at sources/open (may be nil: work
+	// is then dispatched without one, and resolve and sources/open answer
+	// 503).
+	SourceGrants *nodesource.Grants
 	// NodeCapabilityInvalidator drops one node's cached capability inventory
 	// outside the playback handler — the prepared-download preparer holds its
 	// own. nil where downloads are not wired; set before NewRouter runs.
@@ -1089,6 +1105,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 		if userRepo != nil {
 			requestSvc.SetUserRepository(userRepo)
 		}
+		requestSvc.SetProfileStores(deps.UserStoreProvider)
 		requestSvc.SetRequesterIdentityResolver(plugins.RequesterIdentityFromLookup(plugins.NewPgUserIdentityLookup(deps.DB)))
 		if tvdbResolver, ok := deps.MetadataService.(mediarequests.TVDBIDResolver); ok {
 			requestSvc.SetTVDBIDResolver(tvdbResolver)
@@ -1246,6 +1263,8 @@ func newChiRouter(deps Dependencies) chi.Router {
 			// Ebook reading data lives there too.
 			profileHandler.EbookReaderPurger = handlers.NewPGEbookReaderProgressStore(deps.DB)
 			profileHandler.Connections = &connectionstore.Store{Pool: deps.DB}
+			// And Jellyfin-compatible sessions.
+			profileHandler.JellyfinSessionPurger = jellycompat.NewSessionRepository(deps.DB, deps.SecretCipher)
 		}
 		if watchlistRequestWithdrawer != nil {
 			profileHandler.WatchlistRequestWithdrawer = watchlistRequestWithdrawer
@@ -1259,6 +1278,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 		// avatars use the signed artwork endpoint. Never use public S3 here.
 		profileHandler.AvatarStore = handlers.NewProfileAvatarStore(deps.Blobs)
 		profileHandler.AvatarResolver = deps.ArtworkResolver
+		profileHandler.ArtworkStore = deps.Blobs.Assets
 		profileHandler.SessionsReader = playbackSessionsLoader
 		personalDataHandler = handlers.NewPersonalDataHandler(deps.UserStoreProvider, itemRepo)
 		if detailSvc != nil {
@@ -1272,6 +1292,11 @@ func newChiRouter(deps Dependencies) chi.Router {
 		if watchlistTitles != nil {
 			personalDataHandler.SetWatchlistTitles(watchlistTitles)
 			watchlistTitles.SetEffects(personalDataHandler)
+			if watchSync, ok := deps.WatchProviderService.(interface {
+				SetWatchlistTitles(watchsync.WatchlistTitles)
+			}); ok {
+				watchSync.SetWatchlistTitles(watchlistTitles.WatchSync(nil))
+			}
 		}
 		personalDataHandler.EventsHub = deps.EventsHub
 		if dispatcher, ok := deps.WatchProviderService.(handlers.LocalListEventDispatcher); ok {
@@ -1506,8 +1531,27 @@ func newChiRouter(deps Dependencies) chi.Router {
 		if deps.NodePlanner != nil {
 			playbackHandler.NodePlanner = deps.NodePlanner
 		}
+		playbackHandler.NodeKeys = deps.NodeKeys
+		if deps.SourceGrants != nil {
+			playbackHandler.SourceGrants = deps.SourceGrants
+		}
 		if deps.Config != nil && deps.Config.Auth.JWTSecret != "" {
 			playbackHandler.JWTSecret = deps.Config.Auth.JWTSecret
+			if authMiddleware != nil && playbackHandler.PlanStoreV3 != nil {
+				secret, attempts := deps.Config.Auth.JWTSecret, playbackHandler.PlanStoreV3
+				authMiddleware.SetStreamReferenceVerifier(func(reference string) (*streamtoken.Claims, error) {
+					return streamtoken.Verify(reference, secret)
+				}, func(ctx context.Context, sessionID string) (apimw.StreamReferenceAttempt, error) {
+					identity, err := attempts.GetAttemptIdentity(ctx, sessionID)
+					if errors.Is(err, playback.ErrSessionNotFound) {
+						return apimw.StreamReferenceAttempt{}, nil
+					}
+					if err != nil {
+						return apimw.StreamReferenceAttempt{}, err
+					}
+					return apimw.StreamReferenceAttempt{UserID: identity.UserID, ProfileID: identity.ProfileID, LoginSessionID: identity.LoginSessionID, Live: !identity.Stopped}, nil
+				})
+			}
 		}
 		// Hand proxy nodes the recipes they serve header-authenticated sessions
 		// from, so an attempt that negotiated authorized media origins egresses
@@ -1795,6 +1839,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 		}
 		adminHandler.Config = deps.Config
 		adminHandler.ArtworkBackend = deps.ArtworkBackend
+		adminHandler.ArtworkStore = deps.Blobs.Assets
 		if deps.OnUserSessionsRevoked != nil {
 			adminHandler.OnUserSessionsRevoked = deps.OnUserSessionsRevoked
 		}
@@ -2303,6 +2348,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 		libraryCollectionHandler.PersonalCollages = personalCollages
 		libraryCollectionHandler.PersonalMemberCounts = personalMemberCounts
 		libraryCollectionHandler.EventsHub = deps.EventsHub
+		sectionFetcher.CollectionCards = &handlers.CollectionRowCards{Library: libraryCollectionHandler, Personal: collectionHandler}
 		libraryCollectionHandler.SortPreferenceCleaner = collectionSortCleaner
 		libraryCollectionHandler.CollectionRowRenamer = collectionRowRenamer
 		if deps.FolderRepo != nil {
@@ -2329,6 +2375,10 @@ func newChiRouter(deps Dependencies) chi.Router {
 		if appCtx == nil {
 			appCtx = context.Background()
 		}
+		// The audiobook Authors, Narrators and Series tabs read precomputed
+		// groups; the periodic refresh catches enrichment and edits.
+		groupStats := catalog.NewAudiobookGroupStatsRefresher(deps.DB, 10*time.Minute, time.Minute, time.Minute)
+		go groupStats.Run(appCtx)
 		// A scan that adds or removes titles publishes scan_complete with the
 		// library ID. Observing the publish, rather than subscribing, counts
 		// each scan once on the node that ran it, with or without Redis.
@@ -2342,6 +2392,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 				}
 				if libraryID, err := strconv.Atoi(event.Payload); err == nil {
 					scheduler.LibraryChanged(libraryID)
+					groupStats.LibraryChanged(libraryID)
 				}
 			})
 			go scheduler.Run(appCtx)
@@ -2631,17 +2682,17 @@ func newChiRouter(deps Dependencies) chi.Router {
 		}
 	}
 
-	// userRepo is a concrete pointer, so it has to stay out of the
+	// authService is a concrete pointer, so it has to stay out of the
 	// interface parameter when unset — a typed nil would satisfy the
 	// handler's nil check and panic on first use.
-	var compatUsers handlers.CompatConnectUsers
-	if userRepo != nil {
-		compatUsers = userRepo
+	var compatSignIn handlers.CompatPasswordSignIn
+	if authService != nil {
+		compatSignIn = authService
 	}
 	compatConnectInfoHandler := handlers.NewCompatConnectInfoHandler(
 		deps.Config,
 		settingsRepo,
-		compatUsers,
+		compatSignIn,
 	)
 	if authHandler != nil {
 		authHandler.SetOAuthRoutesAvailable(oauthHandler != nil)
@@ -2788,7 +2839,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 			adminAPIKeys.Owners = userRepo
 		}
 		v2deps.AdminAPIKeys = adminAPIKeys
-		v2deps.PersonalAPIKeys = newPersonalAPIKeyHandler(apiKeyRepo, deps.UserStoreProvider)
+		v2deps.PersonalAPIKeys = newPersonalAPIKeyHandler(apiKeyRepo, deps.UserStoreProvider, deps.Config)
 	}
 	if markersHandler != nil {
 		v2deps.Markers = markersHandler
@@ -3064,11 +3115,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 		v2deps.AdminCatalogSources = catalogSeedHandler
 		v2deps.AdminCatalogTransfer = catalogSeedHandler
 	}
-	systemJWTSecret := ""
-	if deps.Config != nil {
-		systemJWTSecret = deps.Config.Auth.JWTSecret
-	}
-	v2deps.AdminHardwareAcceleration = handlers.NewSystemHandler(deps.TranscodePool, systemJWTSecret, func() (string, string, string) {
+	v2deps.AdminHardwareAcceleration = handlers.NewSystemHandler(deps.TranscodePool, deps.NodeKeys, func() (string, string, string) {
 		cfg := deps.CurrentConfig()
 		if cfg == nil {
 			return "", "", ""
@@ -3091,11 +3138,7 @@ func newChiRouter(deps Dependencies) chi.Router {
 	v2deps.AdminServerRestart = serverControlHandler
 	var nodeHandler *handlers.NodeHandler
 	if deps.NodeRepo != nil {
-		jwtSecret := ""
-		if deps.Config != nil {
-			jwtSecret = deps.Config.Auth.JWTSecret
-		}
-		nodeHandler = handlers.NewNodeHandler(deps.NodeRepo, deps.ProxyPool, deps.TranscodePool, deps.NodeRepo, deps.EventBus, deps.RedisClient, jwtSecret)
+		nodeHandler = handlers.NewNodeHandler(deps.NodeRepo, deps.ProxyPool, deps.TranscodePool, deps.NodeRepo, deps.EventBus, deps.RedisClient, deps.NodeKeys)
 		// A re-probe stores the node's new inventory through the sweep's own
 		// refresh, so the drift and persist rules have one implementation.
 		// Without a health checker the node still re-probes and the row
@@ -3123,6 +3166,14 @@ func newChiRouter(deps Dependencies) chi.Router {
 		if deps.DB != nil {
 			nodeHandler.SetConfigurationStore(nodepool.NewAdminConfigurationStore(deps.DB))
 			v2deps.AdminNodeConfiguration = nodeHandler
+		}
+		nodeHandler.SetNodeKeyRegistry(deps.NodeKeyRegistry)
+		if deps.SecretCipher != nil {
+			nodeRepo, cipher := deps.NodeRepo, deps.SecretCipher
+			nodeHandler.SetNodeKeyIssuance(func(ctx context.Context, id int) (string, error) {
+				return nodeRepo.IssueNodeKey(ctx, cipher, id)
+			})
+			v2deps.AdminNodeKeys = nodeHandler
 		}
 	}
 	var rateLimitHandler *handlers.RateLimitHandler
@@ -3305,6 +3356,14 @@ func newChiRouter(deps Dependencies) chi.Router {
 		if watchlistRequests, ok := requestHandler.Service().(apiv2.WatchlistRequestService); ok && personalDataHandler != nil && watchlistTitles != nil {
 			v2deps.WatchlistTitles = personalDataHandler
 			v2deps.WatchlistRequests = watchlistRequests
+			// Titles watch provider sync adds are requested like ones added
+			// by hand.
+			syncRequests, requestsOK := watchlistRequests.(syncRequestService)
+			if watchSync, ok := deps.WatchProviderService.(interface {
+				SetWatchlistTitles(watchsync.WatchlistTitles)
+			}); ok && requestsOK {
+				watchSync.SetWatchlistTitles(watchlistTitles.WatchSync(watchlistSyncRequests{requests: syncRequests}))
+			}
 		}
 		// *requests.Service implements the usage read (pinned at the top of
 		// this file), so the assertion only fails for a test double.
@@ -3391,6 +3450,69 @@ func newChiRouter(deps Dependencies) chi.Router {
 	r.Handle("/api/v1/invitations/{token}", v1Tombstone)
 	r.Handle("/api/v1/invitations/{token}/*", v1Tombstone)
 
+	// Transcode nodes call these with their own key, never with a user
+	// credential, so they sit outside every auth group and the user-facing
+	// rate limits. Any API replica serves any node: nothing a later request
+	// depends on stays in this process.
+	if deps.NodeKeyRegistry != nil && deps.NodeRepo != nil && settingsRepo != nil {
+		nodeControlOptions := nodecontrol.Options{
+			Nodes:      deps.NodeRepo,
+			Identities: deps.NodeKeyRegistry,
+			Settings:   nodeConfigSettings(settingsRepo),
+			Redis:      deps.RedisClient,
+			Telemetry:  streamtelemetry.NodeSnapshotStore(deps.StreamTelemetry),
+			Events:     deps.EventBus,
+			Deny:       playback.NewStreamDeny(deps.RedisClient),
+			// Main cancels the app context before it shuts the listener
+			// down, which cuts source byte streams instead of waiting on them.
+			Lifetime: deps.AppContext,
+			StreamSecret: func() string {
+				if cfg := deps.CurrentConfig(); cfg != nil {
+					return cfg.Auth.JWTSecret
+				}
+				return ""
+			},
+		}
+		if deps.DB != nil {
+			nodeControlOptions.Logs = opslog.NewConsumer(deps.DB, deps.LogStreamHub)
+		}
+		// One store answers resolve and revoke-recipes. Without Redis it holds
+		// nothing and revokes nothing.
+		nodeRecipes := noderecipe.NewStore(deps.RedisClient, 0)
+		nodeControlOptions.Recipes, nodeControlOptions.Revocations = nodeRecipes, nodeRecipes
+		deps.wireNodeSources(&nodeControlOptions)
+		nodeControl := nodecontrol.NewServer(nodeControlOptions)
+		r.Route("/api/internal/nodes/self", func(r chi.Router) {
+			r.Use(nodecontrol.RequireNode(deps.NodeKeyRegistry))
+			// Resolve is on a viewer's request path (a rebuild after a node
+			// restart, or each progressive remux request), and open and
+			// renewal sit on a job's start path, so they have their own
+			// budget: a burst of rebuilds must not be throttled with the
+			// background routes, nor starve them.
+			r.Group(func(r chi.Router) {
+				r.Use(nodeControl.LimitNodePlayback)
+				r.Post("/resolve", nodeControl.HandleResolve)
+				r.Post("/sources/open", nodeControl.HandleSourceOpen)
+			})
+			r.Group(func(r chi.Router) {
+				r.Use(nodeControl.LimitNode)
+				r.Get("/config", nodeControl.HandleConfig)
+				r.Post("/report", nodeControl.HandleReport)
+				r.Post("/logs", nodeControl.HandleLogs)
+				r.Post("/health-changed", nodeControl.HandleHealthChanged)
+				r.Post("/revoke-recipes", nodeControl.HandleRevokeRecipes)
+			})
+		})
+		// Source bytes for core-access nodes. Each request streams for as
+		// long as FFmpeg reads, and a node keeps several open per job, so they
+		// sit outside both per-node request budgets; the signature, the grant
+		// and the grant's whole life bound them instead. Like every node
+		// route they are outside the request and activity logs and response
+		// compression (skipNativeMediaCompression).
+		r.With(nodecontrol.RequireNode(deps.NodeKeyRegistry)).Get("/api/internal/nodes/sources", nodeControl.HandleSource)
+		r.With(nodecontrol.RequireNode(deps.NodeKeyRegistry)).Head("/api/internal/nodes/sources", nodeControl.HandleSource)
+	}
+
 	if nodeHandler != nil {
 		nodeHandler.StartConfigurationReconciliation(deps.AppContext)
 	}
@@ -3398,6 +3520,21 @@ func newChiRouter(deps Dependencies) chi.Router {
 	// once every route above has finished wiring them.
 	playbackHandler.StartLifecycleSweep(deps.AppContext, deps.DB)
 	return r
+}
+
+// wireNodeSources gives the node control routes the source grants and the
+// catalog that resolve and sources/open check a grant against. Typed nils stay
+// out of the interfaces, so a missing piece answers 503 instead of panicking.
+func (d Dependencies) wireNodeSources(opts *nodecontrol.Options) {
+	if d.SourceGrants != nil {
+		opts.Grants = d.SourceGrants
+	}
+	if d.FileRepo != nil {
+		opts.Files = d.FileRepo
+	}
+	if d.DB != nil {
+		opts.Themes = themesongs.NewRepository(d.DB)
+	}
 }
 
 // overlayOrigins returns the source of connected overlay origins the
@@ -3449,7 +3586,28 @@ func useBaseMiddleware(r chi.Router, deps Dependencies) {
 	}
 }
 
+// nodeConfigSettings reads the server settings a transcode node's
+// configuration is built from, as an API server's configuration watcher reads
+// them: the staged storage transition belongs to storage recovery, not to
+// Config.
+func nodeConfigSettings(settings catalog.SettingsStore) func(context.Context) (map[string]string, error) {
+	return func(ctx context.Context) (map[string]string, error) {
+		all, err := settings.GetAll(ctx)
+		if err != nil {
+			return nil, err
+		}
+		delete(all, config.StorageTransitionTargetKey)
+		return all, nil
+	}
+}
+
 func skipNativeMediaCompression(r *http.Request) bool {
+	// The node control routes stay identity-encoded: the configuration
+	// response carries a strong ETag that names exactly one representation,
+	// and nodes are machine clients on the cluster network.
+	if strings.HasPrefix(r.URL.Path, nodecontrol.PathPrefix) {
+		return true
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
 	}
@@ -3891,9 +4049,10 @@ func profileNamesByUser(stores userstore.UserStoreProvider) downloads.ProfileNam
 
 // newPersonalAPIKeyHandler builds the account-scoped API key handler with the
 // household check its creation path runs.
-func newPersonalAPIKeyHandler(repo *auth.APIKeyRepository, stores userstore.UserStoreProvider) *handlers.APIKeyHandler {
+func newPersonalAPIKeyHandler(repo *auth.APIKeyRepository, stores userstore.UserStoreProvider, cfg *config.Config) *handlers.APIKeyHandler {
 	h := handlers.NewAPIKeyHandler(repo)
 	h.Stores = stores
+	h.ProfilesOutsidePostgres = cfg != nil && cfg.UserDB.Backend == "sqlite"
 	return h
 }
 

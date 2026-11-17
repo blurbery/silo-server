@@ -562,8 +562,11 @@ whenever migrations are pending:
 6. Release the subsystem lock, then the wrapper, then build the audit-detail
    indexes.
 
-Other servers block on the wrapper and, once they get it, find nothing
-pending. If the session of the wrapper or of the subsystem lock ends at any
+Other servers wait for the wrapper and, once they get it, find nothing
+pending. They wait by retrying `pg_try_advisory_lock`, never by blocking in
+`pg_advisory_lock`: a statement waiting for a lock holds a snapshot, and a
+concurrent index build in the holder's migrations waits for every older
+snapshot, so the two servers would wait for each other. If the session of the wrapper or of the subsystem lock ends at any
 point, the backup or migration in flight is canceled and startup fails.
 goose runs each migration in a transaction unless it is marked
 `-- +goose NO TRANSACTION`, so a canceled transactional migration rolls
@@ -1311,7 +1314,7 @@ backup. `is_owner` and `break_glass` are never carried.
 **Profile fields:** name, avatar, `is_primary`, PIN hash, and every field the
 access resolver (`internal/access/resolver.go`) reads to decide access:
 `is_child`, `max_content_rating`, `max_advisory_age`, `require_advisory_age`,
-`library_restrictions_enabled`, the allowed libraries
+`requests_blocked`, `library_restrictions_enabled`, the allowed libraries
 (`user_profile_allowed_libraries`), and `max_playback_quality`. The PIN
 revision is not carried; a restored profile starts its own. A profile restored
 as the account's primary drops its library limit, since the primary profile
@@ -1332,7 +1335,7 @@ nothing.
 | `collections` | `usercollections` | `user_personal_collections`, `user_personal_collection_items`, `user_personal_collection_profiles`, `user_collection_groups` | by name among the profile's own collections: none creates it (new id, uploaded poster copied under it, in its shelf group, found by slug or label or created), one gains missing items, sharing, and its group when ungrouped here, several leave it out. The smart query, display filter, and sync source are all remapped to this server's libraries (`userdata.RemapQueryLibraries`); a definition that would lose its whole library scope leaves the collection out, never widened to every library |
 | `dismissals` | `userstore/pgstore` | `user_home_item_dismissals`, `user_not_interested`, `user_dropped_series` | added where missing |
 | `preferences` | `userstore/pgstore` | `user_setting_values` (profile, client-family, library, and series scopes), `user_audio_preferences`, `user_subtitle_preferences`, `user_library_playback_preferences`, `user_series_playback_preferences`, `user_collection_sort_preferences`, the home and library page layout (`user_settings` section overrides), and the preference columns of `user_profiles` | each differing value overwritten, under the account's preference-settings lock; setting keys, scopes, and values checked against this server's settings contract, others left out. A page layout replaces the profile's overrides of that page: the library is mapped, an admin section found by id (on another server only one of the same type, as a restore creates a section with its backup id) or else by type and title with one candidate, and library ids in section configuration remapped, and so are the collections it names (`library_collection_id`, `user_collection_id`, in `config` and `user_config`) through `Target.Collection`: an admin collection as the restore's collections and sections match it (a carried or template collection, a section-managed one through its section, and on the server that wrote the backup any collection still here by its id), a personal one as the account's personal collection import matches it (on the same server the account's collection by its id, else the one native collection with its name of its creator's profile here); an override with no counterpart is left out and counted, never written with a dangling id. Overrides are JSON no schema constrains, so an export leaves out one the reader would refuse, and one naming a section or collection that is gone, rather than make the document unreadable; a comparison leaves the same ones out of the layout here |
-| `notifications` | `notifications` | `notification_preferences`, `profile_series_notification_mutes` | preferences overwritten; mutes added |
+| `notifications` | `notifications` | `notification_preferences`, `profile_series_notification_mutes` | preferences (`enabled`, `notify_next_up`) overwritten; mutes added. An older backup's `notify_favorites`, `notify_watchlist` and `notify_continue_watching` are accepted and ignored, and an export does not write them |
 
 Never carried: login sessions, API keys, push and device registrations,
 device-scoped settings, watch-provider and history-import credentials,
@@ -1442,8 +1445,8 @@ notes that a new one must be set.
 After an account's item or a profile import commits, the restore tells the
 notification system which items each profile's data now names
 (`ItemsChanged`, the interest recompute the user store's own writes
-trigger), so new-episode notifications follow the restored favorites,
-watchlist, and progress without waiting for the nightly repair.
+trigger), so new-episode notifications follow the restored progress and
+watch history without waiting for the nightly repair.
 
 **Access never loosens.** A library id with no library here is dropped from
 an account's library list and from a profile's allowed libraries; a list
@@ -2027,7 +2030,9 @@ neither list.
   stays linked; the others are deleted. Accepted and revoked invitations
   are the restored history and stay. A live credential whose account,
   profile, access group, item, autoscan source, or connection is not in the
-  restored data is dropped, and so is one whose account (owner, inviter, or
+  restored data is dropped (a profile counts only under the credential's own
+  account, since a profile id is unique only within one), and so is one whose
+  account (owner, inviter, or
   creator) has more authority in the restored data than on the live server:
   a higher role (the Owner over admin over user), enabled where it is
   disabled now, break-glass access, an effective account policy wider in
@@ -2038,8 +2043,9 @@ neither list.
   since, which the credential's holder could select), or, for a profile
   both sides have, a
   protection or restriction lifted or loosened (its PIN, becoming the
-  primary profile, child profile, rating or advisory-age ceiling, library
-  restriction, playback-quality ceiling), or a looser request policy
+  primary profile, child profile, rating or advisory-age ceiling, block
+  from requests, library restriction, playback-quality ceiling), or a
+  looser request policy
   (requests at all, without limit, more titles or over a shorter window,
   or with automatic approval, as `requests.LayeredPolicy` resolves it from
   the server's, the access group's, and the account's limits). The PIN
@@ -2082,7 +2088,8 @@ neither list.
   settings (requests, auto-approval, watchlist requests); subtitle
   providers; marker sharing; per-account and per-group download,
   transcode, and request permissions; a profile's child flag, library
-  restriction, and advisory-age requirement (on wins); a personal
+  restriction, advisory-age requirement, and block from requests (on
+  wins); a personal
   collection's sharing; a profile's notification preferences; a
   watch-provider connection's sync switches; an account's `enabled`,
   `break_glass`, and `local_password_login_enabled` (off wins) and
@@ -2099,7 +2106,12 @@ neither list.
   plugin task binding, an access group's permissions, a profile's
   notifications. Only account switches roll back as they were
   (`rollsBack`), since accounts roll back whole. Nothing
-  a full restore does turns a plugin on; the admin does. These switches are
+  a full restore does turns a plugin on; the admin does. A backup taken
+  before a switch's column existed keeps nothing for it, and the restored
+  server adds the column with its default when it migrates, except for a
+  restriction that sets `addMissing` (a profile's block from requests): the
+  restore adds that column itself when a live row is restricted, so the
+  restriction is kept. These switches are
   set before the credential carry compares authority, so it compares the
   restored server as it will start; the carry also counts an account with
   every library as seeing each enabled library of its server, and drops a
